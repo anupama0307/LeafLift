@@ -13,20 +13,22 @@ interface LayoutProps {
 
 const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScreen, toggleDarkMode, isAuthenticated, user }) => {
   const isDriver = user?.role === 'DRIVER';
-  const isSpecialScreen = currentScreen === AppScreen.PLAN_RIDE || 
-                          currentScreen === AppScreen.CHAT_DETAIL || 
-                          currentScreen === AppScreen.DRIVER_DASHBOARD ||
-                          !isAuthenticated;
+  const isSpecialScreen = currentScreen === AppScreen.PLAN_RIDE ||
+    currentScreen === AppScreen.CHAT_DETAIL ||
+    currentScreen === AppScreen.DRIVER_DASHBOARD ||
+    !isAuthenticated;
 
   const NavItem: React.FC<{ screen: AppScreen; icon: string; label: string }> = ({ screen, icon, label }) => {
     const isActive = currentScreen === screen;
     return (
-      <button 
+      <button
         onClick={() => setCurrentScreen(screen)}
-        className={`flex flex-col items-center gap-1 transition-all flex-1 ${isActive ? 'opacity-100 text-black dark:text-white' : 'opacity-40 hover:opacity-70'}`}
+        className={`flex flex-col items-center gap-1 transition-all flex-1 ${isActive ? 'opacity-100 text-leaf-600 dark:text-leaf-400' : 'opacity-40 hover:opacity-70 dark:text-white'}`}
       >
-        <span className="material-icons-outlined text-2xl">{icon}</span>
-        <span className="text-[10px] font-bold tracking-tight">{label}</span>
+        <div className={`size-10 rounded-xl flex items-center justify-center transition-all ${isActive ? 'bg-leaf-50 dark:bg-leaf-900/20 mb-0.5' : ''}`}>
+          <span className="material-icons-outlined text-2xl">{icon}</span>
+        </div>
+        <span className="text-[10px] font-black tracking-tight">{label}</span>
       </button>
     );
   };
@@ -38,12 +40,12 @@ const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScre
         <div className="flex justify-between items-center px-8 pt-4 pb-2">
           <span className="text-sm font-semibold">9:41</span>
           <div className="flex gap-1.5 items-center">
-            <button onClick={toggleDarkMode} className="material-icons-outlined text-sm hover:opacity-60 transition-opacity">
+            <button onClick={toggleDarkMode} className="material-icons-outlined text-sm text-leaf-600 dark:text-leaf-400 hover:opacity-60 transition-opacity">
               {document.documentElement.classList.contains('dark') ? 'light_mode' : 'dark_mode'}
             </button>
-            <span className="material-icons-outlined text-sm">signal_cellular_alt</span>
-            <span className="material-icons-outlined text-sm">wifi</span>
-            <span className="material-icons-outlined text-sm rotate-90">battery_full</span>
+            <span className="material-icons-outlined text-sm opacity-50">signal_cellular_alt</span>
+            <span className="material-icons-outlined text-sm opacity-50">wifi</span>
+            <span className="material-icons-outlined text-sm rotate-90 opacity-50">battery_full</span>
           </div>
         </div>
       )}
@@ -73,26 +75,26 @@ const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScre
               <NavItem screen={AppScreen.ACCOUNT} icon="person" label="Account" />
             </>
           )}
-          
-          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-32 h-1 bg-gray-200 dark:bg-zinc-700 rounded-full"></div>
+
+          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-32 h-1 bg-gray-100 dark:bg-zinc-800 rounded-full"></div>
         </div>
       )}
 
       {/* Special Floating Navigation for Driver Dashboard Mode */}
       {currentScreen === AppScreen.DRIVER_DASHBOARD && (
         <div className="absolute bottom-8 left-0 right-0 z-50 px-8 flex justify-between pointer-events-none">
-           <button 
-             onClick={() => setCurrentScreen(AppScreen.ACCOUNT)}
-             className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
-           >
-              <span className="material-icons-outlined">person</span>
-           </button>
-           <button 
-             onClick={() => setCurrentScreen(AppScreen.INBOX)}
-             className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
-           >
-              <span className="material-icons-outlined">chat_bubble</span>
-           </button>
+          <button
+            onClick={() => setCurrentScreen(AppScreen.ACCOUNT)}
+            className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
+          >
+            <span className="material-icons-outlined">person</span>
+          </button>
+          <button
+            onClick={() => setCurrentScreen(AppScreen.INBOX)}
+            className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
+          >
+            <span className="material-icons-outlined">chat_bubble</span>
+          </button>
         </div>
       )}
     </div>

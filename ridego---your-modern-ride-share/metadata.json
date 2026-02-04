@@ -1,6 +1,5 @@
-
 {
-  "name": "RideGo - Your Modern Ride Share",
+  "name": "LeafLift - Your Eco-Friendly Ride Share",
   "description": "A high-fidelity ride-sharing application with real-time planning, profile management, and smart location suggestions.",
   "requestFramePermissions": [
     "geolocation"

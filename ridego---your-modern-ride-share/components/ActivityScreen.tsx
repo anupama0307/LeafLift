@@ -11,15 +11,15 @@ const ActivityScreen: React.FC = () => {
 
       {/* Tabs */}
       <div className="flex gap-4 mb-8">
-        <button 
+        <button
           onClick={() => setActiveTab('Upcoming')}
-          className={`px-6 py-2 rounded-full text-sm font-bold transition-all ${activeTab === 'Upcoming' ? 'bg-black text-white dark:bg-white dark:text-black' : 'bg-gray-100 dark:bg-zinc-800 text-gray-500'}`}
+          className={`px-6 py-2 rounded-full text-sm font-black transition-all ${activeTab === 'Upcoming' ? 'bg-leaf-600 text-white dark:bg-leaf-500 shadow-lg shadow-leaf-500/20' : 'bg-gray-100 dark:bg-zinc-800 text-gray-400'}`}
         >
           Upcoming
         </button>
-        <button 
+        <button
           onClick={() => setActiveTab('Past')}
-          className={`px-6 py-2 rounded-full text-sm font-bold transition-all ${activeTab === 'Past' ? 'bg-black text-white dark:bg-white dark:text-black' : 'bg-gray-100 dark:bg-zinc-800 text-gray-500'}`}
+          className={`px-6 py-2 rounded-full text-sm font-black transition-all ${activeTab === 'Past' ? 'bg-leaf-600 text-white dark:bg-leaf-500 shadow-lg shadow-leaf-500/20' : 'bg-gray-100 dark:bg-zinc-800 text-gray-400'}`}
         >
           Past
         </button>
@@ -47,8 +47,8 @@ const ActivityScreen: React.FC = () => {
                 </div>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">{item.date} • {item.carType}</p>
                 <div className="flex gap-2">
-                   <button className="bg-gray-100 dark:bg-zinc-800 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider">Rebook</button>
-                   <button className="bg-gray-100 dark:bg-zinc-800 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider">Receipt</button>
+                  <button className="bg-gray-100 dark:bg-zinc-800 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider">Rebook</button>
+                  <button className="bg-gray-100 dark:bg-zinc-800 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider">Receipt</button>
                 </div>
               </div>
             </div>

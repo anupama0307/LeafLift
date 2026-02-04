@@ -20,6 +20,20 @@ const App: React.FC = () => {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
 
   useEffect(() => {
+    const savedUser = localStorage.getItem('leaflift_user');
+    if (savedUser) {
+      const userData = JSON.parse(savedUser);
+      setUser(userData);
+      setIsAuthenticated(true);
+      if (userData.role === 'DRIVER') {
+        setCurrentScreen(AppScreen.DRIVER_DASHBOARD);
+      } else {
+        setCurrentScreen(AppScreen.HOME);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
     if (isDarkMode) {
       document.documentElement.classList.add('dark');
     } else {
@@ -30,6 +44,7 @@ const App: React.FC = () => {
   const handleAuthSuccess = (userData: any) => {
     setUser(userData);
     setIsAuthenticated(true);
+    localStorage.setItem('leaflift_user', JSON.stringify(userData));
     if (userData.role === 'DRIVER') {
       setCurrentScreen(AppScreen.DRIVER_DASHBOARD);
     } else {
@@ -40,6 +55,7 @@ const App: React.FC = () => {
   const handleSignOut = () => {
     setIsAuthenticated(false);
     setUser(null);
+    localStorage.removeItem('leaflift_user');
     setCurrentScreen(AppScreen.AUTH);
   };
 
@@ -50,9 +66,9 @@ const App: React.FC = () => {
 
   const renderScreen = () => {
     if (!isAuthenticated) return (
-      <AuthScreen 
-        onAuthSuccess={handleAuthSuccess} 
-        toggleTheme={() => setIsDarkMode(!isDarkMode)} 
+      <AuthScreen
+        onAuthSuccess={handleAuthSuccess}
+        toggleTheme={() => setIsDarkMode(!isDarkMode)}
         isDark={isDarkMode}
       />
     );
@@ -82,8 +98,8 @@ const App: React.FC = () => {
   return (
     <div className="flex justify-center min-h-screen bg-[#f3f3f3] dark:bg-zinc-950 transition-colors duration-300">
       <div className="w-full max-w-[430px] min-h-screen bg-white dark:bg-black flex flex-col relative shadow-2xl overflow-hidden">
-        <Layout 
-          currentScreen={currentScreen} 
+        <Layout
+          currentScreen={currentScreen}
           setCurrentScreen={setCurrentScreen}
           toggleDarkMode={() => setIsDarkMode(!isDarkMode)}
           isAuthenticated={isAuthenticated}

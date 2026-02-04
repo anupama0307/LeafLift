@@ -1,13 +1,15 @@
-
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-    <meta charset="utf-8"/>
-    <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport"/>
-    <title>RideGo</title>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport" />
+    <title>LeafLift</title>
     <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
-    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
     <script>
         tailwind.config = {
             darkMode: "class",
@@ -15,6 +17,18 @@
                 extend: {
                     colors: {
                         primary: "#000000",
+                        leaf: {
+                            DEFAULT: "#22C55E",
+                            light: "#DCFCE7",
+                            dark: "#166534",
+                            50: "#F0FDF4",
+                            100: "#DCFCE7",
+                            200: "#BBF7D0",
+                            300: "#86EFAC",
+                            400: "#4ADE80",
+                            500: "#22C55E",
+                            600: "#16A34A",
+                        },
                         "background-light": "#FFFFFF",
                         "background-dark": "#121212",
                         "card-light": "#F3F3F3",
@@ -24,7 +38,9 @@
                         sans: ["Inter", "sans-serif"],
                     },
                     borderRadius: {
-                        DEFAULT: "12px",
+                        DEFAULT: "16px",
+                        '2xl': "24px",
+                        '3xl': "32px",
                     },
                 },
             },
@@ -36,21 +52,25 @@
             -webkit-tap-highlight-color: transparent;
             overscroll-behavior-y: contain;
         }
+
         .hide-scrollbar::-webkit-scrollbar {
             display: none;
         }
+
         .hide-scrollbar {
             -ms-overflow-style: none;
             scrollbar-width: none;
         }
+
         .ios-safe-top {
             padding-top: env(safe-area-inset-top);
         }
+
         .ios-safe-bottom {
             padding-bottom: env(safe-area-inset-bottom);
         }
     </style>
-<script type="importmap">
+    <script type="importmap">
 {
   "imports": {
     "react/": "https://esm.sh/react@^19.2.4/",
@@ -59,10 +79,12 @@
   }
 }
 </script>
-<link rel="stylesheet" href="/index.css">
+    <link rel="stylesheet" href="/index.css">
 </head>
+
 <body class="bg-gray-100 dark:bg-black text-gray-900 dark:text-white">
     <div id="root"></div>
-<script type="module" src="/index.tsx"></script>
+    <script type="module" src="/index.tsx"></script>
 </body>
+
 </html>
