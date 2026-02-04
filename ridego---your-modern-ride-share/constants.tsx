@@ -1,5 +1,22 @@
-
 import { LocationItem, SuggestionItem, ActivityItem, MessageItem } from './types';
+
+
+// MapmyIndia API Configuration from environment variables
+export const MAPPLS_CONFIG = {
+  MAP_SDK_KEY: import.meta.env.VITE_MAPPLS_MAP_SDK_KEY,
+  REST_API_KEY: import.meta.env.VITE_MAPPLS_REST_API_KEY,
+  CLIENT_ID: import.meta.env.VITE_MAPPLS_CLIENT_ID,
+  CLIENT_SECRET: import.meta.env.VITE_MAPPLS_CLIENT_SECRET,
+  BASE_URL: 'https://atlas.mappls.com/api',
+  AUTH_URL: 'https://outpost.mapmyindia.com/api'
+};
+
+// Default location (Coimbatore, India)
+export const DEFAULT_CENTER = {
+  lat: 11.0168,
+  lng: 76.9558,
+  zoom: 13
+};
 
 export const RECENT_LOCATIONS: LocationItem[] = [
   {

@@ -1,4 +1,3 @@
-
 export enum AppScreen {
   AUTH = 'AUTH',
   HOME = 'HOME',
@@ -43,4 +42,36 @@ export interface MessageItem {
   time: string;
   unread?: boolean;
   driverPhoto?: string;
+}
+
+// MapmyIndia specific types
+export interface MapplsPlace {
+  eLoc: string;
+  placeName: string;
+  placeAddress: string;
+  latitude: number;
+  longitude: number;
+  type?: string;
+  distance?: number;
+}
+
+export interface MapplsRoute {
+  distance: number; // in meters
+  duration: number; // in seconds
+  geometry: string; // encoded polyline
+  legs: Array<{
+    distance: number;
+    duration: number;
+    steps: Array<{
+      distance: number;
+      duration: number;
+      instruction: string;
+    }>;
+  }>;
+}
+
+export interface RouteInfo {
+  distance: string; // e.g., "18.5 km"
+  duration: string; // e.g., "25 min"
+  fare: number;
 }
