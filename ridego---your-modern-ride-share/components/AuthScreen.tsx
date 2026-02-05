@@ -30,7 +30,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch('http://localhost:5000/api/login', {
+      const response = await fetch('http://localhost:5001/api/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -55,7 +55,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch('http://localhost:5000/api/signup', {
+      const response = await fetch('http://localhost:5001/api/signup', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
