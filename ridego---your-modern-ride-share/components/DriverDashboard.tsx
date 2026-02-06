@@ -1,283 +1,510 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { OLA_CONFIG } from '../constants';
+import { joinRideRoom, registerSocket } from '../src/services/realtime';
 
-import React, { useState, useEffect } from 'react';
+declare global {
+  interface Window {
+    maplibregl: any;
+  }
+}
 
 interface DriverDashboardProps {
   user: any;
 }
 
+type RideStatus = 'IDLE' | 'SEARCHING' | 'ACCEPTED' | 'ARRIVED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELED';
+
+interface ChatMessage {
+  senderId?: string;
+  senderRole?: string;
+  message: string;
+  createdAt: string;
+}
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
+
 const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
   const [isOnline, setIsOnline] = useState(false);
+  const [requests, setRequests] = useState<any[]>([]);
   const [activeRide, setActiveRide] = useState<any>(null);
-  const [showRequest, setShowRequest] = useState(false);
-  const [ecoScore, setEcoScore] = useState(88);
-  const [telemetryTip, setTelemetryTip] = useState<string | null>(null);
+  const [riderDetails, setRiderDetails] = useState<any>(null);
+  const [rideStatus, setRideStatus] = useState<RideStatus>('IDLE');
+  const [otpInput, setOtpInput] = useState('');
+  const [driverLocation, setDriverLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [riderLocation, setRiderLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatInput, setChatInput] = useState('');
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [currentFare, setCurrentFare] = useState<number | null>(null);
+  const [searchLat, setSearchLat] = useState('');
+  const [searchLng, setSearchLng] = useState('');
 
-  // Simulated logic for ride matching
+  const mapRef = useRef<any>(null);
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const driverMarkerRef = useRef<any>(null);
+  const riderMarkerRef = useRef<any>(null);
+  const [mapLoaded, setMapLoaded] = useState(false);
+
+  const getMapStyle = (darkMode: boolean) => {
+    return darkMode
+      ? 'https://api.olamaps.io/tiles/vector/v1/styles/default-dark-standard/style.json'
+      : 'https://api.olamaps.io/tiles/vector/v1/styles/default-light-standard/style.json';
+  };
+
   useEffect(() => {
-    if (isOnline && !activeRide && !showRequest) {
-      const timer = setTimeout(() => setShowRequest(true), 4000);
-      return () => clearTimeout(timer);
-    }
-  }, [isOnline, activeRide, showRequest]);
+    if (!mapContainerRef.current || mapLoaded) return;
 
-  // Simulated telemetry tips
+    const initMap = () => {
+      if (typeof window.maplibregl === 'undefined') {
+        setTimeout(initMap, 300);
+        return;
+      }
+
+      const apiKey = OLA_CONFIG.apiKey;
+      const map = new window.maplibregl.Map({
+        container: mapContainerRef.current,
+        center: [76.9558, 11.0168],
+        zoom: 13,
+        style: getMapStyle(document.documentElement.classList.contains('dark')),
+        transformRequest: (url: string) => {
+          if (url.includes('olamaps.io')) {
+            const separator = url.includes('?') ? '&' : '?';
+            return { url: `${url}${separator}api_key=${apiKey}` };
+          }
+          return { url };
+        },
+        attributionControl: false
+      });
+
+      map.on('load', () => {
+        mapRef.current = map;
+        setMapLoaded(true);
+      });
+    };
+
+    setTimeout(initMap, 400);
+  }, [mapLoaded]);
+
   useEffect(() => {
-    if (activeRide) {
-      const tips = ["Gentle braking saves fuel", "Optimal speed detected", "Efficient route chosen", "Smooth acceleration +5 Eco"];
-      const interval = setInterval(() => {
-        const randomTip = tips[Math.floor(Math.random() * tips.length)];
-        setTelemetryTip(randomTip);
-        setTimeout(() => setTelemetryTip(null), 3000);
-      }, 8000);
-      return () => clearInterval(interval);
-    }
-  }, [activeRide]);
+    if (!user?._id) return;
+    const socket = registerSocket(user._id, 'DRIVER');
 
-  const handleAcceptRide = () => {
-    setShowRequest(false);
-    setActiveRide({
-      passenger: 'Aravind K.',
-      pickup: 'Brookefields Mall',
-      dropoff: 'Airport Rd',
-      eta: '4 mins',
-      diversion: '2 mins',
-      passengers: 1,
-      earnings: '₹245',
-      co2Saved: '1.2kg'
+    const handleRequest = (payload: any) => {
+      if (!payload?.rideId) return;
+      setRequests((prev) => {
+        if (prev.some((r) => r.rideId === payload.rideId)) return prev;
+        return [payload, ...prev];
+      });
+    };
+
+    const handleStatus = (payload: any) => {
+      if (payload?.status) {
+        setRideStatus(payload.status);
+        if (payload.status === 'COMPLETED') {
+          setChatOpen(false);
+        }
+      }
+    };
+
+    const handleOtp = () => {
+      setRideStatus('ARRIVED');
+    };
+
+    const handleRiderLocation = (payload: any) => {
+      if (!payload?.location) return;
+      setRiderLocation(payload.location);
+    };
+
+    const handleFareUpdate = (payload: any) => {
+      if (payload?.currentFare) setCurrentFare(payload.currentFare);
+    };
+
+    const handleChatMessage = (msg: any) => {
+      if (!msg?.message) return;
+      setChatMessages((prev) => [...prev, { ...msg, createdAt: msg.createdAt || new Date().toISOString() }]);
+    };
+
+    socket.on('ride:request', handleRequest);
+    socket.on('ride:status', handleStatus);
+    socket.on('ride:otp', handleOtp);
+    socket.on('ride:rider-location', handleRiderLocation);
+    socket.on('ride:fare-update', handleFareUpdate);
+    socket.on('chat:message', handleChatMessage);
+
+    return () => {
+      socket.off('ride:request', handleRequest);
+      socket.off('ride:status', handleStatus);
+      socket.off('ride:otp', handleOtp);
+      socket.off('ride:rider-location', handleRiderLocation);
+      socket.off('ride:fare-update', handleFareUpdate);
+      socket.off('chat:message', handleChatMessage);
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (!isOnline && !activeRide) return;
+    if (!navigator.geolocation) return;
+
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        const coords = { lat: latitude, lng: longitude };
+        setDriverLocation(coords);
+
+        if (activeRide?._id) {
+          fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/location`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ role: 'DRIVER', lat: latitude, lng: longitude })
+          }).catch(() => null);
+        } else if (user?._id) {
+          fetch(`${API_BASE_URL}/api/drivers/online`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ driverId: user._id, location: coords })
+          }).catch(() => null);
+        }
+      },
+      () => null,
+      { enableHighAccuracy: true, maximumAge: 5000 }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [isOnline, activeRide, user]);
+
+  useEffect(() => {
+    if (!mapLoaded || !mapRef.current) return;
+
+    if (driverLocation) {
+      if (!driverMarkerRef.current) {
+        const el = document.createElement('div');
+        el.style.width = '26px';
+        el.style.height = '26px';
+        el.style.borderRadius = '50%';
+        el.style.backgroundColor = '#22C55E';
+        el.style.border = '3px solid white';
+        el.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+        driverMarkerRef.current = new window.maplibregl.Marker({ element: el })
+          .setLngLat([driverLocation.lng, driverLocation.lat])
+          .addTo(mapRef.current);
+      } else {
+        driverMarkerRef.current.setLngLat([driverLocation.lng, driverLocation.lat]);
+      }
+      mapRef.current.flyTo({ center: [driverLocation.lng, driverLocation.lat], zoom: 14, speed: 0.6 });
+    }
+  }, [driverLocation, mapLoaded]);
+
+  useEffect(() => {
+    if (!mapLoaded || !mapRef.current) return;
+    if (!riderLocation) return;
+
+    if (!riderMarkerRef.current) {
+      const el = document.createElement('div');
+      el.style.width = '26px';
+      el.style.height = '26px';
+      el.style.borderRadius = '50%';
+      el.style.backgroundColor = '#EF4444';
+      el.style.border = '3px solid white';
+      el.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+      riderMarkerRef.current = new window.maplibregl.Marker({ element: el })
+        .setLngLat([riderLocation.lng, riderLocation.lat])
+        .addTo(mapRef.current);
+    } else {
+      riderMarkerRef.current.setLngLat([riderLocation.lng, riderLocation.lat]);
+    }
+  }, [riderLocation, mapLoaded]);
+
+  const fetchRequests = async () => {
+    try {
+      const lat = searchLat ? Number(searchLat) : driverLocation?.lat;
+      const lng = searchLng ? Number(searchLng) : driverLocation?.lng;
+      const query = lat && lng ? `?lat=${lat}&lng=${lng}&radius=6` : '';
+      const response = await fetch(`${API_BASE_URL}/api/rides/nearby${query}`);
+      if (response.ok) {
+        const data = await response.json();
+        const mapped = data.map((ride: any) => ({
+          rideId: ride._id,
+          pickup: ride.pickup,
+          dropoff: ride.dropoff,
+          fare: ride.currentFare || ride.fare,
+          isPooled: ride.isPooled,
+          routeIndex: ride.routeIndex
+        }));
+        setRequests(mapped);
+      }
+    } catch (error) {
+      console.error('Failed to fetch requests', error);
+    }
+  };
+
+  const handleAcceptRide = async (rideId: string) => {
+    if (!user?._id) return;
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/rides/${rideId}/accept`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ driverId: user._id, driverLocation })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Failed to accept ride');
+
+      setActiveRide(data.ride);
+      setRiderDetails(data.rider || null);
+      setRideStatus('ACCEPTED');
+      setCurrentFare(data.ride.currentFare || data.ride.fare);
+      setRequests((prev) => prev.filter((r) => r.rideId !== rideId));
+      if (data.ride?._id) {
+        joinRideRoom(data.ride._id);
+        const messages = await fetch(`${API_BASE_URL}/api/rides/${data.ride._id}/messages`);
+        if (messages.ok) {
+          const msgs = await messages.json();
+          setChatMessages(msgs || []);
+        }
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const handleReached = async () => {
+    if (!activeRide?._id) return;
+    await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/reached`, { method: 'POST' });
+  };
+
+  const handleVerifyOtp = async () => {
+    if (!activeRide?._id) return;
+    const response = await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/verify-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ otp: otpInput })
     });
+    const data = await response.json();
+    if (!response.ok) {
+      alert(data.message || 'Invalid OTP');
+    } else {
+      setRideStatus('IN_PROGRESS');
+      setOtpInput('');
+    }
+  };
+
+  const handleCompleteRide = async () => {
+    if (!activeRide?._id) return;
+    await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/complete`, { method: 'POST' });
+  };
+
+  const handleAddPooledRider = async () => {
+    if (!activeRide?._id) return;
+    await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/pool/add`, { method: 'POST' });
+  };
+
+  const handleSendChat = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim() || !activeRide?._id) return;
+    await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        senderId: user?._id,
+        senderRole: 'DRIVER',
+        message: chatInput.trim()
+      })
+    });
+    setChatInput('');
+  };
+
+  const handleClearRide = () => {
+    setActiveRide(null);
+    setRiderDetails(null);
+    setRideStatus('IDLE');
+    setOtpInput('');
+    setRiderLocation(null);
+    setCurrentFare(null);
   };
 
   return (
     <div className="relative flex-1 bg-black overflow-hidden h-full">
-      {/* 1. Map Layer (Full Background) */}
-      <div className="absolute inset-0 z-0">
-        <img 
-          src="https://images.unsplash.com/photo-1524661135-423995f22d0b?q=80&w=1000&auto=format&fit=crop" 
-          className={`w-full h-full object-cover transition-all duration-1000 ${isOnline ? 'opacity-70 dark:opacity-40 grayscale-0' : 'opacity-20 dark:opacity-10 grayscale'}`}
-          alt="Map"
-        />
-        
-        {/* Demand Hotspots (Simulated) */}
-        {isOnline && !activeRide && (
-          <>
-            <div className="absolute top-[25%] right-[20%] w-32 h-32 bg-orange-500/20 rounded-full blur-3xl animate-pulse"></div>
-            <div className="absolute top-[25%] right-[20%] text-orange-500 flex flex-col items-center">
-               <span className="material-icons-outlined text-sm">local_fire_department</span>
-               <span className="text-[10px] font-black uppercase tracking-tighter">High Demand</span>
-            </div>
-            <div className="absolute bottom-[40%] left-[15%] w-24 h-24 bg-orange-500/10 rounded-full blur-2xl"></div>
-          </>
-        )}
+      <div ref={mapContainerRef} className="absolute inset-0" />
 
-        {/* Navigation Overlays */}
-        {activeRide && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-             <div className="relative w-full h-full">
-                <div className="absolute top-[40%] left-[30%] animate-bounce">
-                  <div className="w-6 h-6 bg-blue-500 rounded-full border-4 border-white shadow-lg"></div>
-                </div>
-                <div className="absolute bottom-[35%] right-[25%]">
-                   <div className="w-8 h-8 bg-red-500 rounded-full border-4 border-white shadow-2xl flex items-center justify-center">
-                      <span className="material-icons-outlined text-white text-sm">person_pin_circle</span>
-                   </div>
-                </div>
-             </div>
-          </div>
-        )}
+      <div className="absolute top-0 inset-x-0 z-30 p-4 pt-10 flex items-center justify-between">
+        <div className="bg-white/90 dark:bg-black/80 backdrop-blur-xl px-3 py-2 rounded-2xl shadow-lg border border-white/10">
+          <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Driver Mode</p>
+          <p className="text-sm font-bold text-black dark:text-white">{user?.firstName} {user?.lastName}</p>
+        </div>
+        <button
+          onClick={() => {
+            const next = !isOnline;
+            setIsOnline(next);
+            if (next) fetchRequests();
+          }}
+          className={`px-5 py-2 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all shadow-2xl border-2 ${isOnline ? 'bg-[#f2b90d] text-black border-black' : 'bg-zinc-800 text-zinc-400 border-transparent'}`}
+        >
+          {isOnline ? 'Online' : 'Go Online'}
+        </button>
       </div>
 
-      {/* 2. Top Bar (Command Center) */}
-      <div className="absolute top-0 inset-x-0 z-20 p-4 pt-12 flex items-center justify-between pointer-events-none">
-        <div className="flex flex-col gap-2 pointer-events-auto">
-          {/* Eco Score Widget */}
-          <div className="bg-white/95 dark:bg-black/80 backdrop-blur-xl px-3 py-2 rounded-2xl flex items-center gap-2 shadow-2xl border border-white/20">
-            <span className="material-icons-outlined text-green-500">eco</span>
-            <div className="flex flex-col">
-              <span className="text-[9px] font-black text-gray-500 uppercase tracking-tighter leading-none">Eco Score</span>
-              <span className="text-sm font-black text-black dark:text-white leading-tight">{ecoScore}%</span>
-            </div>
-          </div>
-          <button className="size-12 bg-red-600 rounded-2xl flex items-center justify-center shadow-2xl active:scale-90 transition-transform pointer-events-auto">
-            <span className="material-icons-outlined text-white font-bold">sos</span>
+      {!activeRide && (
+      <div className="absolute bottom-0 inset-x-0 z-40 bg-white dark:bg-zinc-950 rounded-t-[32px] p-5 max-h-[70vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xl font-black dark:text-white">Ride Requests</h3>
+          <button onClick={fetchRequests} className="text-xs font-bold text-blue-600 dark:text-blue-400">Refresh</button>
+        </div>
+        <div className="flex gap-2 mb-4">
+          <input
+            value={searchLat}
+            onChange={(e) => setSearchLat(e.target.value)}
+            className="flex-1 bg-gray-100 dark:bg-zinc-800 rounded-xl px-3 py-2 text-xs"
+            placeholder="Search lat"
+          />
+          <input
+            value={searchLng}
+            onChange={(e) => setSearchLng(e.target.value)}
+            className="flex-1 bg-gray-100 dark:bg-zinc-800 rounded-xl px-3 py-2 text-xs"
+            placeholder="Search lng"
+          />
+          <button onClick={fetchRequests} className="px-3 py-2 bg-black dark:bg-white text-white dark:text-black rounded-xl text-xs font-bold">
+            Search
           </button>
         </div>
-
-        <div className="flex flex-col items-end gap-2 pointer-events-auto">
-          <button 
-            onClick={() => setIsOnline(!isOnline)}
-            className={`px-5 py-2.5 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all shadow-2xl border-2 ${isOnline ? 'bg-[#f2b90d] text-black border-black' : 'bg-zinc-800 text-zinc-500 border-transparent'}`}
-          >
-            {isOnline ? 'Active Online' : 'Go Online'}
-          </button>
-          
-          <div className="bg-white/95 dark:bg-black/80 backdrop-blur-xl px-3 py-2 rounded-2xl flex items-center gap-2 shadow-2xl border border-white/20">
-            <span className="material-icons-outlined text-blue-500 text-sm">bolt</span>
-            <span className="text-xs font-black">92% Health</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Telemetry Tips Overlay */}
-      {telemetryTip && (
-        <div className="absolute top-32 left-1/2 -translate-x-1/2 z-50 pointer-events-none animate-in fade-in slide-in-from-top duration-300">
-           <div className="bg-green-500 text-white px-4 py-2 rounded-full shadow-2xl flex items-center gap-2 font-bold text-sm">
-              <span className="material-icons-outlined text-sm">tips_and_updates</span>
-              {telemetryTip}
-           </div>
-        </div>
-      )}
-
-      {/* 3. Match Request Card */}
-      {showRequest && (
-        <div className="absolute inset-x-4 top-1/3 z-40 animate-in zoom-in-95 fade-in duration-300">
-          <div className="bg-white dark:bg-zinc-900 rounded-[32px] p-6 shadow-[0_32px_64px_rgba(0,0,0,0.5)] border-4 border-[#f2b90d]">
-            <div className="flex justify-between items-start mb-4">
-              <div className="flex items-center gap-2">
-                <span className="bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">Ride Match</span>
-                <span className="text-[10px] font-black uppercase text-gray-400">1 + 1 Passenger</span>
-              </div>
-              <p className="text-xl font-black text-green-600">₹245</p>
-            </div>
-            
-            <div className="flex items-center gap-3 mb-6">
-              <div className="relative">
-                <img src="https://i.pravatar.cc/100?u=aravind" className="w-14 h-14 rounded-full border-2 border-[#f2b90d]" alt="" />
-                <span className="absolute -bottom-1 -right-1 material-icons text-blue-500 bg-white dark:bg-zinc-900 rounded-full text-lg">verified</span>
-              </div>
-              <div>
-                <p className="font-black text-lg">Aravind K.</p>
-                <div className="flex items-center gap-1">
-                   <span className="text-xs font-bold text-gray-500">4.9 • Safety Badge</span>
-                   <span className="material-icons-outlined text-sm text-[#f2b90d]">accessible</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex gap-4 p-4 bg-gray-50 dark:bg-zinc-800/50 rounded-2xl mb-6">
-              <div className="flex flex-col items-center">
-                <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                <div className="w-0.5 h-6 bg-gray-300 dark:bg-zinc-700 my-1"></div>
-                <div className="w-2 h-2 bg-red-500"></div>
-              </div>
-              <div className="flex-1">
-                <p className="text-xs font-black text-blue-500 uppercase tracking-tighter">2 mins diversion</p>
-                <p className="text-sm font-bold truncate">Brookefields Mall → Peelamedu</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <button onClick={() => setShowRequest(false)} className="py-4 rounded-2xl font-black bg-gray-100 dark:bg-zinc-800 text-sm">Decline</button>
-              <button onClick={handleAcceptRide} className="py-4 rounded-2xl font-black bg-[#f2b90d] text-black shadow-xl text-sm">Accept Ride</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 4. Contextual Bottom Sheet */}
-      <div className={`absolute bottom-0 inset-x-0 z-30 transition-transform duration-700 cubic-bezier(0.16, 1, 0.3, 1) transform ${activeRide || !isOnline ? 'translate-y-0' : 'translate-y-[calc(100%-110px)]'}`}>
-        <div className="bg-white dark:bg-zinc-950 rounded-t-[40px] p-6 shadow-[0_-16px_48px_rgba(0,0,0,0.3)] pb-12 border-t border-gray-100 dark:border-zinc-900">
-          <div className="w-12 h-1.5 bg-gray-200 dark:bg-zinc-800 rounded-full mx-auto mb-6"></div>
-          
-          {!isOnline ? (
-             <div className="text-center py-4">
-                <div className="mb-4">
-                  <span className="bg-zinc-100 dark:bg-zinc-900 px-4 py-2 rounded-full text-[10px] font-black text-gray-400 uppercase tracking-widest">Offline Dashboard</span>
-                </div>
-                <h3 className="text-3xl font-black mb-8">Ready to earn?</h3>
-                <div className="grid grid-cols-3 gap-3 mb-8">
-                   <div className="p-4 bg-gray-50 dark:bg-zinc-900 rounded-2xl border border-gray-100 dark:border-zinc-800">
-                      <p className="text-[9px] font-black text-gray-500 uppercase mb-1">Earnings</p>
-                      <p className="text-lg font-black tracking-tight">₹0.00</p>
-                   </div>
-                   <div className="p-4 bg-gray-50 dark:bg-zinc-900 rounded-2xl border border-gray-100 dark:border-zinc-800">
-                      <p className="text-[9px] font-black text-gray-500 uppercase mb-1">Hours</p>
-                      <p className="text-lg font-black tracking-tight">0.0</p>
-                   </div>
-                   <div className="p-4 bg-gray-50 dark:bg-zinc-900 rounded-2xl border border-gray-100 dark:border-zinc-800">
-                      <p className="text-[9px] font-black text-gray-500 uppercase mb-1">Eco Rating</p>
-                      <p className="text-lg font-black tracking-tight text-green-500">88%</p>
-                   </div>
-                </div>
-                <button 
-                   onClick={() => setIsOnline(true)}
-                   className="w-full bg-[#f2b90d] text-black py-5 rounded-[24px] font-black text-xl shadow-[0_8px_24px_rgba(242,185,13,0.3)] active:scale-[0.98] transition-all"
-                >
-                   Go Online
-                </button>
-             </div>
-          ) : activeRide ? (
-            <div className="animate-in slide-in-from-bottom duration-500">
-               <div className="flex justify-between items-start mb-6">
-                  <div>
-                     <div className="flex items-center gap-2 mb-1">
-                        <span className="bg-blue-600 text-white text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-widest">Active Navigation</span>
-                        <span className="text-[10px] font-black text-gray-400">1.2km away</span>
-                     </div>
-                     <h3 className="text-2xl font-black leading-tight">Pick up {activeRide.passenger}</h3>
-                  </div>
-                  <div className="bg-black dark:bg-white text-white dark:text-black size-12 rounded-2xl flex items-center justify-center font-black text-sm">
-                     4m
-                  </div>
-               </div>
-
-               <div className="grid grid-cols-2 gap-3 mb-8">
-                  <div className="flex items-center gap-3 bg-[#f3f3f3] dark:bg-zinc-900 p-4 rounded-3xl border border-gray-100 dark:border-zinc-800">
-                     <span className="material-icons-outlined text-green-500">eco</span>
-                     <div>
-                        <p className="text-[9px] font-black uppercase text-gray-400">CO2 Prevented</p>
-                        <p className="text-sm font-black">{activeRide.co2Saved}</p>
-                     </div>
-                  </div>
-                  <div className="flex items-center gap-3 bg-[#f3f3f3] dark:bg-zinc-900 p-4 rounded-3xl border border-gray-100 dark:border-zinc-800">
-                     <span className="material-icons-outlined text-blue-500">location_on</span>
-                     <div>
-                        <p className="text-[9px] font-black uppercase text-gray-400">ETA</p>
-                        <p className="text-sm font-black">4:45 PM</p>
-                     </div>
-                  </div>
-               </div>
-
-               <button 
-                  onClick={() => setActiveRide(null)}
-                  className="w-full bg-black dark:bg-white text-white dark:text-black py-5 rounded-[24px] font-black text-xl shadow-2xl active:scale-[0.98] transition-all"
-               >
-                  I've Arrived
-               </button>
+          {requests.length === 0 ? (
+            <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+              {isOnline ? 'No nearby requests yet.' : 'Go online to receive ride requests.'}
             </div>
           ) : (
-            <div className="text-center py-6">
-               <div className="flex justify-center mb-6">
-                  <div className="relative">
-                    <div className="absolute inset-0 bg-blue-500/20 rounded-full animate-ping"></div>
-                    <div className="size-20 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center relative">
-                       <span className="material-icons text-blue-600 dark:text-blue-400 text-3xl">radar</span>
-                    </div>
+            <div className="space-y-3">
+              {requests.map((req) => (
+                <div key={req.rideId} className="p-4 rounded-2xl border border-gray-100 dark:border-zinc-800 bg-gray-50 dark:bg-zinc-900">
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="text-xs font-black uppercase tracking-widest text-gray-400">{req.isPooled ? 'Pool' : 'Solo'}</span>
+                    <span className="font-bold text-green-600 dark:text-green-400">₹{req.fare}</span>
                   </div>
-               </div>
-               <h3 className="text-2xl font-black mb-2">Searching for Ride Matches</h3>
-               <p className="text-gray-500 font-bold max-w-xs mx-auto text-sm">Matches prioritize eco-efficient routes and multi-passenger pooling.</p>
+                  <div className="text-sm font-semibold dark:text-white truncate">
+                    {req.pickup?.address || 'Pickup'} → {req.dropoff?.address || 'Drop'}
+                  </div>
+                  <button
+                    onClick={() => handleAcceptRide(req.rideId)}
+                    className="mt-3 w-full bg-black dark:bg-white text-white dark:text-black py-2 rounded-xl font-bold"
+                  >
+                    Accept Ride
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </div>
-      </div>
-      
-      {/* 5. Sustainability Telemetry Indicators */}
+      )}
+
       {activeRide && (
-        <div className="absolute right-4 top-1/2 -translate-y-1/2 z-20 space-y-4 pointer-events-none">
-           <div className="bg-black/80 backdrop-blur-xl p-4 rounded-3xl flex flex-col items-center border border-white/10 shadow-2xl animate-in slide-in-from-right duration-700">
-              <span className="material-icons-outlined text-green-500 mb-2">speed</span>
-              <div className="h-12 w-1.5 bg-zinc-800 rounded-full relative overflow-hidden">
-                 <div className="absolute bottom-0 w-full bg-green-500 h-[80%]"></div>
-              </div>
-              <span className="text-[8px] font-black text-white uppercase mt-2 tracking-widest opacity-60">Speed</span>
-           </div>
-           <div className="bg-black/80 backdrop-blur-xl p-4 rounded-3xl flex flex-col items-center border border-white/10 shadow-2xl animate-in slide-in-from-right delay-150 duration-700">
-              <span className="material-icons-outlined text-orange-500 mb-2">warning_amber</span>
-              <div className="h-12 w-1.5 bg-zinc-800 rounded-full relative overflow-hidden">
-                 <div className="absolute bottom-0 w-full bg-orange-500 h-[30%]"></div>
-              </div>
-              <span className="text-[8px] font-black text-white uppercase mt-2 tracking-widest opacity-60">Brake</span>
-           </div>
+        <div className="absolute bottom-0 inset-x-0 z-40 bg-white dark:bg-zinc-950 rounded-t-[32px] p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-xs font-black uppercase tracking-widest text-gray-400">Active Ride</p>
+              <h3 className="text-xl font-black dark:text-white">{rideStatus.replace('_', ' ')}</h3>
+            </div>
+            {currentFare !== null && (
+              <div className="text-green-600 dark:text-green-400 font-black">₹{currentFare}</div>
+            )}
+          </div>
+
+          <div className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+            {activeRide.pickup?.address || 'Pickup'} → {activeRide.dropoff?.address || 'Drop'}
+          </div>
+
+          {riderDetails?.name && (
+            <div className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">
+              Rider: {riderDetails.name}
+            </div>
+          )}
+
+          <div className="flex gap-2 mb-4">
+            <button onClick={() => setChatOpen(true)} className="flex-1 bg-gray-100 dark:bg-zinc-800 py-2 rounded-xl font-bold">
+              Chat
+            </button>
+            <button
+              onClick={() => alert(`Call rider via masked number: ${riderDetails?.maskedPhone || 'Unavailable'}`)}
+              className="flex-1 bg-gray-100 dark:bg-zinc-800 py-2 rounded-xl font-bold"
+            >
+              Call
+            </button>
+          </div>
+
+          {rideStatus === 'ACCEPTED' && (
+            <button onClick={handleReached} className="w-full bg-[#f2b90d] text-black py-3 rounded-xl font-black">
+              Reached Pickup
+            </button>
+          )}
+
+          {rideStatus === 'ARRIVED' && (
+            <div className="space-y-3">
+              <input
+                value={otpInput}
+                onChange={(e) => setOtpInput(e.target.value)}
+                className="w-full bg-gray-100 dark:bg-zinc-800 rounded-xl px-4 py-3 text-lg font-bold"
+                placeholder="Enter rider OTP"
+              />
+              <button onClick={handleVerifyOtp} className="w-full bg-black dark:bg-white text-white dark:text-black py-3 rounded-xl font-black">
+                Verify OTP & Start Ride
+              </button>
+            </div>
+          )}
+
+          {rideStatus === 'IN_PROGRESS' && (
+            <div className="space-y-3">
+              {activeRide.isPooled && (
+                <button onClick={handleAddPooledRider} className="w-full bg-green-500 text-white py-3 rounded-xl font-black">
+                  Add Pooled Rider
+                </button>
+              )}
+              <button onClick={handleCompleteRide} className="w-full bg-black dark:bg-white text-white dark:text-black py-3 rounded-xl font-black">
+                Complete Ride
+              </button>
+            </div>
+          )}
+
+          {rideStatus === 'COMPLETED' && (
+            <button onClick={handleClearRide} className="w-full bg-black dark:bg-white text-white dark:text-black py-3 rounded-xl font-black">
+              Done
+            </button>
+          )}
+        </div>
+      )}
+
+      {chatOpen && activeRide && (
+        <div className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4" onClick={() => setChatOpen(false)}>
+          <div className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-3xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-zinc-800">
+              <h3 className="font-bold dark:text-white">Ride Chat</h3>
+              <button onClick={() => setChatOpen(false)} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-zinc-800">
+                <span className="material-icons-outlined">close</span>
+              </button>
+            </div>
+            <div className="max-h-72 overflow-y-auto p-4 space-y-3">
+              {chatMessages.length === 0 && (
+                <p className="text-sm text-gray-400 text-center">No messages yet.</p>
+              )}
+              {chatMessages.map((msg, idx) => (
+                <div key={`${msg.createdAt}-${idx}`} className={`flex ${msg.senderRole === 'DRIVER' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${
+                    msg.senderRole === 'DRIVER'
+                      ? 'bg-black text-white dark:bg-white dark:text-black'
+                      : 'bg-gray-100 dark:bg-zinc-800 dark:text-white'
+                  }`}>
+                    {msg.message}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <form onSubmit={handleSendChat} className="p-3 border-t border-gray-100 dark:border-zinc-800 flex gap-2">
+              <input
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                className="flex-1 bg-gray-100 dark:bg-zinc-800 rounded-full px-4 text-sm"
+                placeholder="Type a message..."
+              />
+              <button type="submit" className="bg-black dark:bg-white text-white dark:text-black rounded-full px-4">
+                Send
+              </button>
+            </form>
+          </div>
         </div>
       )}
     </div>

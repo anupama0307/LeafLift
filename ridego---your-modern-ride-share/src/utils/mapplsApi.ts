@@ -11,7 +11,6 @@ async function getAccessToken(): Promise<string> {
     }
 
     try {
-        // Call backend endpoint via Vite proxy
         const response = await fetch('/api/mappls/token', {
             method: 'POST',
             headers: {
@@ -26,7 +25,6 @@ async function getAccessToken(): Promise<string> {
 
         const data = await response.json();
         accessToken = data.access_token;
-        // Cache for 20 minutes
         tokenExpiry = Date.now() + (20 * 60 * 1000);
 
         console.log('✅ Access token retrieved');
@@ -42,11 +40,7 @@ export async function searchPlaces(query: string, location?: string): Promise<Ma
     if (query.length < 3) return [];
 
     try {
-        const token = await getAccessToken();
-
-        // Build URL with access_token as query parameter
-        let url = `https://atlas.mappls.com/api/places/search/json?query=${encodeURIComponent(query)}&access_token=${token}`;
-
+        let url = `/api/mappls/search?query=${encodeURIComponent(query)}`;
         if (location) {
             url += `&location=${location}`;
         }
@@ -68,8 +62,9 @@ export async function searchPlaces(query: string, location?: string): Promise<Ma
                 eLoc: place.eLoc,
                 placeName: place.placeName || '',
                 placeAddress: place.placeAddress || '',
-                latitude: parseFloat(place.latitude || place.lat || 0),
-                longitude: parseFloat(place.longitude || place.lng || 0),
+                // Parse coordinates with fallbacks
+                latitude: parseFloat(place.latitude || place.lat || place.y || 0),
+                longitude: parseFloat(place.longitude || place.lng || place.x || 0),
                 type: place.type || '',
                 distance: place.distance || 0
             }));
@@ -82,6 +77,47 @@ export async function searchPlaces(query: string, location?: string): Promise<Ma
     }
 }
 
+// Get Place Details - only call if coordinates are missing
+export async function getPlaceDetails(eloc: string): Promise<{ latitude: number; longitude: number; address: string } | null> {
+    try {
+        console.log(`🔍 Fetching details for eLoc: ${eloc}`);
+        const url = `/api/mappls/place/${eloc}`;
+        const response = await fetch(url);
+
+        if (!response.ok) {
+            console.error(`❌ Place details failed with status: ${response.status}`);
+            const errorText = await response.text();
+            console.error(`Error details: ${errorText}`);
+            return null;
+        }
+
+        const data = await response.json();
+        console.log(`📦 Received data:`, data);
+
+        // Mappls fields (per docs) are usually: latitude, longitude, address, name, eloc.
+        const rawLat = data.latitude;
+        const rawLng = data.longitude;
+
+        const lat = typeof rawLat === 'number' ? rawLat : Number.parseFloat(String(rawLat));
+        const lng = typeof rawLng === 'number' ? rawLng : Number.parseFloat(String(rawLng));
+
+        // Handles RESTRICTED / missing / NaN / 0,0
+        if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) {
+            console.warn(`Coordinates not available for eLoc ${eloc}. Raw:`, rawLat, rawLng);
+            return null;
+        }
+
+        return {
+            latitude: lat,
+            longitude: lng,
+            address: data.address || data.placeAddress || data.name || ''
+        };
+    } catch (error) {
+        console.error('❌ Error getting place details:', error);
+        return null;
+    }
+}
+
 // Get Routes between two points
 export async function getRoute(
     startLat: number,
@@ -90,14 +126,15 @@ export async function getRoute(
     endLng: number
 ): Promise<MapplsRoute[]> {
     try {
-        const token = await getAccessToken();
+        // Format: lng,lat
+        const start = `${startLng},${startLat}`;
+        const end = `${endLng},${endLat}`;
 
-        const response = await fetch(
-            `https://apis.mappls.com/advancedmaps/v1/${MAPPLS_CONFIG.REST_API_KEY}/route_adv/driving/${startLng},${startLat};${endLng},${endLat}?geometries=polyline&overview=full&steps=true&alternatives=true&access_token=${token}`,
-            {
-                method: 'GET',
-            }
-        );
+        const url = `/api/mappls/route?start=${start}&end=${end}`;
+
+        const response = await fetch(url, {
+            method: 'GET',
+        });
 
         if (!response.ok) {
             const errorText = await response.text();
@@ -169,7 +206,6 @@ export async function reverseGeocode(lat: number, lng: number): Promise<string> 
         }
 
         const data = await response.json();
-
         const places = data.results || data.places;
 
         if (places && Array.isArray(places) && places.length > 0) {

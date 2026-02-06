@@ -9,6 +9,7 @@ interface AuthScreenProps {
 
 type AuthRole = 'RIDER' | 'DRIVER';
 type AuthStep = 'ROLE' | 'LANDING' | 'OTP' | 'NAME' | 'DOB' | 'GENDER' | 'LICENSE' | 'AADHAR';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
 
 const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isDark }) => {
   const [role, setRole] = useState<AuthRole | null>(null);
@@ -30,7 +31,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch('http://localhost:5000/api/login', {
+      const response = await fetch(`${API_BASE_URL}/api/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -55,7 +56,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch('http://localhost:5000/api/signup', {
+      const response = await fetch(`${API_BASE_URL}/api/signup`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

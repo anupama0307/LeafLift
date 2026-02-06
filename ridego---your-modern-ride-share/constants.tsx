@@ -1,14 +1,13 @@
 import { LocationItem, SuggestionItem, ActivityItem, MessageItem } from './types';
 
-
-// MapmyIndia API Configuration from environment variables
-export const MAPPLS_CONFIG = {
-  MAP_SDK_KEY: import.meta.env.VITE_MAPPLS_MAP_SDK_KEY,
-  REST_API_KEY: import.meta.env.VITE_MAPPLS_REST_API_KEY,
-  CLIENT_ID: import.meta.env.VITE_MAPPLS_CLIENT_ID,
-  CLIENT_SECRET: import.meta.env.VITE_MAPPLS_CLIENT_SECRET,
-  BASE_URL: 'https://atlas.mappls.com/api',
-  AUTH_URL: 'https://outpost.mapmyindia.com/api'
+// ✅ OLA Maps API Configuration from environment variables
+export const OLA_CONFIG = {
+  API_KEY: import.meta.env.VITE_OLA_MAPS_API_KEY || '',
+  PROJECT_ID: import.meta.env.VITE_OLA_PROJECT_ID || '',
+  // Fallback to hardcoded for development only (remove in production)
+  get apiKey() {
+    return this.API_KEY || 'rFyGaGJyBi01CoHCBwHolFwt9XzPRG6DpoqsytwU';
+  }
 };
 
 // Default location (Coimbatore, India)

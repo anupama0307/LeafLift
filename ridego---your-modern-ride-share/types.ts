@@ -70,8 +70,32 @@ export interface MapplsRoute {
   }>;
 }
 
+
+// OLA Maps Place (Autocomplete result)
+export interface OlaPlace {
+    placeId: string;
+    description: string;
+    structuredFormatting: {
+        mainText: string;
+        secondaryText: string;
+    };
+    geometry: any;
+    latitude: number;
+    longitude: number;
+}
+
+// OLA Maps Route
+export interface OlaRoute {
+    summary: string;
+    distance: number; // meters
+    duration: number; // seconds
+    geometry: string; // encoded polyline
+    legs: any[];
+}
+
+// Route Info for Display
 export interface RouteInfo {
-  distance: string; // e.g., "18.5 km"
-  duration: string; // e.g., "25 min"
-  fare: number;
+    distance: string;
+    duration: string;
+    fare: number;
 }
