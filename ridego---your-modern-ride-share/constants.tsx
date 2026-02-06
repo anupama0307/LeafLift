@@ -1,5 +1,61 @@
-
 import { LocationItem, SuggestionItem, ActivityItem, MessageItem } from './types';
+
+// ✅ OLA Maps API Configuration from environment variables
+export const OLA_CONFIG = {
+  API_KEY: import.meta.env.VITE_OLA_MAPS_API_KEY || '',
+  PROJECT_ID: import.meta.env.VITE_OLA_PROJECT_ID || '',
+  // Fallback to hardcoded for development only (remove in production)
+  get apiKey() {
+    return this.API_KEY || 'rFyGaGJyBi01CoHCBwHolFwt9XzPRG6DpoqsytwU';
+  }
+};
+
+// Default location (Coimbatore, India)
+export const DEFAULT_CENTER = {
+  lat: 11.0168,
+  lng: 76.9558,
+  zoom: 13
+};
+
+// Vehicle categories for ride booking
+export const VEHICLE_CATEGORIES = [
+  {
+    id: 'BIKE',
+    label: 'Bike',
+    icon: 'two_wheeler',
+    description: 'Quick & affordable',
+    baseRate: 15,
+    perKmRate: 7,
+    capacity: 1,
+  },
+  {
+    id: 'AUTO',
+    label: 'Auto',
+    icon: 'electric_rickshaw',
+    description: 'Comfortable 3-wheeler',
+    baseRate: 25,
+    perKmRate: 10,
+    capacity: 3,
+  },
+  {
+    id: 'CAR',
+    label: 'Car',
+    icon: 'directions_car',
+    description: 'Affordable rides',
+    baseRate: 30,
+    perKmRate: 12,
+    capacity: 4,
+  },
+  {
+    id: 'BIG_CAR',
+    label: 'Big Car',
+    icon: 'airport_shuttle',
+    description: 'For groups & luggage',
+    baseRate: 50,
+    perKmRate: 18,
+    capacity: 6,
+  }
+];
 
 export const RECENT_LOCATIONS: LocationItem[] = [
   {
@@ -44,20 +100,27 @@ export const PLAN_SUGGESTIONS: LocationItem[] = [
 export const MAIN_SUGGESTIONS: SuggestionItem[] = [
   {
     id: 's1',
-    label: 'Ride',
-    iconUrl: 'https://lh3.googleusercontent.com/aida-public/AB6AXuCkmiqNr1ymgpGUQfR_BIAKAYAByrL_P4q_ld-vQ5_UKCxzHPVj2S-nO5CmBh3quS1U1VwB_tDgVy5LCmwq1LejOGy2EKsVhVm1rD-HKnnRaLewrSGgV-hqr86JTOMkgm3JO8Woqz_k0Tt9zE1E8rPQqQQVnnj1Nl_R1EEi6YNgHsg78TqVoyvYNhOdPHyD2DpnroqEY3CzzZl6RsuUPA3Yv_HBvxUijF4vy-ywoEyubQmVaHuCZGnQmwHAK6Ki8D5S-2Vh3PR1Its',
-    promo: '15%'
+    label: 'Bike',
+    iconUrl: 'two_wheeler',
+    isCustomIcon: true
   },
   {
     id: 's2',
-    label: 'Moto',
-    iconUrl: 'https://lh3.googleusercontent.com/aida-public/AB6AXuDosAne7lRqdzpIdiAhGs-Lsi7wDP4h6R-2H5e6zn17KtGC0E_Xucb4o5P5xX-ygLYeBcyTLU26R_wZ_bcp-J54AeVUfdC5o6dFh8sSosvFNl_eQ8qcUOiImV77QBrPLQ5k5PMjFe6HWCCPVZPl8vgXQ1CWBzjGqRC_CC3H4jT57_Gcorgikkj3wGcwAFLL2so8onGKKG21EbjJWUcvKukxF1qYhbidJINb_ecn9K8HRFUP-xp4MpUBsHm8IMUlVDBCP9_n8dQRo6s'
+    label: 'Auto',
+    iconUrl: 'electric_rickshaw',
+    isCustomIcon: true
+  },
+  {
+    id: 's3',
+    label: 'Car',
+    iconUrl: 'directions_car',
+    promo: '15%',
+    isCustomIcon: true
   },
   {
     id: 's4',
-    label: 'Reserve',
-    iconUrl: 'event',
-    promo: 'Promo',
+    label: 'Big Car',
+    iconUrl: 'airport_shuttle',
     isCustomIcon: true
   }
 ];
@@ -69,7 +132,7 @@ export const ACTIVITY_HISTORY: ActivityItem[] = [
     date: 'Oct 24, 4:32 PM',
     price: '₹245.00',
     status: 'Completed',
-    carType: 'Uber Go'
+    carType: 'Car'
   },
   {
     id: 'act2',
@@ -77,7 +140,7 @@ export const ACTIVITY_HISTORY: ActivityItem[] = [
     date: 'Oct 22, 10:15 AM',
     price: '₹510.00',
     status: 'Completed',
-    carType: 'Premier'
+    carType: 'Big Car'
   },
   {
     id: 'act3',
@@ -85,7 +148,7 @@ export const ACTIVITY_HISTORY: ActivityItem[] = [
     date: 'Oct 21, 8:45 AM',
     price: '₹0.00',
     status: 'Canceled',
-    carType: 'Uber Go'
+    carType: 'Bike'
   }
 ];
 
