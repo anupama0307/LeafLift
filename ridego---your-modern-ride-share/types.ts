@@ -1,7 +1,6 @@
 export enum AppScreen {
   AUTH = 'AUTH',
   HOME = 'HOME',
-  SERVICES = 'SERVICES',
   ACTIVITY = 'ACTIVITY',
   INBOX = 'INBOX',
   ACCOUNT = 'ACCOUNT',

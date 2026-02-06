@@ -69,7 +69,6 @@ const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScre
             /* Rider Specific Tabs */
             <>
               <NavItem screen={AppScreen.HOME} icon="home" label="Home" />
-              <NavItem screen={AppScreen.SERVICES} icon="grid_view" label="Services" />
               <NavItem screen={AppScreen.ACTIVITY} icon="receipt_long" label="Activity" />
               <NavItem screen={AppScreen.INBOX} icon="chat_bubble_outline" label="Inbox" />
               <NavItem screen={AppScreen.ACCOUNT} icon="person" label="Account" />
