@@ -97,7 +97,7 @@ const App: React.FC = () => {
 
   return (
     <div className="flex justify-center min-h-screen bg-[#f3f3f3] dark:bg-zinc-950 transition-colors duration-300">
-      <div className="w-full max-w-[430px] min-h-screen bg-white dark:bg-black flex flex-col relative shadow-2xl overflow-hidden">
+      <div className="w-full max-w-[430px] min-h-screen bg-white dark:bg-zinc-950 flex flex-col relative shadow-2xl overflow-hidden">
         <Layout
           currentScreen={currentScreen}
           setCurrentScreen={setCurrentScreen}

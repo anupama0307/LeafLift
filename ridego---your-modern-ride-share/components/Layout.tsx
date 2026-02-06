@@ -34,7 +34,7 @@ const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScre
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden bg-white dark:bg-black">
+    <div className="flex-1 flex flex-col overflow-hidden bg-white dark:bg-zinc-950">
       {/* Top Bar / Status Bar (Simulated) */}
       {!isSpecialScreen && (
         <div className="flex justify-between items-center px-8 pt-4 pb-2">
@@ -57,7 +57,7 @@ const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScre
 
       {/* Navigation Bar (Sticky at bottom) */}
       {!isSpecialScreen && (
-        <div className="bg-white dark:bg-[#121212] border-t border-gray-100 dark:border-gray-800 flex justify-around items-center pt-3 pb-8 px-4 z-50">
+        <div className="bg-white dark:bg-zinc-950 border-t border-gray-100 dark:border-gray-800 flex justify-around items-center pt-3 pb-8 px-4 z-50">
           {isDriver ? (
             /* Driver Specific Tabs: Dashboard, Inbox, Account */
             <>

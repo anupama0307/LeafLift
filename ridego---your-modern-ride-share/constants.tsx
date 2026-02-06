@@ -1,5 +1,21 @@
-
 import { LocationItem, SuggestionItem, ActivityItem, MessageItem } from './types';
+
+// ✅ OLA Maps API Configuration from environment variables
+export const OLA_CONFIG = {
+  API_KEY: import.meta.env.VITE_OLA_MAPS_API_KEY || '',
+  PROJECT_ID: import.meta.env.VITE_OLA_PROJECT_ID || '',
+  // Fallback to hardcoded for development only (remove in production)
+  get apiKey() {
+    return this.API_KEY || 'rFyGaGJyBi01CoHCBwHolFwt9XzPRG6DpoqsytwU';
+  }
+};
+
+// Default location (Coimbatore, India)
+export const DEFAULT_CENTER = {
+  lat: 11.0168,
+  lng: 76.9558,
+  zoom: 13
+};
 
 export const RECENT_LOCATIONS: LocationItem[] = [
   {
