@@ -5,7 +5,6 @@ import Layout from './components/Layout';
 import HomeScreen from './components/HomeScreen';
 import PlanRideScreen from './components/PlanRideScreen';
 import AccountScreen from './components/AccountScreen';
-import ServicesScreen from './components/ServicesScreen';
 import AuthScreen from './components/AuthScreen';
 import ActivityScreen from './components/ActivityScreen';
 import InboxScreen from './components/InboxScreen';
@@ -18,6 +17,7 @@ const App: React.FC = () => {
   const [currentScreen, setCurrentScreen] = useState<AppScreen>(AppScreen.AUTH);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [selectedVehicleCategory, setSelectedVehicleCategory] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     const savedUser = localStorage.getItem('leaflift_user');
@@ -77,9 +77,10 @@ const App: React.FC = () => {
       case AppScreen.DRIVER_DASHBOARD:
         return <DriverDashboard user={user} />;
       case AppScreen.HOME:
-        return <HomeScreen onOpenPlan={() => setCurrentScreen(AppScreen.PLAN_RIDE)} />;
-      case AppScreen.SERVICES:
-        return <ServicesScreen />;
+        return <HomeScreen onOpenPlan={(vehicleCategory?: string) => {
+          setSelectedVehicleCategory(vehicleCategory);
+          setCurrentScreen(AppScreen.PLAN_RIDE);
+        }} />;
       case AppScreen.ACTIVITY:
         return <ActivityScreen />;
       case AppScreen.INBOX:
@@ -87,11 +88,14 @@ const App: React.FC = () => {
       case AppScreen.CHAT_DETAIL:
         return <ChatDetailScreen chatId={activeChatId!} onBack={() => setCurrentScreen(AppScreen.INBOX)} />;
       case AppScreen.PLAN_RIDE:
-        return <PlanRideScreen onBack={() => setCurrentScreen(AppScreen.HOME)} />;
+        return <PlanRideScreen onBack={() => setCurrentScreen(AppScreen.HOME)} initialVehicleCategory={selectedVehicleCategory} />;
       case AppScreen.ACCOUNT:
         return <AccountScreen user={user} onSignOut={handleSignOut} />;
       default:
-        return user?.role === 'DRIVER' ? <DriverDashboard user={user} /> : <HomeScreen onOpenPlan={() => setCurrentScreen(AppScreen.PLAN_RIDE)} />;
+        return user?.role === 'DRIVER' ? <DriverDashboard user={user} /> : <HomeScreen onOpenPlan={(vehicleCategory?: string) => {
+          setSelectedVehicleCategory(vehicleCategory);
+          setCurrentScreen(AppScreen.PLAN_RIDE);
+        }} />;
     }
   };
 

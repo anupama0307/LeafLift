@@ -15,6 +15,13 @@ const userSchema = new mongoose.Schema({
     vehicleNumber: { type: String },
     rating: { type: Number, default: 4.8 },
     photoUrl: { type: String },
+    // Wallet
+    walletBalance: { type: Number, default: 0 },
+    // Eco stats
+    totalCO2Saved: { type: Number, default: 0 },
+    totalCO2Emitted: { type: Number, default: 0 },
+    totalTrips: { type: Number, default: 0 },
+    totalKmTraveled: { type: Number, default: 0 },
     createdAt: { type: Date, default: Date.now },
 });
 

@@ -52,13 +52,11 @@ const RideSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
-    pooledRiders: [
-        {
-            userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-            fareAdjustment: { type: Number, default: 0 },
-            joinedAt: { type: Date, default: Date.now }
-        }
-    ],
+    pooledRiders: [{
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        fareAdjustment: { type: Number, default: 0 },
+        joinedAt: { type: Date, default: Date.now }
+    }],
     riderLocation: {
         lat: Number,
         lng: Number,
@@ -80,14 +78,35 @@ const RideSchema = new mongoose.Schema({
         riderMasked: String,
         driverMasked: String
     },
-    chat: [
-        {
-            senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-            senderRole: String,
-            message: String,
-            createdAt: { type: Date, default: Date.now }
-        }
-    ],
+    chat: [{
+        senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        senderRole: String,
+        message: String,
+        createdAt: { type: Date, default: Date.now }
+    }],
+    // Scheduling
+    scheduledFor: { type: Date, default: null },
+    scheduledForName: { type: String, default: '' },
+    scheduledForPhone: { type: String, default: '' },
+    isScheduled: { type: Boolean, default: false },
+    // Passengers
+    passengers: { type: Number, default: 1 },
+    maxPassengers: { type: Number, default: 4 },
+    // Early termination / partial ride
+    actualDropoff: {
+        address: String,
+        lat: Number,
+        lng: Number
+    },
+    actualDistanceMeters: { type: Number, default: 0 },
+    completedFare: { type: Number, default: 0 },
+    riderConfirmedComplete: { type: Boolean, default: false },
+    // Ride type category
+    vehicleCategory: {
+        type: String,
+        enum: ['BIKE', 'AUTO', 'CAR', 'BIG_CAR'],
+        default: 'CAR'
+    },
     bookingTime: {
         type: Date,
         default: Date.now
