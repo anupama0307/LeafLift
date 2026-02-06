@@ -13,7 +13,7 @@ interface ChatMessage {
   createdAt: string;
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
 const ChatDetailScreen: React.FC<ChatDetailScreenProps> = ({ chatId, onBack }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);

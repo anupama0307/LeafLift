@@ -13,41 +13,12 @@ const User = require('./models/User');
 const Ride = require('./models/Ride');
 
 const app = express();
-<<<<<<< HEAD
 const PORT = process.env.PORT || 5001;
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-
-// MongoDB Connection
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://iris715nn_db_user:net15thu08@leaflift.zqkaqdc.mongodb.net/leaflift?retryWrites=true&w=majority';
-
-mongoose.connect(MONGODB_URI)
-    .then(() => console.log('Connected to MongoDB'))
-    .catch(err => console.error('Could not connect to MongoDB', err));
-
-// Routes
-app.post('/api/login', async (req, res) => {
-    try {
-        const { phone, role } = req.body;
-        const user = await User.findOne({ phone, role });
-        if (user) {
-            res.json({ exists: true, user });
-        } else {
-            res.json({ exists: false });
-        }
-    } catch (error) {
-        console.error('Login check error:', error);
-        res.status(500).json({ message: 'Server error during login check' });
-=======
-const PORT = process.env.PORT || 5000;
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
     cors: {
         origin: '*',
         methods: ['GET', 'POST', 'PUT']
->>>>>>> main
     }
 });
 

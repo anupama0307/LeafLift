@@ -36,7 +36,7 @@ interface RideChatMessage {
 }
 
 const NEARBY_RADIUS_KM = 6;
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
 const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ onBack, initialVehicleCategory }) => {
     const [destination, setDestination] = useState('');
@@ -373,7 +373,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ onBack, initialVehicleC
                     }
                 }
             },
-            () => null, { enableHighAccuracy: true, maximumAge: 5000 }
+            () => null, { enableHighAccuracy: true, maximumAge: 5001 }
         );
         return () => navigator.geolocation.clearWatch(watchId);
     }, [activeRideId]);

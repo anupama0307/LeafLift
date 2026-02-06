@@ -21,7 +21,7 @@ interface AuthScreenProps {
 
 type AuthRole = 'RIDER' | 'DRIVER';
 type AuthStep = 'ROLE' | 'LANDING' | 'OTP' | 'NAME' | 'DOB' | 'GENDER' | 'LICENSE' | 'AADHAR' | 'EMAIL_AUTH';
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
 // Extend Window interface for recaptchaVerifier
 declare global {
