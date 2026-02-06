@@ -1,5 +1,17 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
+  signInWithPhoneNumber,
+  RecaptchaVerifier,
+  ConfirmationResult,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  sendPasswordResetEmail
+} from 'firebase/auth';
+import { auth, googleProvider } from '../src/firebase';
 
 interface AuthScreenProps {
   onAuthSuccess: (userData: any) => void;
@@ -8,13 +20,26 @@ interface AuthScreenProps {
 }
 
 type AuthRole = 'RIDER' | 'DRIVER';
-type AuthStep = 'ROLE' | 'LANDING' | 'OTP' | 'NAME' | 'DOB' | 'GENDER' | 'LICENSE' | 'AADHAR';
+type AuthStep = 'ROLE' | 'LANDING' | 'OTP' | 'NAME' | 'DOB' | 'GENDER' | 'LICENSE' | 'AADHAR' | 'EMAIL_AUTH';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
+
+// Extend Window interface for recaptchaVerifier
+declare global {
+  interface Window {
+    recaptchaVerifier: RecaptchaVerifier | undefined;
+    confirmationResult: ConfirmationResult | undefined;
+  }
+}
 
 const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isDark }) => {
-  const [role, setRole] = useState<AuthRole | null>(null);
+  const [role, setRole] = useState<AuthRole | null>(() => {
+    // Restore role from sessionStorage after redirect
+    const savedRole = sessionStorage.getItem('leaflift_pending_role');
+    return savedRole as AuthRole | null;
+  });
   const [step, setStep] = useState<AuthStep>('ROLE');
   const [phone, setPhone] = useState('');
-  const [otp, setOtp] = useState(['', '', '', '']);
+  const [otp, setOtp] = useState(['', '', '', '', '', '']); // 6 digits for Firebase
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [dob, setDob] = useState('');
@@ -22,32 +47,311 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
   const [license, setLicense] = useState('');
   const [aadhar, setAadhar] = useState('');
 
+  // Email auth state
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+
   const [existingUser, setExistingUser] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [isEmailLoading, setIsEmailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
 
-  const checkUser = async () => {
+  const recaptchaContainerRef = useRef<HTMLDivElement>(null);
+
+  // Initialize reCAPTCHA verifier
+  const setupRecaptcha = () => {
+    if (!window.recaptchaVerifier) {
+      window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+        size: 'invisible',
+        callback: () => {
+          // reCAPTCHA solved
+        },
+        'expired-callback': () => {
+          setError('reCAPTCHA expired. Please try again.');
+        }
+      });
+    }
+  };
+
+  // Handle redirect result on page load
+  useEffect(() => {
+    const handleRedirectResult = async () => {
+      try {
+        const result = await getRedirectResult(auth);
+        if (result) {
+          const user = result.user;
+          const savedRole = sessionStorage.getItem('leaflift_pending_role') || 'RIDER';
+
+          const userData = {
+            id: user.uid,
+            email: user.email,
+            firstName: user.displayName?.split(' ')[0] || '',
+            lastName: user.displayName?.split(' ').slice(1).join(' ') || '',
+            photoURL: user.photoURL,
+            phone: user.phoneNumber || '',
+            role: savedRole,
+            authProvider: 'google',
+          };
+
+          sessionStorage.removeItem('leaflift_pending_role');
+          onAuthSuccess(userData);
+        }
+      } catch (err: any) {
+        console.error('Redirect result error:', err);
+        setError(err.message || 'Failed to complete sign-in');
+      }
+    };
+
+    handleRedirectResult();
+  }, [onAuthSuccess]);
+
+  // Google Sign-In Handler - tries popup first, falls back to redirect
+  const handleGoogleSignIn = async () => {
+    if (!role) {
+      setError('Please select a role first');
+      return;
+    }
+
+    setIsGoogleLoading(true);
+    setError(null);
+
+    // Save role for after redirect
+    sessionStorage.setItem('leaflift_pending_role', role);
+
+    try {
+      // Try popup first
+      const result = await signInWithPopup(auth, googleProvider);
+      const user = result.user;
+
+      const userData = {
+        id: user.uid,
+        email: user.email,
+        firstName: user.displayName?.split(' ')[0] || '',
+        lastName: user.displayName?.split(' ').slice(1).join(' ') || '',
+        photoURL: user.photoURL,
+        phone: user.phoneNumber || '',
+        role: role,
+        authProvider: 'google',
+      };
+
+      sessionStorage.removeItem('leaflift_pending_role');
+      onAuthSuccess(userData);
+    } catch (err: any) {
+      console.error('Google sign-in error:', err);
+
+      // If popup fails, try redirect
+      if (err.code === 'auth/popup-blocked' || err.code === 'auth/popup-closed-by-user') {
+        try {
+          await signInWithRedirect(auth, googleProvider);
+          // Page will redirect, no need to handle here
+        } catch (redirectErr: any) {
+          setError(redirectErr.message || 'Failed to sign in with Google');
+          setIsGoogleLoading(false);
+        }
+      } else {
+        setError(err.message || 'Failed to sign in with Google');
+        setIsGoogleLoading(false);
+      }
+    }
+  };
+
+  // Firebase Phone Auth - Send OTP
+  const sendOTP = async () => {
+    if (phone.length < 10) {
+      setError('Please enter a valid phone number');
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
+
     try {
-      const response = await fetch('http://localhost:5001/api/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ phone, role }),
-      });
-      const data = await response.json();
-      if (data.exists) {
-        setExistingUser(data.user);
-      } else {
-        setExistingUser(null);
-      }
+      setupRecaptcha();
+      const phoneNumber = `+91${phone}`;
+      const appVerifier = window.recaptchaVerifier!;
+
+      const confirmation = await signInWithPhoneNumber(auth, phoneNumber, appVerifier);
+      setConfirmationResult(confirmation);
+      window.confirmationResult = confirmation;
       setStep('OTP');
     } catch (err: any) {
-      setError('Connection error. Please try again.');
+      console.error('Phone auth error:', err);
+      // Reset reCAPTCHA on error
+      if (window.recaptchaVerifier) {
+        window.recaptchaVerifier.clear();
+        window.recaptchaVerifier = undefined;
+      }
+
+      if (err.code === 'auth/invalid-phone-number') {
+        setError('Invalid phone number format');
+      } else if (err.code === 'auth/too-many-requests') {
+        setError('Too many attempts. Please try again later.');
+      } else {
+        setError(err.message || 'Failed to send OTP');
+      }
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Firebase Phone Auth - Verify OTP
+  const verifyOTP = async () => {
+    const otpCode = otp.join('');
+    if (otpCode.length !== 6) {
+      setError('Please enter the 6-digit OTP');
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const confirmation = confirmationResult || window.confirmationResult;
+      if (!confirmation) {
+        throw new Error('No confirmation result. Please request a new OTP.');
+      }
+
+      const result = await confirmation.confirm(otpCode);
+      const user = result.user;
+
+      // Check if this is a new user (no display name set)
+      if (!user.displayName) {
+        // New user - go to name step
+        setExistingUser(null);
+        setStep('NAME');
+      } else {
+        // Existing user - log them in
+        const userData = {
+          id: user.uid,
+          email: user.email || '',
+          firstName: user.displayName?.split(' ')[0] || '',
+          lastName: user.displayName?.split(' ').slice(1).join(' ') || '',
+          photoURL: user.photoURL || '',
+          phone: user.phoneNumber || `+91${phone}`,
+          role: role,
+          authProvider: 'phone',
+        };
+        onAuthSuccess(userData);
+      }
+    } catch (err: any) {
+      console.error('OTP verification error:', err);
+      if (err.code === 'auth/invalid-verification-code') {
+        setError('Invalid OTP. Please check and try again.');
+      } else if (err.code === 'auth/code-expired') {
+        setError('OTP expired. Please request a new one.');
+      } else {
+        setError(err.message || 'Failed to verify OTP');
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Firebase Email/Password Auth Handler
+  const handleEmailAuth = async () => {
+    if (!email || !password) {
+      setError('Please enter email and password');
+      return;
+    }
+
+    if (!role) {
+      setError('Please select a role first');
+      return;
+    }
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      setError('Please enter a valid email address');
+      return;
+    }
+
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters');
+      return;
+    }
+
+    setIsEmailLoading(true);
+    setError(null);
+
+    try {
+      let result;
+      
+      if (isSignUp) {
+        // Create new account
+        result = await createUserWithEmailAndPassword(auth, email, password);
+      } else {
+        // Sign in to existing account
+        result = await signInWithEmailAndPassword(auth, email, password);
+      }
+
+      const user = result.user;
+
+      // For new users, go to name step
+      if (isSignUp) {
+        setExistingUser(null);
+        setStep('NAME');
+      } else {
+        // Existing user - log them in
+        const userData = {
+          id: user.uid,
+          email: user.email || email,
+          firstName: user.displayName?.split(' ')[0] || '',
+          lastName: user.displayName?.split(' ').slice(1).join(' ') || '',
+          photoURL: user.photoURL || '',
+          phone: '',
+          role: role,
+          authProvider: 'email',
+        };
+        onAuthSuccess(userData);
+      }
+    } catch (err: any) {
+      console.error('Email auth error:', err);
+      
+      if (err.code === 'auth/email-already-in-use') {
+        setError('Email already registered. Try signing in instead.');
+        setIsSignUp(false);
+      } else if (err.code === 'auth/user-not-found') {
+        setError('No account found. Try signing up instead.');
+        setIsSignUp(true);
+      } else if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        setError('Invalid email or password.');
+      } else if (err.code === 'auth/weak-password') {
+        setError('Password is too weak. Use at least 6 characters.');
+      } else {
+        setError(err.message || 'Authentication failed');
+      }
+    } finally {
+      setIsEmailLoading(false);
+    }
+  };
+
+  // Send password reset email
+  const handleForgotPassword = async () => {
+    if (!email) {
+      setError('Please enter your email address first');
+      return;
+    }
+
+    setIsEmailLoading(true);
+    setError(null);
+
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setError(null);
+      alert('Password reset email sent! Check your inbox.');
+    } catch (err: any) {
+      if (err.code === 'auth/user-not-found') {
+        setError('No account found with this email.');
+      } else {
+        setError(err.message || 'Failed to send reset email');
+      }
+    } finally {
+      setIsEmailLoading(false);
     }
   };
 
@@ -55,7 +359,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch('http://localhost:5001/api/signup', {
+      const response = await fetch(`${API_BASE_URL}/api/signup`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -78,23 +382,19 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
 
   const handleNext = () => {
     if (step === 'ROLE') setStep('LANDING');
-    else if (step === 'LANDING') checkUser();
+    else if (step === 'LANDING') sendOTP(); // Changed from checkUser to sendOTP
     else if (step === 'OTP') {
-      if (existingUser) {
-        onAuthSuccess(existingUser);
-      } else {
-        setStep('NAME');
-      }
+      verifyOTP(); // Use Firebase OTP verification
     }
     else if (step === 'NAME') setStep('DOB');
     else if (step === 'DOB') setStep('GENDER');
     else if (step === 'GENDER') {
       if (role === 'DRIVER') setStep('LICENSE');
-      else handleSignup({ role, firstName, lastName, phone, dob, gender });
+      else handleSignup({ role, firstName, lastName, phone: `+91${phone}`, dob, gender });
     }
     else if (step === 'LICENSE') setStep('AADHAR');
     else if (step === 'AADHAR') {
-      handleSignup({ role, firstName, lastName, phone, dob, gender, license, aadhar });
+      handleSignup({ role, firstName, lastName, phone: `+91${phone}`, dob, gender, license, aadhar });
     }
   };
 
@@ -211,21 +511,52 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
               <div className="flex-grow border-t border-gray-200 dark:border-zinc-800"></div>
             </div>
             <div className="space-y-3 mb-8">
-              {['Apple', 'Google', 'Email'].map(method => (
-                <button
-                  key={method}
-                  onClick={() => {
-                    // Even if social login, user must provide mobile number as per request
-                    // So we stay on LANDING but show they need to fill phone if they haven't
-                    if (!phone) alert("Please provide your mobile number first.");
-                    else checkUser();
-                  }}
-                  className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 hover:opacity-80 flex items-center justify-center gap-3 rounded-lg text-black dark:text-white font-bold transition-all"
-                >
-                  <span className="material-icons-outlined">{method.toLowerCase()}</span>
-                  Continue with {method}
-                </button>
-              ))}
+              {/* Google Sign-In - Fully functional */}
+              <button
+                onClick={handleGoogleSignIn}
+                disabled={isGoogleLoading}
+                className="w-full h-14 bg-white dark:bg-zinc-800 hover:bg-gray-50 dark:hover:bg-zinc-700 flex items-center justify-center gap-3 rounded-lg text-black dark:text-white font-bold transition-all border border-gray-200 dark:border-zinc-700 disabled:opacity-50"
+              >
+                {isGoogleLoading ? (
+                  <>
+                    <span className="material-icons-outlined animate-spin">sync</span>
+                    Signing in...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-5 h-5" viewBox="0 0 24 24">
+                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                    </svg>
+                    Continue with Google
+                  </>
+                )}
+              </button>
+
+              {/* Apple Sign-In - Coming soon */}
+              <button
+                onClick={() => alert('Apple Sign-In coming soon!')}
+                className="w-full h-14 bg-black dark:bg-white hover:opacity-90 flex items-center justify-center gap-3 rounded-lg text-white dark:text-black font-bold transition-all"
+              >
+                <span className="material-icons-outlined">apple</span>
+                Continue with Apple
+              </button>
+
+              {/* Email Sign-In - Now functional */}
+              <button
+                onClick={() => {
+                  setError(null);
+                  setEmail('');
+                  setPassword('');
+                  setStep('EMAIL_AUTH');
+                }}
+                className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 hover:opacity-80 flex items-center justify-center gap-3 rounded-lg text-black dark:text-white font-bold transition-all"
+              >
+                <span className="material-icons-outlined">email</span>
+                Continue with Email
+              </button>
             </div>
           </div>
         );
@@ -233,30 +564,67 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
         return (
           <div className="flex-1 px-6 pt-8 animate-in fade-in slide-in-from-right duration-300">
             <StepHeader
-              onBack={() => setStep('LANDING')}
-              title={`Enter the 4-digit code sent to +91 ${phone}`}
+              onBack={() => {
+                setStep('LANDING');
+                setOtp(['', '', '', '', '', '']);
+                setError(null);
+              }}
+              title={`Enter the 6-digit code sent to +91 ${phone}`}
             />
-            <div className="flex gap-4 mb-8">
+            {error && <div className="mb-4 p-3 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg text-sm font-bold">{error}</div>}
+            <div className="flex gap-2 mb-8 justify-center">
               {otp.map((digit, i) => (
                 <input
                   key={i}
+                  id={`otp-${i}`}
                   type="text"
+                  inputMode="numeric"
                   maxLength={1}
-                  className="w-14 h-14 border-2 border-gray-100 dark:border-zinc-800 bg-[#f3f3f3] dark:bg-zinc-900 rounded-xl text-center text-2xl font-black text-black dark:text-white focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
+                  className="w-11 h-14 border-2 border-gray-100 dark:border-zinc-800 bg-[#f3f3f3] dark:bg-zinc-900 rounded-xl text-center text-2xl font-black text-black dark:text-white focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
                   value={digit}
                   onChange={(e) => {
+                    const val = e.target.value.replace(/[^0-9]/g, '');
                     const newOtp = [...otp];
-                    newOtp[i] = e.target.value;
+                    newOtp[i] = val;
                     setOtp(newOtp);
-                    if (e.target.value && i < 3) {
-                      (e.target.nextSibling as HTMLInputElement)?.focus();
+                    if (val && i < 5) {
+                      document.getElementById(`otp-${i + 1}`)?.focus();
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Backspace' && !digit && i > 0) {
+                      document.getElementById(`otp-${i - 1}`)?.focus();
                     }
                   }}
                 />
               ))}
             </div>
-            <button onClick={handleNext} className="w-full h-14 bg-leaf-600 dark:bg-leaf-500 text-white font-black rounded-xl text-lg shadow-lg shadow-leaf-500/20 transition-all active:scale-95">Verify</button>
-            <p className="mt-6 text-sm text-gray-500 font-bold">Resend code in 0:30</p>
+            <button
+              onClick={handleNext}
+              disabled={otp.join('').length !== 6 || isLoading}
+              className="w-full h-14 bg-leaf-600 dark:bg-leaf-500 text-white font-black rounded-xl text-lg shadow-lg shadow-leaf-500/20 transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {isLoading ? (
+                <>
+                  <span className="material-icons-outlined animate-spin">sync</span>
+                  Verifying...
+                </>
+              ) : 'Verify'}
+            </button>
+            <button
+              onClick={() => {
+                setOtp(['', '', '', '', '', '']);
+                setError(null);
+                if (window.recaptchaVerifier) {
+                  window.recaptchaVerifier.clear();
+                  window.recaptchaVerifier = undefined;
+                }
+                sendOTP();
+              }}
+              className="mt-4 w-full text-center text-sm text-leaf-600 dark:text-leaf-400 font-bold hover:underline"
+            >
+              Resend OTP
+            </button>
           </div>
         );
       case 'NAME':
@@ -369,6 +737,104 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
             </button>
           </div>
         );
+      case 'EMAIL_AUTH':
+        return (
+          <div className="flex-1 px-6 pt-8 animate-in fade-in slide-in-from-right duration-300">
+            <StepHeader 
+              onBack={() => {
+                setStep('LANDING');
+                setError(null);
+              }}
+              title={isSignUp ? 'Create Account' : 'Sign In'}
+              subtitle={isSignUp ? 'Enter your email and create a password' : 'Enter your email and password'}
+            />
+            {error && <div className="mb-4 p-3 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg text-sm font-bold">{error}</div>}
+            
+            <div className="space-y-4 mb-6">
+              {/* Email Input */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">Email</label>
+                <input
+                  autoFocus
+                  type="email"
+                  className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
+                  placeholder="your@email.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+              </div>
+              
+              {/* Password Input */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">Password</label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 pr-12 text-black dark:text-white font-medium focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
+                    placeholder={isSignUp ? 'Create a password (min 6 chars)' : 'Enter your password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && email && password) {
+                        handleEmailAuth();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700 dark:text-zinc-400 dark:hover:text-zinc-300"
+                  >
+                    <span className="material-icons-outlined text-xl">
+                      {showPassword ? 'visibility_off' : 'visibility'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+            
+            {/* Forgot Password - only show for login */}
+            {!isSignUp && (
+              <button
+                onClick={handleForgotPassword}
+                disabled={isEmailLoading}
+                className="text-leaf-600 dark:text-leaf-400 text-sm font-bold mb-6 hover:underline disabled:opacity-50"
+              >
+                Forgot password?
+              </button>
+            )}
+            
+            {/* Submit Button */}
+            <button 
+              onClick={handleEmailAuth}
+              disabled={!email || !password || isEmailLoading}
+              className="w-full h-14 bg-leaf-600 dark:bg-leaf-500 text-white font-black rounded-xl text-lg shadow-lg shadow-leaf-500/20 transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2 mb-4"
+            >
+              {isEmailLoading ? (
+                <>
+                  <span className="material-icons-outlined animate-spin">sync</span>
+                  {isSignUp ? 'Creating account...' : 'Signing in...'}
+                </>
+              ) : (
+                isSignUp ? 'Create Account' : 'Sign In'
+              )}
+            </button>
+            
+            {/* Toggle Sign Up / Sign In */}
+            <p className="text-center text-gray-500 dark:text-zinc-400 font-medium">
+              {isSignUp ? 'Already have an account? ' : "Don't have an account? "}
+              <button
+                onClick={() => {
+                  setIsSignUp(!isSignUp);
+                  setError(null);
+                }}
+                className="text-leaf-600 dark:text-leaf-400 font-bold hover:underline"
+              >
+                {isSignUp ? 'Sign In' : 'Sign Up'}
+              </button>
+            </p>
+          </div>
+        );
     }
   };
 
@@ -386,6 +852,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
       <div className="pb-4 flex justify-center w-full mt-auto">
         <div className="w-32 h-1 bg-black dark:bg-white rounded-full opacity-20"></div>
       </div>
+      {/* Invisible reCAPTCHA container for Firebase Phone Auth */}
+      <div id="recaptcha-container"></div>
     </div>
   );
 };
