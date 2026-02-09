@@ -297,7 +297,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
           fetch(`${API_BASE_URL}/api/drivers/online`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId, role: 'DRIVER', lat: latitude, lng: longitude })
+            body: JSON.stringify({ driverId: userId, location: coords })
           }).catch(() => null);
           if (activeRide?._id) {
             fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/location`, {
@@ -578,12 +578,12 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
     if (!activeRide?._id || !driverLocation) return;
     setEarlyCompleteLoading(true);
     try {
-      const resp = await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/early-complete`, {
+      const resp = await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/request-complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          lat: driverLocation.lat,
-          lng: driverLocation.lng
+          actualLat: driverLocation.lat,
+          actualLng: driverLocation.lng
         })
       });
       if (resp.ok) {
