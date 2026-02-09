@@ -11,7 +11,6 @@ declare global {
 }
 
 interface PlanRideScreenProps {
-    user: any;
     onBack: () => void;
     initialVehicleCategory?: string;
 }
@@ -37,9 +36,9 @@ interface RideChatMessage {
 }
 
 const NEARBY_RADIUS_KM = 6;
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
 
-const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVehicleCategory }) => {
+const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ onBack, initialVehicleCategory }) => {
     const [destination, setDestination] = useState('');
     const [pickup, setPickup] = useState('Current Location');
     const [showOptions, setShowOptions] = useState(false);
@@ -63,8 +62,6 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [maxPassengers, setMaxPassengers] = useState(4);
     const [confirmCompleteData, setConfirmCompleteData] = useState<any>(null);
     const [inProgressPooledRides, setInProgressPooledRides] = useState<any[]>([]);
-    const [matchedDrivers, setMatchedDrivers] = useState<DriverDetails[]>([]);
-    const [isNoDriversFound, setIsNoDriversFound] = useState(false);
 
     const mapRef = useRef<any>(null);
     const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -152,9 +149,9 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             if (!payload?.location) return;
             const { lat, lng } = payload.location;
             if (!mapRef.current || typeof lat !== 'number') return;
-
+            
             driverLocationRef.current = { lat, lng };
-
+            
             if (!driverMarkerRef.current) {
                 const el = document.createElement('div');
                 el.style.cssText = 'width:28px;height:28px;border-radius:50%;background:#2563EB;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.35)';
@@ -194,22 +191,6 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         return () => { socket.removeAllListeners(); };
     }, []);
 
-    // ─── Search Timeout Logic ───
-    useEffect(() => {
-        let timer: NodeJS.Timeout;
-        if (rideStatus === 'SEARCHING') {
-            setIsNoDriversFound(false);
-            timer = setTimeout(() => {
-                if (rideStatus === 'SEARCHING') {
-                    setIsNoDriversFound(true);
-                }
-            }, 15000); // 15 seconds timeout
-        } else {
-            setIsNoDriversFound(false);
-        }
-        return () => clearTimeout(timer);
-    }, [rideStatus]);
-
     // ─── Join ride room & load messages ───
     useEffect(() => {
         if (!activeRideId) return;
@@ -217,7 +198,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         fetch(`${API_BASE_URL}/api/rides/${activeRideId}/messages`)
             .then(r => r.ok ? r.json() : [])
             .then(d => setChatMessages(d || []))
-            .catch(() => { });
+            .catch(() => {});
         return () => { leaveRideRoom(activeRideId); };
     }, [activeRideId]);
 
@@ -288,7 +269,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                 const now = Date.now();
                 const timeSinceLastUpdate = now - lastRouteUpdateRef.current;
                 const shouldUpdateByTime = timeSinceLastUpdate > 15000; // 15 seconds
-
+                
                 let shouldUpdateByDistance = false;
                 if (lastRouteLocationRef.current && rideStatus === 'ACCEPTED') {
                     const distance = getDistanceKm(
@@ -302,7 +283,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
 
                 // For status changes, always update
                 const statusChanged = timeSinceLastUpdate === now || timeSinceLastUpdate > 30000;
-
+                
                 if (!statusChanged && !shouldUpdateByTime && !shouldUpdateByDistance && activeRouteLayerRef.current) {
                     return; // Skip update
                 }
@@ -400,7 +381,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     // ─── Helpers ───
     const getMapStyle = (dark: boolean) =>
         dark ? 'https://api.olamaps.io/tiles/vector/v1/styles/default-dark-standard/style.json'
-            : 'https://api.olamaps.io/tiles/vector/v1/styles/default-light-standard/style.json';
+             : 'https://api.olamaps.io/tiles/vector/v1/styles/default-light-standard/style.json';
 
     const updateMapStyle = (dark: boolean) => {
         if (!mapRef.current) return;
@@ -500,7 +481,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         try {
                             const address = await reverseGeocode(latitude, longitude);
                             setPickup(address);
-                        } catch { }
+                        } catch {}
                     }
                     // Fetch nearby drivers to show on map
                     try {
@@ -511,7 +492,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 if (d.location) upsertNearbyDriverMarker(d.driverId, d.location.lat, d.location.lng);
                             });
                         }
-                    } catch { }
+                    } catch {}
                 },
                 () => { setPickupCoords({ lat: 11.0168, lng: 76.9558 }); }
             );
@@ -577,7 +558,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             try {
                 if (mapRef.current.getLayer(lid)) mapRef.current.removeLayer(lid);
                 if (mapRef.current.getSource(lid)) mapRef.current.removeSource(lid);
-            } catch { }
+            } catch {}
         }
         if (dropoffMarkerRef.current) dropoffMarkerRef.current.remove();
         const el2 = document.createElement('div');
@@ -605,46 +586,6 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         });
     };
 
-    const fetchMatchingDrivers = async (start: { lat: number; lng: number }, end: { lat: number; lng: number }) => {
-        try {
-            const resp = await fetch(`${API_BASE_URL}/api/rider/match-driver?pickupLat=${start.lat}&pickupLng=${start.lng}&dropoffLat=${end.lat}&dropoffLng=${end.lng}`);
-            if (resp.ok) {
-                const data = await resp.json();
-                setMatchedDrivers(data);
-            }
-        } catch (error) {
-            console.error('Failed to fetch matching drivers', error);
-        }
-    };
-
-    const handleRequestJoin = async (driverId: string) => {
-        if (!user?._id && !user?.id) return;
-        if (!pickupCoords || !dropoffCoords) return;
-
-        try {
-            const resp = await fetch(`${API_BASE_URL}/api/rider/request-daily-join`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    riderId: user._id || user.id,
-                    driverId,
-                    pickup: { address: pickup, ...pickupCoords },
-                    dropoff: { address: destination, ...dropoffCoords }
-                })
-            });
-
-            if (resp.ok) {
-                alert('Join request sent to driver!');
-            } else {
-                alert('Failed to send request');
-            }
-        } catch (error) {
-            console.error('Join request error:', error);
-            alert('Connection error');
-        }
-    };
-
-
     // ─── Calculate route ───
     const calculateRoute = async (
         start: { lat: number; lng: number },
@@ -653,7 +594,6 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         try {
             const routes = await getRoute(start.lat, start.lng, end.lat, end.lng);
             if (routes && routes.length > 0 && mapRef.current) {
-                fetchMatchingDrivers(start, end);
                 setAvailableRoutes(routes);
                 setSelectedRouteIndex(0);
                 const route = routes[0];
@@ -681,7 +621,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                     try {
                         if (mapRef.current.getLayer(lid)) mapRef.current.removeLayer(lid);
                         if (mapRef.current.getSource(lid)) mapRef.current.removeSource(lid);
-                    } catch { }
+                    } catch {}
                 }
 
                 // Draw routes
@@ -727,7 +667,6 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             alert('Failed to calculate route. Please try again.');
         }
     };
-
 
     // ─── Handle route selection ───
     const handleRouteSelect = (idx: number) => {
@@ -856,7 +795,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ senderId: user?._id, senderRole: 'RIDER', message: chatInput.trim() })
-        }).catch(() => { });
+        }).catch(() => {});
         setChatInput('');
     };
 
@@ -867,7 +806,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ confirmed })
-        }).catch(() => { });
+        }).catch(() => {});
         if (confirmed) {
             setCurrentFare(confirmCompleteData?.completedFare || currentFare);
         }
@@ -1015,10 +954,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                             <button
                                                 key={idx}
                                                 onClick={() => handleRouteSelect(idx)}
-                                                className={`flex-shrink-0 w-28 p-2 rounded-lg border-2 transition-all ${idx === selectedRouteIndex
-                                                    ? 'border-black dark:border-white bg-gray-100 dark:bg-zinc-800'
-                                                    : 'border-gray-200 dark:border-zinc-700 hover:border-gray-400'
-                                                    }`}
+                                                className={`flex-shrink-0 w-28 p-2 rounded-lg border-2 transition-all ${
+                                                    idx === selectedRouteIndex
+                                                        ? 'border-black dark:border-white bg-gray-100 dark:bg-zinc-800'
+                                                        : 'border-gray-200 dark:border-zinc-700 hover:border-gray-400'
+                                                }`}
                                             >
                                                 <div className="text-xs font-bold dark:text-white">
                                                     Route {idx + 1}
@@ -1036,19 +976,21 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         <div className="flex gap-2 mt-3">
                             <button
                                 onClick={() => setRideMode('Solo')}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Solo'
-                                    ? 'bg-black dark:bg-white text-white dark:text-black'
-                                    : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
-                                    }`}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                                    rideMode === 'Solo'
+                                        ? 'bg-black dark:bg-white text-white dark:text-black'
+                                        : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
+                                }`}
                             >
                                 Solo
                             </button>
                             <button
                                 onClick={() => setRideMode('Pooled')}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Pooled'
-                                    ? 'bg-green-500 text-white'
-                                    : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
-                                    }`}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                                    rideMode === 'Pooled'
+                                        ? 'bg-green-500 text-white'
+                                        : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
+                                }`}
                             >
                                 🌱 Pool
                             </button>
@@ -1061,10 +1003,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 <button
                                     key={n}
                                     onClick={() => setPassengers(n)}
-                                    className={`w-8 h-8 rounded-full text-xs font-bold ${passengers === n
-                                        ? 'bg-black dark:bg-white text-white dark:text-black'
-                                        : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300'
-                                        }`}
+                                    className={`w-8 h-8 rounded-full text-xs font-bold ${
+                                        passengers === n
+                                            ? 'bg-black dark:bg-white text-white dark:text-black'
+                                            : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300'
+                                    }`}
                                 >
                                     {n}
                                 </button>
@@ -1079,10 +1022,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                     <button
                                         key={n}
                                         onClick={() => setMaxPassengers(n!)}
-                                        className={`w-8 h-8 rounded-full text-xs font-bold ${maxPassengers === n
-                                            ? 'bg-green-500 text-white'
-                                            : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300'
-                                            }`}
+                                        className={`w-8 h-8 rounded-full text-xs font-bold ${
+                                            maxPassengers === n
+                                                ? 'bg-green-500 text-white'
+                                                : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300'
+                                        }`}
                                     >
                                         {n}
                                     </button>
@@ -1160,52 +1104,6 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         </div>
                     )}
 
-
-                    {matchedDrivers.length > 0 && (
-                        <div className="mb-6 px-4">
-                            <div className="flex justify-between items-center mb-4 px-1">
-                                <h3 className="text-[10px] font-black uppercase tracking-[.25em] text-gray-400">Recommended Partners</h3>
-                                <span className="text-[10px] font-black text-leaf-500 uppercase tracking-widest">{matchedDrivers.length} Found</span>
-                            </div>
-                            <div className="space-y-4">
-                                {matchedDrivers.map((driver) => (
-                                    <div key={driver.id} className="bg-[#fbfbfb] dark:bg-zinc-900/50 border border-gray-100 dark:border-zinc-800 p-5 rounded-[32px] transition-all hover:border-leaf-500/30 group shadow-sm">
-                                        <div className="flex items-center gap-4 mb-4">
-                                            <div className="relative">
-                                                <img src={driver.photoUrl || `https://i.pravatar.cc/150?u=${driver.id}`} alt={driver.name} className="w-14 h-14 rounded-2xl object-cover border border-gray-100 dark:border-zinc-800 shadow-md" />
-                                                <div className="absolute -bottom-1 -right-1 bg-leaf-500 size-5 flex items-center justify-center rounded-lg border-2 border-white dark:border-zinc-900 shadow-sm">
-                                                    <span className="material-icons-outlined text-white text-[10px] font-black">verified</span>
-                                                </div>
-                                            </div>
-                                            <div className="flex-1 min-w-0">
-                                                <div className="flex justify-between items-start">
-                                                    <div className="text-lg font-black dark:text-white truncate pr-2">{driver.name}</div>
-                                                    <div className="flex items-center gap-1 bg-yellow-400/10 px-2 py-0.5 rounded-full border border-yellow-400/20">
-                                                        <span className="material-icons-outlined text-yellow-500 text-xs">star</span>
-                                                        <span className="text-[10px] font-black text-yellow-600 dark:text-yellow-400">{driver.rating}</span>
-                                                    </div>
-                                                </div>
-                                                <div className="text-xs font-bold text-gray-400 dark:text-zinc-500 mt-0.5">{driver.vehicle} • {driver.vehicleNumber}</div>
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center gap-3">
-                                            <div className="flex-1 p-3 bg-gray-50 dark:bg-zinc-800 rounded-2xl flex items-center gap-2">
-                                                <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400 text-sm">nature_people</span>
-                                                <span className="text-[10px] font-black text-gray-500 uppercase tracking-tight">Eco-friendly Choice</span>
-                                            </div>
-                                            <button
-                                                className="px-8 py-3 bg-black dark:bg-white text-white dark:text-black text-xs font-black rounded-2xl uppercase tracking-widest shadow-xl shadow-black/10 active:scale-95 transition-all group-hover:bg-leaf-600 group-hover:text-white"
-                                                onClick={() => handleRequestJoin(driver.id)}
-                                            >
-                                                Invite
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
                     {/* Vehicle Categories */}
                     <div className="flex-1 overflow-y-auto px-4 py-2 hide-scrollbar">
                         {VEHICLE_CATEGORIES.map(cat => {
@@ -1219,10 +1117,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 <button
                                     key={cat.id}
                                     onClick={() => setSelectedCategory(cat.id)}
-                                    className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 mb-3 transition-all ${selectedCategory === cat.id
-                                        ? 'border-black dark:border-white bg-gray-50 dark:bg-zinc-800'
-                                        : 'border-transparent hover:bg-gray-50 dark:hover:bg-zinc-800'
-                                        }`}
+                                    className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 mb-3 transition-all ${
+                                        selectedCategory === cat.id
+                                            ? 'border-black dark:border-white bg-gray-50 dark:bg-zinc-800'
+                                            : 'border-transparent hover:bg-gray-50 dark:hover:bg-zinc-800'
+                                    }`}
                                 >
                                     <div className="w-14 h-14 rounded-2xl bg-gray-100 dark:bg-zinc-700 flex items-center justify-center">
                                         <span className="material-icons-outlined text-2xl text-gray-700 dark:text-white">
@@ -1283,55 +1182,19 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             {/* ── Searching State ── */}
             {rideStatus === 'SEARCHING' && (
                 <div className="absolute inset-0 z-50 flex items-end">
-                    <div className="w-full bg-white dark:bg-zinc-900 rounded-t-[40px] shadow-2xl p-8 animate-in slide-in-from-bottom duration-500">
-                        <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-8"></div>
-                        {!isNoDriversFound ? (
-                            <div className="flex flex-col items-center text-center pb-8">
-                                <div className="relative mb-8">
-                                    <div className="size-24 bg-green-50 dark:bg-green-900/10 rounded-full flex items-center justify-center">
-                                        <span className="material-icons-outlined text-4xl text-green-500">radar</span>
-                                    </div>
-                                    <div className="absolute inset-0 border-4 border-green-500/20 rounded-full animate-ping"></div>
-                                </div>
-                                <h3 className="text-2xl font-black mb-2 dark:text-white">Finding your ride</h3>
-                                <p className="text-sm text-gray-500 dark:text-gray-400 font-medium max-w-[240px]">
-                                    We're connecting you with active drivers in your area.
+                    <div className="w-full bg-white dark:bg-zinc-900 rounded-t-3xl shadow-2xl p-6">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h3 className="text-xl font-bold dark:text-white">Searching for drivers</h3>
+                                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                                    We'll notify you when someone accepts.
                                 </p>
-                                {currentFare !== null && (
-                                    <div className="mt-6 bg-leaf-600 text-white px-6 py-2 rounded-2xl text-xs font-black uppercase tracking-widest shadow-lg shadow-leaf-500/20">
-                                        Estimate ₹{currentFare}
-                                    </div>
-                                )}
                             </div>
-                        ) : (
-                            <div className="flex flex-col items-center text-center pb-8">
-                                <div className="size-24 bg-red-50 dark:bg-red-900/10 rounded-full flex items-center justify-center mb-8">
-                                    <span className="material-icons-outlined text-4xl text-red-500">location_off</span>
-                                </div>
-                                <h3 className="text-2xl font-black mb-2 dark:text-white">No drivers found</h3>
-                                <p className="text-sm text-gray-500 dark:text-gray-400 font-medium max-w-[280px]">
-                                    Sorry, there aren't any drivers travelling in this location at the moment.
-                                </p>
-                                <div className="flex gap-3 w-full mt-10">
-                                    <button
-                                        onClick={() => setRideStatus('IDLE')}
-                                        className="flex-1 py-4 bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-400 rounded-2xl font-black text-sm uppercase tracking-widest"
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button
-                                        onClick={() => {
-                                            setIsNoDriversFound(false);
-                                            // Re-trigger search or just wait more
-                                            // For now we'll just reset the timer by toggling state
-                                            setRideStatus('IDLE');
-                                            setTimeout(() => setRideStatus('SEARCHING'), 100);
-                                        }}
-                                        className="flex-[2] py-4 bg-black dark:bg-white text-white dark:text-black rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl"
-                                    >
-                                        Try Again
-                                    </button>
-                                </div>
+                            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-green-500"></div>
+                        </div>
+                        {currentFare !== null && (
+                            <div className="mt-4 text-sm font-semibold text-green-600 dark:text-green-400">
+                                Estimated: ₹{currentFare}
                             </div>
                         )}
                     </div>
@@ -1485,10 +1348,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                     className={`flex ${msg.senderRole === 'RIDER' ? 'justify-end' : 'justify-start'}`}
                                 >
                                     <div
-                                        className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${msg.senderRole === 'RIDER'
-                                            ? 'bg-black text-white dark:bg-white dark:text-black'
-                                            : 'bg-gray-100 dark:bg-zinc-800 dark:text-white'
-                                            }`}
+                                        className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${
+                                            msg.senderRole === 'RIDER'
+                                                ? 'bg-black text-white dark:bg-white dark:text-black'
+                                                : 'bg-gray-100 dark:bg-zinc-800 dark:text-white'
+                                        }`}
                                     >
                                         {msg.message}
                                     </div>
@@ -1546,16 +1410,18 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                     setPaymentMethod(p.id as PaymentMethod);
                                     setShowPaymentModal(false);
                                 }}
-                                className={`w-full flex items-center gap-4 p-4 rounded-2xl border-2 mb-3 transition-all ${paymentMethod === p.id
-                                    ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
-                                    : 'border-gray-200 dark:border-zinc-700 hover:border-gray-300 dark:hover:border-zinc-600'
-                                    }`}
+                                className={`w-full flex items-center gap-4 p-4 rounded-2xl border-2 mb-3 transition-all ${
+                                    paymentMethod === p.id
+                                        ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
+                                        : 'border-gray-200 dark:border-zinc-700 hover:border-gray-300 dark:hover:border-zinc-600'
+                                }`}
                             >
                                 <div
-                                    className={`p-3 rounded-full ${paymentMethod === p.id
-                                        ? 'bg-green-500 text-white'
-                                        : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
-                                        }`}
+                                    className={`p-3 rounded-full ${
+                                        paymentMethod === p.id
+                                            ? 'bg-green-500 text-white'
+                                            : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
+                                    }`}
                                 >
                                     <span className="material-icons-outlined">{p.icon}</span>
                                 </div>

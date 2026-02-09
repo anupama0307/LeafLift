@@ -23,20 +23,6 @@ const userSchema = new mongoose.Schema({
     totalTrips: { type: Number, default: 0 },
     totalKmTraveled: { type: Number, default: 0 },
     createdAt: { type: Date, default: Date.now },
-    // Daily Route
-    dailyRoute: {
-        source: {
-            address: String,
-            lat: Number,
-            lng: Number
-        },
-        destination: {
-            address: String,
-            lat: Number,
-            lng: Number
-        },
-        isActive: { type: Boolean, default: false }
-    }
 });
 
 
