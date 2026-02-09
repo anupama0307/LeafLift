@@ -11,6 +11,7 @@ require('dotenv').config();
 const axios = require('axios');
 const User = require('./models/User');
 const Ride = require('./models/Ride');
+const Notification = require('./models/Notification');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -129,7 +130,7 @@ io.on('connection', (socket) => {
 const OLA_API_KEY = process.env.OLA_MAPS_API_KEY;
 
 // ✅ OLA Maps Autocomplete Proxy
-app.get('/api/ola/autocomplete', async(req, res) => {
+app.get('/api/ola/autocomplete', async (req, res) => {
     try {
         const { input, location } = req.query;
 
@@ -162,7 +163,7 @@ app.get('/api/ola/autocomplete', async(req, res) => {
 });
 
 // ✅ OLA Maps Directions Proxy
-app.post('/api/ola/directions', async(req, res) => {
+app.post('/api/ola/directions', async (req, res) => {
     try {
         const { origin, destination, alternatives } = req.body;
 
@@ -190,7 +191,7 @@ app.post('/api/ola/directions', async(req, res) => {
 });
 
 // ✅ OLA Maps Reverse Geocode Proxy
-app.get('/api/ola/reverse-geocode', async(req, res) => {
+app.get('/api/ola/reverse-geocode', async (req, res) => {
     try {
         const { latlng } = req.query;
 
@@ -229,7 +230,7 @@ mongoose.connect(MONGODB_URI)
     .catch(err => console.error('❌ MongoDB error:', err));
 
 // User Routes
-app.post('/api/login', async(req, res) => {
+app.post('/api/login', async (req, res) => {
     try {
         const { phone, role } = req.body;
         const user = await User.findOne({ phone, role });
@@ -240,7 +241,7 @@ app.post('/api/login', async(req, res) => {
     }
 });
 
-app.post('/api/signup', async(req, res) => {
+app.post('/api/signup', async (req, res) => {
     try {
         const {
             role,
@@ -280,7 +281,7 @@ app.post('/api/signup', async(req, res) => {
     }
 });
 
-app.get('/api/users', async(req, res) => {
+app.get('/api/users', async (req, res) => {
     try {
         const users = await User.find();
         res.json(users);
@@ -289,10 +290,160 @@ app.get('/api/users', async(req, res) => {
     }
 });
 
-// Ride Routes
-app.post('/api/rides', async(req, res) => {
+// ── New: Driver Daily Route ──
+app.post('/api/driver/route', async (req, res) => {
+    console.log('📬 Received route update request:', JSON.stringify(req.body, null, 2));
     try {
-        const payload = {...req.body };
+        const { userId, source, destination, isActive } = req.body;
+        const user = await User.findById(userId);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        user.dailyRoute = {
+            source: {
+                address: source.address,
+                lat: Number(source.lat),
+                lng: Number(source.lng)
+            },
+            destination: {
+                address: destination.address,
+                lat: Number(destination.lat),
+                lng: Number(destination.lng)
+            },
+            isActive: isActive !== undefined ? isActive : true
+        };
+        await user.save();
+        console.log('✅ Route updated successfully for user:', userId);
+        res.json({ message: 'Route updated', dailyRoute: user.dailyRoute });
+    } catch (error) {
+        console.error('❌ Update route error:', error);
+        res.status(500).json({ message: 'Error updating route', error: error.message });
+    }
+});
+
+app.get('/api/rider/match-driver', async (req, res) => {
+    try {
+        const { pickupLat, pickupLng, dropoffLat, dropoffLng } = req.query;
+        if (!pickupLat || !pickupLng || !dropoffLat || !dropoffLng) {
+            return res.status(400).json({ message: 'Missing coordinates' });
+        }
+
+        const pLat = Number(pickupLat);
+        const pLng = Number(pickupLng);
+        const dLat = Number(dropoffLat);
+        const dLng = Number(dropoffLng);
+
+        // Find drivers with active daily routes matching the rider's request
+        const drivers = await User.find({
+            role: 'DRIVER',
+            'dailyRoute.isActive': true
+        });
+
+        const matches = drivers.filter(driver => {
+            const route = driver.dailyRoute;
+            if (!route || !route.source || !route.destination) return false;
+
+            // Check pickup proximity (within 5km of driver source)
+            const pickupDist = getDistanceKm(pLat, pLng, route.source.lat, route.source.lng);
+            // Check dropoff proximity (within 5km of driver destination)
+            const dropoffDist = getDistanceKm(dLat, dLng, route.destination.lat, route.destination.lng);
+
+            return pickupDist <= 5 && dropoffDist <= 5;
+        });
+
+        res.json(matches.map(d => ({
+            id: d._id,
+            name: `${d.firstName} ${d.lastName}`,
+            rating: d.rating || 4.8,
+            vehicle: `${d.vehicleMake || ''} ${d.vehicleModel || ''}`,
+            vehicleNumber: d.vehicleNumber,
+            photoUrl: d.photoUrl,
+            phone: maskPhone(d.phone), // Ensure phone is masked
+            dailyRoute: d.dailyRoute
+        })));
+    } catch (error) {
+        console.error('Match driver error:', error);
+        res.status(500).json({ message: 'Error matching drivers' });
+    }
+});
+
+
+// ── Notifications ──
+app.get('/api/notifications/:userId', async (req, res) => {
+    try {
+        const notifications = await Notification.find({ userId: req.params.userId }).sort({ createdAt: -1 }).limit(20);
+        res.json(notifications);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching notifications' });
+    }
+});
+
+app.post('/api/notifications/:id/read', async (req, res) => {
+    try {
+        await Notification.findByIdAndUpdate(req.params.id, { isRead: true });
+        res.json({ ok: true });
+    } catch (error) {
+        res.status(500).json({ message: 'Error marking notification as read' });
+    }
+});
+
+app.get('/api/notifications/sent/:userId', async (req, res) => {
+    try {
+        const notifications = await Notification.find({ fromId: req.params.userId }).sort({ createdAt: -1 }).limit(20);
+        res.json(notifications);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching sent requests' });
+    }
+});
+
+// ── Daily Route Join Request ──
+app.post('/api/rider/request-daily-join', async (req, res) => {
+    console.log('📬 Daily join request received:', JSON.stringify(req.body, null, 2));
+    try {
+        const { riderId, driverId, pickup, dropoff } = req.body;
+
+        if (!riderId || !driverId || !pickup || !dropoff) {
+            console.error('❌ Missing fields in join request');
+            return res.status(400).json({ message: 'Missing required fields' });
+        }
+
+        const rider = await User.findById(riderId);
+        if (!rider) {
+            console.error('❌ Rider not found:', riderId);
+            return res.status(404).json({ message: 'Rider not found' });
+        }
+
+        const pickupAddr = pickup.address || 'Unknown Pickup';
+        const dropoffAddr = dropoff.address || 'Unknown Dropoff';
+
+        const notification = new Notification({
+            userId: driverId,
+            fromId: riderId,
+            title: 'New Daily Route Partner?',
+            message: `${rider.firstName} wants to join your daily route from ${pickupAddr.split(',')[0]} to ${dropoffAddr.split(',')[0]}.`,
+            type: 'DAILY_JOIN_REQUEST',
+            data: { riderId, pickup, dropoff }
+        });
+
+        await notification.save();
+        console.log('✅ Notification saved for driver:', driverId);
+
+        if (io) {
+            io.to(`user:${driverId}`).emit('notification:new', notification);
+            console.log('📡 Socket notification emitted to:', `user:${driverId}`);
+        }
+
+        res.json({ message: 'Request sent successfully', notification });
+    } catch (error) {
+        console.error('❌ Request daily join error:', error);
+        res.status(500).json({ message: 'Error sending join request', error: error.message });
+    }
+});
+
+
+// Ride Routes
+app.post('/api/rides', async (req, res) => {
+    try {
+        const payload = { ...req.body };
 
         if (!payload.userId) {
             return res.status(400).json({ message: 'userId is required' });
@@ -328,7 +479,7 @@ app.post('/api/rides', async(req, res) => {
     }
 });
 
-app.get('/api/rides/user/:userId', async(req, res) => {
+app.get('/api/rides/user/:userId', async (req, res) => {
     try {
         const rides = await Ride.find({ userId: req.params.userId }).sort({ bookingTime: -1, createdAt: -1 });
         res.json(rides);
@@ -337,7 +488,7 @@ app.get('/api/rides/user/:userId', async(req, res) => {
     }
 });
 
-app.get('/api/rides/driver/:driverId', async(req, res) => {
+app.get('/api/rides/driver/:driverId', async (req, res) => {
     try {
         const rides = await Ride.find({ driverId: req.params.driverId }).sort({ bookingTime: -1, createdAt: -1 });
         res.json(rides);
@@ -347,7 +498,7 @@ app.get('/api/rides/driver/:driverId', async(req, res) => {
 });
 
 // Nearby ride requests for drivers
-app.get('/api/rides/nearby', async(req, res) => {
+app.get('/api/rides/nearby', async (req, res) => {
     try {
         const { lat, lng, radius = 6 } = req.query;
         const rides = await Ride.find({ status: 'SEARCHING' }).sort({ bookingTime: -1 });
@@ -373,7 +524,7 @@ app.get('/api/rides/nearby', async(req, res) => {
 });
 
 // ── Driver search by location (uses OLA geocoding) ──
-app.get('/api/rides/nearby-by-location', async(req, res) => {
+app.get('/api/rides/nearby-by-location', async (req, res) => {
     try {
         const { location, radius = 6 } = req.query;
         if (!location) return res.status(400).json({ message: 'location query required' });
@@ -413,7 +564,7 @@ app.get('/api/rides/nearby-by-location', async(req, res) => {
 });
 
 // ── Find in-progress pooled rides for joining ──
-app.get('/api/rides/pooled-in-progress', async(req, res) => {
+app.get('/api/rides/pooled-in-progress', async (req, res) => {
     try {
         const { lat, lng, destLat, destLng, vehicleCategory, radius = 3 } = req.query;
 
@@ -462,7 +613,7 @@ app.get('/api/rides/pooled-in-progress', async(req, res) => {
     }
 });
 
-app.get('/api/rides/:rideId', async(req, res) => {
+app.get('/api/rides/:rideId', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
         if (!ride) return res.status(404).json({ message: 'Ride not found' });
@@ -472,7 +623,7 @@ app.get('/api/rides/:rideId', async(req, res) => {
     }
 });
 
-app.put('/api/rides/:rideId/status', async(req, res) => {
+app.put('/api/rides/:rideId/status', async (req, res) => {
     try {
         const { status } = req.body;
         const ride = await Ride.findByIdAndUpdate(
@@ -485,7 +636,7 @@ app.put('/api/rides/:rideId/status', async(req, res) => {
 });
 
 // Driver presence
-app.post('/api/drivers/online', async(req, res) => {
+app.post('/api/drivers/online', async (req, res) => {
     const { driverId, location } = req.body;
     if (!driverId) return res.status(400).json({ message: 'driverId required' });
 
@@ -496,14 +647,14 @@ app.post('/api/drivers/online', async(req, res) => {
     res.json({ ok: true, onlineDrivers: onlineDrivers.size });
 });
 
-app.post('/api/drivers/offline', async(req, res) => {
+app.post('/api/drivers/offline', async (req, res) => {
     const { driverId } = req.body;
     if (driverId) onlineDrivers.delete(driverId);
     res.json({ ok: true });
 });
 
 // Accept ride
-app.post('/api/rides/:rideId/accept', async(req, res) => {
+app.post('/api/rides/:rideId/accept', async (req, res) => {
     try {
         const { driverId, driverLocation } = req.body;
         const ride = await Ride.findById(req.params.rideId);
@@ -565,7 +716,7 @@ app.post('/api/rides/:rideId/accept', async(req, res) => {
 });
 
 // Driver reached pickup -> generate OTP
-app.post('/api/rides/:rideId/reached', async(req, res) => {
+app.post('/api/rides/:rideId/reached', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
         if (!ride) return res.status(404).json({ message: 'Ride not found' });
@@ -587,7 +738,7 @@ app.post('/api/rides/:rideId/reached', async(req, res) => {
 });
 
 // Verify OTP and start ride
-app.post('/api/rides/:rideId/verify-otp', async(req, res) => {
+app.post('/api/rides/:rideId/verify-otp', async (req, res) => {
     try {
         const { otp } = req.body;
         const ride = await Ride.findById(req.params.rideId);
@@ -610,7 +761,7 @@ app.post('/api/rides/:rideId/verify-otp', async(req, res) => {
 });
 
 // Complete ride
-app.post('/api/rides/:rideId/complete', async(req, res) => {
+app.post('/api/rides/:rideId/complete', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
         if (!ride) return res.status(404).json({ message: 'Ride not found' });
@@ -654,7 +805,7 @@ app.post('/api/rides/:rideId/complete', async(req, res) => {
 });
 
 // Update live location
-app.post('/api/rides/:rideId/location', async(req, res) => {
+app.post('/api/rides/:rideId/location', async (req, res) => {
     try {
         const { role, lat, lng } = req.body;
         const ride = await Ride.findById(req.params.rideId);
@@ -677,7 +828,7 @@ app.post('/api/rides/:rideId/location', async(req, res) => {
 });
 
 // Chat messages
-app.get('/api/rides/:rideId/messages', async(req, res) => {
+app.get('/api/rides/:rideId/messages', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
         if (!ride) return res.status(404).json({ message: 'Ride not found' });
@@ -687,7 +838,7 @@ app.get('/api/rides/:rideId/messages', async(req, res) => {
     }
 });
 
-app.post('/api/rides/:rideId/messages', async(req, res) => {
+app.post('/api/rides/:rideId/messages', async (req, res) => {
     try {
         const { senderId, senderRole, message } = req.body;
         if (!message) return res.status(400).json({ message: 'Message required' });
@@ -711,14 +862,14 @@ app.post('/api/rides/:rideId/messages', async(req, res) => {
 });
 
 // Pooling: add rider mid-ride
-app.post('/api/rides/:rideId/pool/add', async(req, res) => {
+app.post('/api/rides/:rideId/pool/add', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
         if (!ride) return res.status(404).json({ message: 'Ride not found' });
 
         if (!ride.isPooled) return res.status(400).json({ message: 'Ride is not pooled' });
 
-        const adjustment = typeof(req.body && req.body.fareAdjustment) === 'number' ?
+        const adjustment = typeof (req.body && req.body.fareAdjustment) === 'number' ?
             req.body.fareAdjustment :
             Math.round((ride.currentFare || ride.fare || 0) * -0.3);
 
@@ -743,7 +894,7 @@ app.post('/api/rides/:rideId/pool/add', async(req, res) => {
 });
 
 // Join in-progress pooled ride as new rider
-app.post('/api/rides/:rideId/pool/join', async(req, res) => {
+app.post('/api/rides/:rideId/pool/join', async (req, res) => {
     try {
         const { userId, pickup, dropoff, passengers = 1 } = req.body;
         if (!userId) return res.status(400).json({ message: 'userId required' });
@@ -778,7 +929,7 @@ app.post('/api/rides/:rideId/pool/join', async(req, res) => {
 });
 
 // ── Driver requests early completion (rider must confirm) ──
-app.post('/api/rides/:rideId/request-complete', async(req, res) => {
+app.post('/api/rides/:rideId/request-complete', async (req, res) => {
     try {
         const { actualLat, actualLng, actualAddress } = req.body;
         const ride = await Ride.findById(req.params.rideId);
@@ -828,7 +979,7 @@ app.post('/api/rides/:rideId/request-complete', async(req, res) => {
 });
 
 // ── Rider confirms early completion ──
-app.post('/api/rides/:rideId/confirm-complete', async(req, res) => {
+app.post('/api/rides/:rideId/confirm-complete', async (req, res) => {
     try {
         const { confirmed } = req.body;
         const ride = await Ride.findById(req.params.rideId);
@@ -862,7 +1013,7 @@ app.post('/api/rides/:rideId/confirm-complete', async(req, res) => {
 });
 
 // ── Wallet endpoints ──
-app.get('/api/users/:userId/wallet', async(req, res) => {
+app.get('/api/users/:userId/wallet', async (req, res) => {
     try {
         const user = await User.findById(req.params.userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
@@ -872,7 +1023,7 @@ app.get('/api/users/:userId/wallet', async(req, res) => {
     }
 });
 
-app.post('/api/users/:userId/wallet/add', async(req, res) => {
+app.post('/api/users/:userId/wallet/add', async (req, res) => {
     try {
         const { amount } = req.body;
         if (!amount || amount <= 0) return res.status(400).json({ message: 'Invalid amount' });
@@ -887,7 +1038,7 @@ app.post('/api/users/:userId/wallet/add', async(req, res) => {
 });
 
 // ── User stats (CO2, trips) ──
-app.get('/api/users/:userId/stats', async(req, res) => {
+app.get('/api/users/:userId/stats', async (req, res) => {
     try {
         const user = await User.findById(req.params.userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
@@ -904,9 +1055,9 @@ app.get('/api/users/:userId/stats', async(req, res) => {
 });
 
 // ── Scheduled rides ──
-app.post('/api/rides/schedule', async(req, res) => {
+app.post('/api/rides/schedule', async (req, res) => {
     try {
-        const payload = {...req.body, isScheduled: true, status: 'SEARCHING' };
+        const payload = { ...req.body, isScheduled: true, status: 'SEARCHING' };
         if (!payload.userId) return res.status(400).json({ message: 'userId required' });
         if (!payload.scheduledFor) return res.status(400).json({ message: 'scheduledFor required' });
         payload.scheduledFor = new Date(payload.scheduledFor);
@@ -920,7 +1071,7 @@ app.post('/api/rides/schedule', async(req, res) => {
     }
 });
 
-app.get('/api/rides/scheduled/:userId', async(req, res) => {
+app.get('/api/rides/scheduled/:userId', async (req, res) => {
     try {
         const rides = await Ride.find({
             userId: req.params.userId,
@@ -934,7 +1085,7 @@ app.get('/api/rides/scheduled/:userId', async(req, res) => {
     }
 });
 
-app.delete('/api/rides/scheduled/:rideId', async(req, res) => {
+app.delete('/api/rides/scheduled/:rideId', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
         if (!ride) return res.status(404).json({ message: 'Ride not found' });
@@ -947,7 +1098,7 @@ app.delete('/api/rides/scheduled/:rideId', async(req, res) => {
 });
 
 // ── Geospatial clustering: find nearby drivers (optimized Haversine) ──
-app.get('/api/drivers/nearby', async(req, res) => {
+app.get('/api/drivers/nearby', async (req, res) => {
     try {
         const { lat, lng, radius = 6 } = req.query;
         const latNum = Number(lat);
@@ -974,5 +1125,5 @@ app.get('/api/drivers/nearby', async(req, res) => {
 });
 
 httpServer.listen(PORT, () => {
-    console.log(`✅ OLA Maps Server running on port ${PORT}`);
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
