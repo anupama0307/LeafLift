@@ -7,12 +7,15 @@ export default defineConfig(({ mode }) => {
 
   return {
     server: {
-      port: 3000,
+      port: 3005,
       host: '0.0.0.0',
+      headers: {
+        'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+      },
       proxy: {
         // Proxy API requests to backend
         '/api': {
-          target: 'http://localhost:5000',
+          target: 'http://localhost:5001',
           changeOrigin: true,
           secure: false,
         }
