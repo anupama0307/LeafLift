@@ -104,8 +104,14 @@ io.on('connection', (socket) => {
 
     socket.on('driver:location', ({ driverId, lat, lng }) => {
         if (!driverId || typeof lat !== 'number' || typeof lng !== 'number') return;
-        const entry = onlineDrivers.get(driverId) || { socketIds: new Set(), location: null };
+        const entry = onlineDrivers.get(driverId) || { socketIds: new Set(), location: null, lastUpdate: 0 };
+        
+        // Throttle: max 1 update per second to prevent flooding
+        const now = Date.now();
+        if (now - (entry.lastUpdate || 0) < 1000) return;
+        
         entry.location = { lat, lng, updatedAt: new Date() };
+        entry.lastUpdate = now;
         onlineDrivers.set(driverId, entry);
         io.to('riders:online').emit('nearby:driver:update', { driverId, lat, lng });
     });
