@@ -1,6 +1,6 @@
 import { OlaPlace, OlaRoute, RouteInfo } from '../../types';
 
-const OLA_API_KEY = 'rFyGaGJyBi01CoHCBwHolFwt9XzPRG6DpoqsytwU';
+// Note: OLA API key is handled by the backend proxy (/api/ola/*) - not needed here
 
 // ✅ Autocomplete Search
 export async function searchPlaces(query: string, location?: string): Promise<OlaPlace[]> {
