@@ -15,6 +15,16 @@ const User = require('./models/User');
 // In-memory OTP store (use Redis in production)
 const otpStore = new Map();
 
+// Clean expired OTPs every 10 minutes to prevent memory leak
+setInterval(() => {
+    const now = Date.now();
+    for (const [email, data] of otpStore.entries()) {
+        if (now > data.expiresAt) {
+            otpStore.delete(email);
+        }
+    }
+}, 10 * 60 * 1000);
+
 // Email transporter for sending OTPs
 const emailTransporter = nodemailer.createTransport({
     service: 'gmail',
