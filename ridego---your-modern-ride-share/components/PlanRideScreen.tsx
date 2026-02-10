@@ -3,6 +3,7 @@ import { OLA_CONFIG, VEHICLE_CATEGORIES } from '../constants';
 import { searchPlaces, getRoute, formatRouteInfo, reverseGeocode, decodePolyline } from '../src/utils/olaApi';
 import { joinRideRoom, leaveRideRoom, registerSocket } from '../src/services/realtime';
 import { OlaPlace, RouteInfo } from '../types';
+import ActiveRideScreen from './ActiveRideScreen';
 
 declare global {
     interface Window {
@@ -66,6 +67,15 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [matchedDrivers, setMatchedDrivers] = useState<DriverDetails[]>([]);
     const [isNoDriversFound, setIsNoDriversFound] = useState(false);
 
+    // Pooling Preferences
+    const [genderPreference, setGenderPreference] = useState<'Any' | 'Male only' | 'Female only'>('Any');
+    const [safetyOptions, setSafetyOptions] = useState<string[]>([]);
+    const [isPoolingConfigOpen, setIsPoolingConfigOpen] = useState(false);
+    const [poolConsentRequest, setPoolConsentRequest] = useState<any>(null);
+    const [pooledRiders, setPooledRiders] = useState<any[]>([]);
+    const [showActiveRideScreen, setShowActiveRideScreen] = useState(false);
+    const [activeRideData, setActiveRideData] = useState<any>(null);
+
     const mapRef = useRef<any>(null);
     const mapContainerRef = useRef<HTMLDivElement>(null);
     const [mapLoaded, setMapLoaded] = useState(false);
@@ -123,13 +133,28 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         socketRef.current = socket;
 
         socket.on('ride:accepted', (payload: any) => {
-            if (!payload?.ride?._id) return;
+            console.log('🎉 Ride accepted event received:', payload);
+            if (!payload?.ride?._id) {
+                console.warn('⚠️ Invalid payload - missing ride._id');
+                return;
+            }
+            console.log('✅ Setting ride status to ACCEPTED, rideId:', payload.ride._id);
+
+            // Prepare complete ride data for ActiveRideScreen
+            const rideData = {
+                ...payload.ride,
+                driver: payload.driver,
+                rider: payload.rider
+            };
+
             setActiveRideId(payload.ride._id);
             setRideStatus('ACCEPTED');
             setDriverDetails(payload.driver);
             setEtaToPickup(payload.ride.etaToPickup || null);
             setMaskedDriverPhone(payload.driver?.maskedPhone || null);
             setCurrentFare(payload.ride.currentFare || payload.ride.fare || null);
+            setActiveRideData(rideData);
+            setShowActiveRideScreen(true);
         });
 
         socket.on('ride:otp', (payload: any) => {
@@ -172,6 +197,23 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         socket.on('chat:message', (msg: any) => {
             if (!msg?.message) return;
             setChatMessages(prev => [...prev, { ...msg, createdAt: msg.createdAt || new Date().toISOString() }]);
+        });
+
+        socket.on('pool:consent-request', (payload: any) => {
+            setPoolConsentRequest(payload);
+        });
+
+        socket.on('ride:pooled-rider-added', (payload: any) => {
+            if (payload.pooledRiders) setPooledRiders(payload.pooledRiders);
+            if (payload.currentFare) setCurrentFare(payload.currentFare);
+        });
+
+        socket.on('pool:join-result', (payload: any) => {
+            if (payload.approved) {
+                alert('Your request to join the pooled ride was approved!');
+            } else {
+                alert('Your request to join the pooled ride was declined.');
+            }
         });
 
         socket.on('nearby:driver:update', (payload: any) => {
@@ -474,6 +516,37 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         setTimeout(initMap, 500);
     }, [mapLoaded, isDarkMode]);
 
+    useEffect(() => {
+        checkActiveRide();
+    }, []);
+
+    const checkActiveRide = async () => {
+        const userStr = localStorage.getItem('leaflift_user');
+        if (!userStr) return;
+        const userObj = JSON.parse(userStr);
+        try {
+            const resp = await fetch(`${API_BASE_URL}/api/rider/${userObj._id}/active-ride`);
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.ride) {
+                    console.log('🚗 Rider: Found active ride on mount:', data.ride._id);
+                    const rideData = {
+                        ...data.ride,
+                        driver: data.driver,
+                        rider: data.rider
+                    };
+                    setActiveRideId(data.ride._id);
+                    setRideStatus(data.ride.status);
+                    setDriverDetails(data.driver);
+                    setCurrentFare(data.ride.currentFare || data.ride.fare);
+                    setActiveRideData(rideData);
+                    setShowActiveRideScreen(true);
+                }
+            }
+        } catch (e) {
+            console.error('Error checking active ride:', e);
+        }
+    };
     // ─── Get User Location ───
     useEffect(() => {
         if (!mapLoaded) return;
@@ -819,6 +892,9 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                 ? calculateCO2(selectedRoute?.distance || 0, selectedCategory) - calculateCO2(selectedRoute?.distance || 0, 'pool')
                 : 0,
             isPooled: rideMode === 'Pooled' && (selectedCategory === 'CAR' || selectedCategory === 'BIG_CAR'),
+            genderPreference,
+            maxPoolSize: rideMode === 'Pooled' ? maxPassengers : passengers,
+            safetyOptions,
             passengers,
             maxPassengers: rideMode === 'Pooled' ? maxPassengers : passengers,
             bookingTime: new Date().toISOString()
@@ -860,6 +936,16 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         setChatInput('');
     };
 
+    const handleConsent = (approved: boolean) => {
+        if (!poolConsentRequest || !activeRideId || !socketRef.current) return;
+        socketRef.current.emit('pool:rider-consent', {
+            rideId: activeRideId,
+            newRiderId: poolConsentRequest.newRider.id,
+            approved
+        });
+        setPoolConsentRequest(null);
+    };
+
     // ─── Confirm ride completion ───
     const handleConfirmComplete = async (confirmed: boolean) => {
         if (!activeRideId) return;
@@ -897,6 +983,30 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     };
 
     // ─── RENDER ───
+    // Show ActiveRideScreen if ride is accepted
+    console.log('🔍 PlanRideScreen render check:', {
+        showActiveRideScreen,
+        hasActiveRideData: !!activeRideData,
+        rideStatus,
+        activeRideId
+    });
+
+    if (showActiveRideScreen && activeRideData) {
+        console.log('✅ RENDERING ActiveRideScreen with data:', activeRideData);
+        return (
+            <ActiveRideScreen
+                user={user}
+                rideData={activeRideData}
+                onBack={() => {
+                    console.log('🔙 ActiveRideScreen onBack called');
+                    setShowActiveRideScreen(false);
+                    setActiveRideData(null);
+                    handleResetRide();
+                }}
+            />
+        );
+    }
+
     return (
         <div className="relative w-full h-screen overflow-hidden bg-white dark:bg-zinc-950">
             {/* Map */}
@@ -1071,22 +1181,54 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             ))}
                         </div>
 
-                        {/* Max Passengers for Pooled Rides (CAR/BIG_CAR only) */}
                         {rideMode === 'Pooled' && (selectedCategory === 'CAR' || selectedCategory === 'BIG_CAR') && (
-                            <div className="flex items-center gap-3 mt-3">
-                                <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Max Pool:</span>
-                                {[2, 3, 4, selectedCategory === 'BIG_CAR' ? 6 : null].filter(Boolean).map(n => (
-                                    <button
-                                        key={n}
-                                        onClick={() => setMaxPassengers(n!)}
-                                        className={`w-8 h-8 rounded-full text-xs font-bold ${maxPassengers === n
-                                            ? 'bg-green-500 text-white'
-                                            : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300'
-                                            }`}
+                            <div className="mt-3 space-y-3 p-3 bg-green-50 dark:bg-green-900/10 rounded-2xl border border-green-100 dark:border-green-800/30">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Max Pool Size:</span>
+                                    <div className="flex gap-2">
+                                        {[2, 3, 4, selectedCategory === 'BIG_CAR' ? 6 : null].filter(Boolean).map(n => (
+                                            <button
+                                                key={n}
+                                                onClick={() => setMaxPassengers(n!)}
+                                                className={`w-8 h-8 rounded-lg text-xs font-bold transition-all ${maxPassengers === n
+                                                    ? 'bg-green-500 text-white shadow-lg shadow-green-500/20'
+                                                    : 'bg-white dark:bg-zinc-800 text-gray-600 dark:text-gray-300'
+                                                    }`}
+                                            >
+                                                {n}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                    <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Gender Preference:</span>
+                                    <select
+                                        value={genderPreference}
+                                        onChange={(e) => setGenderPreference(e.target.value as any)}
+                                        className="text-xs font-bold bg-white dark:bg-zinc-800 border-none rounded-lg p-1 dark:text-white"
                                     >
-                                        {n}
-                                    </button>
-                                ))}
+                                        <option value="Any">Any</option>
+                                        <option value="Male only">Male only</option>
+                                        <option value="Female only">Female only</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <span className="text-xs font-bold text-gray-500 dark:text-gray-400 block mb-2">Safety Options:</span>
+                                    <div className="flex flex-wrap gap-2">
+                                        {['Women Safety', 'CCTV Enabled', 'Verified Profiles'].map(opt => (
+                                            <button
+                                                key={opt}
+                                                onClick={() => setSafetyOptions(prev => prev.includes(opt) ? prev.filter(o => o !== opt) : [...prev, opt])}
+                                                className={`px-3 py-1.5 rounded-full text-[10px] font-bold transition-all ${safetyOptions.includes(opt)
+                                                    ? 'bg-green-500 text-white'
+                                                    : 'bg-white dark:bg-zinc-800 text-gray-500 dark:text-gray-400'
+                                                    }`}
+                                            >
+                                                {opt}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
                             </div>
                         )}
 
@@ -1339,88 +1481,111 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             )}
 
             {/* ── Active Ride Panel ── */}
-            {rideStatus !== 'IDLE' && rideStatus !== 'SEARCHING' && (
-                <div className="absolute bottom-0 left-0 right-0 z-50 bg-white dark:bg-zinc-900 rounded-t-3xl shadow-2xl p-6">
-                    <div className="flex items-center justify-between mb-4">
-                        <div>
-                            <p className="text-xs uppercase tracking-widest text-gray-400 font-bold">Ride Status</p>
-                            <h3 className="text-xl font-black dark:text-white">
-                                {rideStatus.replace('_', ' ')}
-                            </h3>
+            {(() => {
+                const shouldShow = rideStatus !== 'IDLE' && rideStatus !== 'SEARCHING';
+                console.log('🚗 Active Ride Panel Check:', { rideStatus, shouldShow, activeRideId, driverDetails });
+                return shouldShow;
+            })() && (
+                    <div className="absolute bottom-0 left-0 right-0 z-50 bg-white dark:bg-zinc-900 rounded-t-3xl shadow-2xl p-6">
+                        <div className="flex items-center justify-between mb-4">
+                            <div>
+                                <p className="text-xs uppercase tracking-widest text-gray-400 font-bold">Ride Status</p>
+                                <h3 className="text-xl font-black dark:text-white">
+                                    {rideStatus.replace('_', ' ')}
+                                </h3>
+                            </div>
+                            {etaToPickup && (rideStatus === 'ACCEPTED' || rideStatus === 'ARRIVED') && (
+                                <div className="bg-black dark:bg-white text-white dark:text-black px-3 py-1.5 rounded-full text-xs font-bold">
+                                    ETA {etaToPickup}
+                                </div>
+                            )}
                         </div>
-                        {etaToPickup && (rideStatus === 'ACCEPTED' || rideStatus === 'ARRIVED') && (
-                            <div className="bg-black dark:bg-white text-white dark:text-black px-3 py-1.5 rounded-full text-xs font-bold">
-                                ETA {etaToPickup}
+
+                        {driverDetails && (
+                            <div className="flex items-center gap-3 mb-4">
+                                <img
+                                    src={driverDetails.photoUrl}
+                                    className="w-12 h-12 rounded-full object-cover"
+                                    alt=""
+                                />
+                                <div className="flex-1">
+                                    <div className="font-bold dark:text-white">{driverDetails.name}</div>
+                                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                                        {driverDetails.vehicle} • {driverDetails.vehicleNumber}
+                                    </div>
+                                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                                        ⭐ {driverDetails.rating?.toFixed(1)}
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={() => maskedDriverPhone && alert(`Call: ${maskedDriverPhone}`)}
+                                    className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
+                                    title="Call driver"
+                                >
+                                    <span className="material-icons-outlined">phone</span>
+                                </button>
+                                <button
+                                    onClick={() => setChatOpen(true)}
+                                    className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
+                                    title="Chat"
+                                >
+                                    <span className="material-icons-outlined">chat</span>
+                                </button>
                             </div>
                         )}
+
+                        {rideStatus === 'ARRIVED' && otpCode && (
+                            <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-2xl mb-4">
+                                <p className="text-xs font-bold text-green-600 dark:text-green-400 uppercase tracking-widest">
+                                    Share OTP with driver
+                                </p>
+                                <div className="text-3xl font-black text-green-600 dark:text-green-400 mt-1">
+                                    {otpCode}
+                                </div>
+                            </div>
+                        )}
+
+                        {currentFare !== null && (
+                            <div className="flex items-center justify-between mb-3">
+                                <span className="text-sm text-gray-500 dark:text-gray-400">Current Fare</span>
+                                <span className="font-bold text-lg dark:text-white">₹{currentFare}</span>
+                            </div>
+                        )}
+
+                        {rideMode === 'Pooled' && pooledRiders.length > 0 && (
+                            <div className="mt-4 border-t border-gray-100 dark:border-zinc-800 pt-4">
+                                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">Pooled Riders</p>
+                                <div className="space-y-3">
+                                    {pooledRiders.filter(r => r.status === 'JOINED').map((rider, idx) => (
+                                        <div key={idx} className="flex items-center gap-3 bg-gray-50 dark:bg-zinc-800/50 p-3 rounded-2xl">
+                                            <div className="size-10 bg-green-100 dark:bg-green-900/30 rounded-xl flex items-center justify-center">
+                                                <span className="material-icons-outlined text-green-600 dark:text-green-400">person</span>
+                                            </div>
+                                            <div className="flex-1">
+                                                <p className="text-sm font-bold dark:text-white">{rider.firstName} {rider.lastName}</p>
+                                                <p className="text-[10px] text-gray-500 truncate">{rider.pickup?.address?.split(',')[0]} → {rider.dropoff?.address?.split(',')[0]}</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {rideStatus === 'COMPLETED' && (
+                            <>
+                                <div className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+                                    Payment completed via {paymentMethod}.
+                                </div>
+                                <button
+                                    onClick={handleResetRide}
+                                    className="w-full bg-black dark:bg-white text-white dark:text-black font-bold py-3 rounded-xl"
+                                >
+                                    Done
+                                </button>
+                            </>
+                        )}
                     </div>
-
-                    {driverDetails && (
-                        <div className="flex items-center gap-3 mb-4">
-                            <img
-                                src={driverDetails.photoUrl}
-                                className="w-12 h-12 rounded-full object-cover"
-                                alt=""
-                            />
-                            <div className="flex-1">
-                                <div className="font-bold dark:text-white">{driverDetails.name}</div>
-                                <div className="text-xs text-gray-500 dark:text-gray-400">
-                                    {driverDetails.vehicle} • {driverDetails.vehicleNumber}
-                                </div>
-                                <div className="text-xs text-gray-500 dark:text-gray-400">
-                                    ⭐ {driverDetails.rating?.toFixed(1)}
-                                </div>
-                            </div>
-                            <button
-                                onClick={() => maskedDriverPhone && alert(`Call: ${maskedDriverPhone}`)}
-                                className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
-                                title="Call driver"
-                            >
-                                <span className="material-icons-outlined">phone</span>
-                            </button>
-                            <button
-                                onClick={() => setChatOpen(true)}
-                                className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
-                                title="Chat"
-                            >
-                                <span className="material-icons-outlined">chat</span>
-                            </button>
-                        </div>
-                    )}
-
-                    {rideStatus === 'ARRIVED' && otpCode && (
-                        <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-2xl mb-4">
-                            <p className="text-xs font-bold text-green-600 dark:text-green-400 uppercase tracking-widest">
-                                Share OTP with driver
-                            </p>
-                            <div className="text-3xl font-black text-green-600 dark:text-green-400 mt-1">
-                                {otpCode}
-                            </div>
-                        </div>
-                    )}
-
-                    {currentFare !== null && (
-                        <div className="flex items-center justify-between mb-3">
-                            <span className="text-sm text-gray-500 dark:text-gray-400">Current Fare</span>
-                            <span className="font-bold text-lg dark:text-white">₹{currentFare}</span>
-                        </div>
-                    )}
-
-                    {rideStatus === 'COMPLETED' && (
-                        <>
-                            <div className="text-sm text-gray-500 dark:text-gray-400 mb-3">
-                                Payment completed via {paymentMethod}.
-                            </div>
-                            <button
-                                onClick={handleResetRide}
-                                className="w-full bg-black dark:bg-white text-white dark:text-black font-bold py-3 rounded-xl"
-                            >
-                                Done
-                            </button>
-                        </>
-                    )}
-                </div>
-            )}
+                )}
 
             {/* ── Rider Confirmation Modal for Early Completion ── */}
             {confirmCompleteData && (
@@ -1568,6 +1733,51 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 )}
                             </button>
                         ))}
+                    </div>
+                </div>
+            )}
+
+            {/* ── Pool Consent Modal ── */}
+            {poolConsentRequest && (
+                <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-end justify-center">
+                    <div className="w-full bg-white dark:bg-zinc-900 rounded-t-[40px] p-8 animate-in slide-in-from-bottom duration-500">
+                        <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-8"></div>
+                        <div className="flex flex-col items-center text-center">
+                            <div className="size-20 bg-leaf-50 dark:bg-leaf-900/10 rounded-3xl flex items-center justify-center mb-6">
+                                <span className="material-icons-outlined text-4xl text-leaf-500">person_add</span>
+                            </div>
+                            <h3 className="text-2xl font-black mb-2 dark:text-white">New Pool Request</h3>
+                            <p className="text-sm text-gray-500 dark:text-gray-400 font-medium mb-8">
+                                <span className="font-black text-black dark:text-white">{poolConsentRequest.newRider.name}</span> wants to join your ride.
+                                <br />This will reduce your fare further!
+                            </p>
+
+                            <div className="w-full bg-gray-50 dark:bg-zinc-800 p-4 rounded-3xl mb-8 text-left">
+                                <div className="flex items-start gap-3 mb-4">
+                                    <span className="material-icons-outlined text-gray-400 text-sm mt-0.5">trip_origin</span>
+                                    <p className="text-xs font-bold dark:text-white truncate">{poolConsentRequest.newRider.pickup?.address}</p>
+                                </div>
+                                <div className="flex items-start gap-3">
+                                    <span className="material-icons-outlined text-leaf-500 text-sm mt-0.5">location_on</span>
+                                    <p className="text-xs font-bold dark:text-white truncate">{poolConsentRequest.newRider.dropoff?.address}</p>
+                                </div>
+                            </div>
+
+                            <div className="flex gap-4 w-full">
+                                <button
+                                    onClick={() => handleConsent(false)}
+                                    className="flex-1 py-4 bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-400 rounded-2xl font-black text-sm uppercase tracking-widest"
+                                >
+                                    Decline
+                                </button>
+                                <button
+                                    onClick={() => handleConsent(true)}
+                                    className="flex-[2] py-4 bg-leaf-500 text-white rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl shadow-leaf-500/20"
+                                >
+                                    Approve
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}

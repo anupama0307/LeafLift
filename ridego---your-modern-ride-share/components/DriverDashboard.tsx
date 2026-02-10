@@ -3,6 +3,7 @@ import { OLA_CONFIG } from '../constants';
 import { joinRideRoom, registerSocket } from '../src/services/realtime';
 import { decodePolyline, formatRouteInfo, getRoute, searchPlaces } from '../src/utils/olaApi';
 import { OlaPlace } from '../types';
+import ActiveRideScreen from './ActiveRideScreen';
 
 declare global {
   interface Window {
@@ -45,10 +46,13 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
   const [selectedRouteInfo, setSelectedRouteInfo] = useState<{ distance?: string; duration?: string } | null>(null);
   const [earlyCompleteLoading, setEarlyCompleteLoading] = useState(false);
   const [poolJoinRequests, setPoolJoinRequests] = useState<any[]>([]);
+  const [approvedPoolRequests, setApprovedPoolRequests] = useState<Set<string>>(new Set());
   const [notifications, setNotifications] = useState<any[]>([]);
   const [driverRides, setDriverRides] = useState<any[]>([]);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [dashboardView, setDashboardView] = useState<'HOME' | 'MAP'>('HOME');
+  const [showActiveRideScreen, setShowActiveRideScreen] = useState(false);
+  const [activeRideData, setActiveRideData] = useState<any>(null);
 
   // Daily Route State
   const [isRouteModalOpen, setIsRouteModalOpen] = useState(false);
@@ -214,6 +218,52 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
       setNotifications(prev => [notification, ...prev]);
     };
 
+    const handleConsentReceived = (payload: any) => {
+      if (payload.approved) {
+        setApprovedPoolRequests(prev => new Set(prev).add(payload.newRiderId));
+        // Add a notification for the driver
+        handleNewNotification({
+          _id: Math.random().toString(),
+          title: 'Pool Consent Received',
+          message: `${payload.riderName} is ready to join the pool!`,
+          createdAt: new Date().toISOString(),
+          isRead: false
+        });
+      }
+    };
+
+    const handleRideAccepted = (payload: any) => {
+      console.log('🎉 Driver: Ride accepted event received:', payload);
+      if (!payload?.ride?._id) {
+        console.warn('⚠️ Driver: Invalid payload - missing ride._id');
+        return;
+      }
+      console.log('✅ Driver: Setting active ride, rideId:', payload.ride._id);
+
+      // Prepare complete ride data for ActiveRideScreen
+      const rideData = {
+        ...payload.ride,
+        driver: payload.driver,
+        rider: payload.rider
+      };
+
+      setActiveRide(payload.ride);
+      setRiderDetails({
+        name: payload.rider ? `${payload.rider.name}` : 'Rider',
+        phone: payload.rider?.phone,
+        maskedPhone: payload.ride?.contact?.riderMasked
+      });
+      setRideStatus('ACCEPTED');
+      setCurrentFare(payload.ride.currentFare || payload.ride.fare || null);
+      setSelectedRequest(null);
+      setRequests([]);
+      requestMarkersRef.current.forEach(m => m.remove());
+      requestMarkersRef.current.clear();
+      setActiveRideData(rideData);
+      setShowActiveRideScreen(true);
+    };
+
+    socket.on('ride:accepted', handleRideAccepted);
     socket.on('ride:request', handleRequest);
     socket.on('ride:status', handleStatus);
     socket.on('ride:otp', handleOtp);
@@ -224,8 +274,10 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
     socket.on('nearby:rider:update', handleNearbyRiderUpdate);
     socket.on('nearby:rider:remove', handleNearbyRiderRemove);
     socket.on('pool:join-request', handlePoolJoinRequest);
+    socket.on('pool:consent-received', handleConsentReceived);
 
     return () => {
+      socket.off('ride:accepted', handleRideAccepted);
       socket.off('ride:request', handleRequest);
       socket.off('ride:status', handleStatus);
       socket.off('ride:otp', handleOtp);
@@ -236,13 +288,46 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
       socket.off('nearby:rider:update', handleNearbyRiderUpdate);
       socket.off('nearby:rider:remove', handleNearbyRiderRemove);
       socket.off('pool:join-request', handlePoolJoinRequest);
+      socket.off('pool:consent-received', handleConsentReceived);
     };
   }, [user?._id, user?.id]);
 
   useEffect(() => {
+    checkActiveRide();
     fetchNotifications();
     fetchDriverRides();
   }, [user?._id, user?.id]);
+
+  const checkActiveRide = async () => {
+    const userId = user?._id || user?.id;
+    if (!userId) return;
+    try {
+      const resp = await fetch(`${API_BASE_URL}/api/driver/${userId}/active-ride`);
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.ride) {
+          console.log('🚗 Found active ride on mount:', data.ride._id);
+          const rideData = {
+            ...data.ride,
+            driver: data.driver,
+            rider: data.rider
+          };
+          setActiveRide(data.ride);
+          setRiderDetails({
+            name: data.rider?.name || 'Rider',
+            phone: data.rider?.phone,
+            maskedPhone: data.ride?.contact?.riderMasked
+          });
+          setRideStatus(data.ride.status);
+          setCurrentFare(data.ride.currentFare || data.ride.fare);
+          setActiveRideData(rideData);
+          setShowActiveRideScreen(true);
+        }
+      }
+    } catch (e) {
+      console.error('Error checking active ride:', e);
+    }
+  };
 
   const fetchDriverRides = async () => {
     const userId = user?._id || user?.id;
@@ -551,9 +636,17 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
       });
       if (resp.ok) {
         const data = await resp.json();
+
+        // Prepare complete ride data for ActiveRideScreen
+        const rideData = {
+          ...data.ride,
+          driver: data.driver,
+          rider: data.rider
+        };
+
         setActiveRide(data.ride);
         setRiderDetails({
-          name: data.rider?.firstName + ' ' + data.rider?.lastName,
+          name: data.rider?.name || 'Rider',
           phone: data.rider?.phone,
           maskedPhone: data.ride?.contact?.riderMasked
         });
@@ -562,6 +655,8 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
         setRequests([]);
         requestMarkersRef.current.forEach(m => m.remove());
         requestMarkersRef.current.clear();
+        setActiveRideData(rideData);
+        setShowActiveRideScreen(true);
       }
     } catch (e) {
       console.error(e);
@@ -618,9 +713,26 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
     fetchDriverRides();
   };
 
-  const handleAddPooledRider = async () => {
+  const handleAddPooledRider = async (riderId: string) => {
     if (!activeRide?._id) return;
-    await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/pool/add`, { method: 'POST' });
+    try {
+      const resp = await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/pool/add`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: riderId })
+      });
+      if (resp.ok) {
+        setPoolJoinRequests(prev => prev.filter(r => r.userId !== riderId));
+        setApprovedPoolRequests(prev => {
+          const next = new Set(prev);
+          next.delete(riderId);
+          return next;
+        });
+        // Active ride fare will be updated via socket 'ride:fare-update' or 'ride:pooled-rider-added'
+      }
+    } catch (error) {
+      console.error('Add pool rider error:', error);
+    }
   };
 
   const handleSendChat = async (e: React.FormEvent) => {
@@ -647,6 +759,31 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
     setCurrentFare(null);
     clearRoutePreview();
   };
+
+  // Show ActiveRideScreen if ride is accepted
+  console.log('🔍 DriverDashboard render check:', {
+    showActiveRideScreen,
+    hasActiveRideData: !!activeRideData,
+    rideStatus,
+    hasActiveRide: !!activeRide
+  });
+
+  if (showActiveRideScreen && activeRideData) {
+    console.log('✅ RENDERING ActiveRideScreen (Driver) with data:', activeRideData);
+    return (
+      <ActiveRideScreen
+        user={user}
+        rideData={activeRideData}
+        onBack={() => {
+          console.log('🔙 ActiveRideScreen (Driver) onBack called');
+          setShowActiveRideScreen(false);
+          setActiveRideData(null);
+          setActiveRide(null);
+          setRideStatus('IDLE');
+        }}
+      />
+    );
+  }
 
   return (
     <div className="relative flex-1 bg-white dark:bg-zinc-950 overflow-hidden h-full flex flex-col">
@@ -940,6 +1077,45 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
             </div>
           )}
 
+          {activeRide.isPooled && poolJoinRequests.length > 0 && (
+            <div className="mt-6 border-t border-gray-100 dark:border-zinc-900 pt-6">
+              <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4">New Pool Requests</h4>
+              <div className="space-y-3">
+                {poolJoinRequests.map((req, idx) => {
+                  const hasConsent = approvedPoolRequests.has(req.userId);
+                  return (
+                    <div key={idx} className="p-4 bg-gray-50 dark:bg-zinc-900 border border-gray-100 dark:border-zinc-800 rounded-2xl flex items-center justify-between">
+                      <div className="flex-1 min-w-0 pr-4">
+                        <p className="text-sm font-bold dark:text-white truncate">
+                          Rider Request
+                        </p>
+                        <p className="text-[10px] text-gray-500 truncate">
+                          {req.pickup?.address?.split(',')[0]} → {req.dropoff?.address?.split(',')[0]}
+                        </p>
+                        <div className="flex items-center gap-1 mt-1">
+                          <div className={`size-1.5 rounded-full ${hasConsent ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}`}></div>
+                          <span className="text-[9px] font-black uppercase tracking-tight text-gray-400">
+                            {hasConsent ? 'Consent Received' : 'Waiting for Rider Consent'}
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleAddPooledRider(req.userId)}
+                        disabled={!hasConsent}
+                        className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${hasConsent
+                          ? 'bg-black dark:bg-white text-white dark:text-black shadow-lg shadow-black/10'
+                          : 'bg-gray-200 dark:bg-zinc-800 text-gray-400 cursor-not-allowed'
+                          }`}
+                      >
+                        Add to Pool
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {rideStatus === 'COMPLETED' && (
             <div className="text-center py-6">
               <div className="size-20 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4 text-white">
@@ -952,193 +1128,200 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
             </div>
           )}
         </div>
-      )}
+      )
+      }
 
       {/* Modals */}
-      {isRouteModalOpen && (
-        <div className="absolute inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-end justify-center">
-          <div className="bg-white dark:bg-zinc-950 w-full max-w-lg rounded-t-[40px] p-8 animate-in slide-in-from-bottom duration-300 shadow-2xl">
-            <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-8"></div>
-            <h3 className="text-3xl font-black mb-8 dark:text-white leading-tight">Your Daily Commute</h3>
+      {
+        isRouteModalOpen && (
+          <div className="absolute inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-end justify-center">
+            <div className="bg-white dark:bg-zinc-950 w-full max-w-lg rounded-t-[40px] p-8 animate-in slide-in-from-bottom duration-300 shadow-2xl">
+              <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-8"></div>
+              <h3 className="text-3xl font-black mb-8 dark:text-white leading-tight">Your Daily Commute</h3>
 
-            <div className="space-y-6">
-              <div className="relative">
-                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block ml-1">Home / Start</label>
+              <div className="space-y-6">
                 <div className="relative">
-                  <input
-                    value={routeSearchType === 'source' && routeSearchQuery ? routeSearchQuery : (dailyRouteSource?.structuredFormatting.mainText || '')}
-                    onChange={(e) => handleRouteSearch(e.target.value, 'source')}
-                    placeholder="Search for start location"
-                    className="w-full bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl text-base font-bold dark:text-white pr-12 focus:ring-2 focus:ring-leaf-500 transition-all border border-transparent"
-                  />
-                  <span className="material-icons-outlined absolute right-4 top-4 text-leaf-500">home</span>
-                </div>
-                {routeSearchType === 'source' && routeSuggestions.length > 0 && (
-                  <div className="absolute mt-2 w-full bg-white dark:bg-zinc-900 shadow-2xl rounded-2xl z-[110] border border-gray-100 dark:border-zinc-800 max-h-60 overflow-y-auto overflow-x-hidden">
-                    {routeSuggestions.map((place, i) => (
-                      <div key={i} onClick={() => selectRoutePlace(place)} className="p-4 hover:bg-gray-50 dark:hover:bg-zinc-800 border-b border-gray-50 dark:border-zinc-800 last:border-none flex items-center gap-3">
-                        <span className="material-icons-outlined text-gray-400">place</span>
-                        <div className="flex-1 overflow-hidden">
-                          <p className="font-bold text-sm dark:text-white truncate">{place.structuredFormatting.mainText}</p>
-                          <p className="text-xs text-gray-500 truncate">{place.structuredFormatting.secondaryText}</p>
-                        </div>
-                      </div>
-                    ))}
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block ml-1">Home / Start</label>
+                  <div className="relative">
+                    <input
+                      value={routeSearchType === 'source' && routeSearchQuery ? routeSearchQuery : (dailyRouteSource?.structuredFormatting.mainText || '')}
+                      onChange={(e) => handleRouteSearch(e.target.value, 'source')}
+                      placeholder="Search for start location"
+                      className="w-full bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl text-base font-bold dark:text-white pr-12 focus:ring-2 focus:ring-leaf-500 transition-all border border-transparent"
+                    />
+                    <span className="material-icons-outlined absolute right-4 top-4 text-leaf-500">home</span>
                   </div>
-                )}
-              </div>
-
-              <div>
-                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block ml-1">Office / Destination</label>
-                <div className="relative">
-                  <input
-                    value={routeSearchType === 'dest' && routeSearchQuery ? routeSearchQuery : (dailyRouteDest?.structuredFormatting.mainText || '')}
-                    onChange={(e) => handleRouteSearch(e.target.value, 'dest')}
-                    placeholder="Search for destination"
-                    className="w-full bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl text-base font-bold dark:text-white pr-12 focus:ring-2 focus:ring-leaf-500 transition-all border border-transparent"
-                  />
-                  <span className="material-icons-outlined absolute right-4 top-4 text-leaf-500">work</span>
-                </div>
-                {routeSearchType === 'dest' && routeSuggestions.length > 0 && (
-                  <div className="absolute mt-2 w-full bg-white dark:bg-zinc-900 shadow-2xl rounded-2xl z-[110] border border-gray-100 dark:border-zinc-800 max-h-60 overflow-y-auto">
-                    {routeSuggestions.map((place, i) => (
-                      <div key={i} onClick={() => selectRoutePlace(place)} className="p-4 hover:bg-gray-50 dark:hover:bg-zinc-800 border-b border-gray-50 dark:border-zinc-800 last:border-none flex items-center gap-3">
-                        <span className="material-icons-outlined text-gray-400">place</span>
-                        <div className="flex-1 overflow-hidden">
-                          <p className="font-bold text-sm dark:text-white truncate">{place.structuredFormatting.mainText}</p>
-                          <p className="text-xs text-gray-500 truncate">{place.structuredFormatting.secondaryText}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="flex gap-4 mt-10 mb-6">
-              <button
-                onClick={() => setIsRouteModalOpen(false)}
-                className="flex-1 py-4 rounded-2xl font-black text-sm bg-gray-100 dark:bg-zinc-900 text-gray-500"
-              >
-                Dismiss
-              </button>
-              <button
-                onClick={handleSaveRoute}
-                className="flex-[2] py-4 rounded-2xl font-black text-sm bg-leaf-600 dark:bg-leaf-500 text-white shadow-xl shadow-leaf-500/20"
-              >
-                Save Daily Route
-              </button>
-            </div>
-            <p className="text-center text-[10px] text-gray-400 font-bold uppercase tracking-widest">Publishing your route allows riders to find you.</p>
-          </div>
-        </div>
-      )}
-
-      {isNotificationsOpen && (
-        <div className="absolute inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-end justify-center">
-          <div className="bg-white dark:bg-zinc-950 w-full max-w-lg rounded-t-[40px] p-8 animate-in slide-in-from-bottom duration-300 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-8 shrink-0" onClick={() => setIsNotificationsOpen(false)}></div>
-            <div className="flex justify-between items-center mb-8 shrink-0">
-              <h3 className="text-3xl font-black dark:text-white">Activity</h3>
-              <button onClick={() => setIsNotificationsOpen(false)} className="size-12 bg-gray-50 dark:bg-zinc-900 rounded-2xl flex items-center justify-center">
-                <span className="material-icons-outlined dark:text-white">close</span>
-              </button>
-            </div>
-
-            <div className="space-y-4 overflow-y-auto pr-2 pb-10 custom-scrollbar flex-1">
-              {notifications.length === 0 ? (
-                <div className="text-center py-20 opacity-20">
-                  <span className="material-icons-outlined text-7xl mb-4 block">notifications_none</span>
-                  <p className="font-black text-xl">Quiet for now</p>
-                </div>
-              ) : (
-                notifications.map((n) => (
-                  <div
-                    key={n._id}
-                    className={`p-6 rounded-[32px] border transition-all ${n.isRead ? 'bg-transparent border-gray-100 dark:border-zinc-900' : 'bg-green-50/50 dark:bg-green-900/10 border-green-100 dark:border-green-800'}`}
-                    onClick={() => markNotificationRead(n._id)}
-                  >
-                    <div className="flex gap-5">
-                      <div className="size-14 bg-black dark:bg-white rounded-2xl flex items-center justify-center shrink-0 shadow-lg">
-                        <span className="material-icons-outlined text-white dark:text-black text-2xl">
-                          {n.type === 'DAILY_JOIN_REQUEST' ? 'group_add' : 'info'}
-                        </span>
-                      </div>
-                      <div className="flex-1">
-                        <div className="flex justify-between items-start mb-2">
-                          <h4 className="font-black text-black dark:text-white text-lg leading-none">{n.title}</h4>
-                          <span className="text-[10px] text-gray-400 font-bold uppercase tracking-tight">{new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                        </div>
-                        <p className="text-sm text-gray-500 dark:text-zinc-400 font-medium leading-relaxed mb-4">{n.message}</p>
-
-                        {n.type === 'DAILY_JOIN_REQUEST' && !n.isRead && (
-                          <div className="flex gap-3">
-                            <button className="flex-1 py-3 bg-black dark:bg-white text-white dark:text-black rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg">Partner Accept</button>
-                            <button className="flex-1 py-3 bg-gray-100 dark:bg-zinc-900 text-gray-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Later</button>
+                  {routeSearchType === 'source' && routeSuggestions.length > 0 && (
+                    <div className="absolute mt-2 w-full bg-white dark:bg-zinc-900 shadow-2xl rounded-2xl z-[110] border border-gray-100 dark:border-zinc-800 max-h-60 overflow-y-auto overflow-x-hidden">
+                      {routeSuggestions.map((place, i) => (
+                        <div key={i} onClick={() => selectRoutePlace(place)} className="p-4 hover:bg-gray-50 dark:hover:bg-zinc-800 border-b border-gray-50 dark:border-zinc-800 last:border-none flex items-center gap-3">
+                          <span className="material-icons-outlined text-gray-400">place</span>
+                          <div className="flex-1 overflow-hidden">
+                            <p className="font-bold text-sm dark:text-white truncate">{place.structuredFormatting.mainText}</p>
+                            <p className="text-xs text-gray-500 truncate">{place.structuredFormatting.secondaryText}</p>
                           </div>
-                        )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block ml-1">Office / Destination</label>
+                  <div className="relative">
+                    <input
+                      value={routeSearchType === 'dest' && routeSearchQuery ? routeSearchQuery : (dailyRouteDest?.structuredFormatting.mainText || '')}
+                      onChange={(e) => handleRouteSearch(e.target.value, 'dest')}
+                      placeholder="Search for destination"
+                      className="w-full bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl text-base font-bold dark:text-white pr-12 focus:ring-2 focus:ring-leaf-500 transition-all border border-transparent"
+                    />
+                    <span className="material-icons-outlined absolute right-4 top-4 text-leaf-500">work</span>
+                  </div>
+                  {routeSearchType === 'dest' && routeSuggestions.length > 0 && (
+                    <div className="absolute mt-2 w-full bg-white dark:bg-zinc-900 shadow-2xl rounded-2xl z-[110] border border-gray-100 dark:border-zinc-800 max-h-60 overflow-y-auto">
+                      {routeSuggestions.map((place, i) => (
+                        <div key={i} onClick={() => selectRoutePlace(place)} className="p-4 hover:bg-gray-50 dark:hover:bg-zinc-800 border-b border-gray-50 dark:border-zinc-800 last:border-none flex items-center gap-3">
+                          <span className="material-icons-outlined text-gray-400">place</span>
+                          <div className="flex-1 overflow-hidden">
+                            <p className="font-bold text-sm dark:text-white truncate">{place.structuredFormatting.mainText}</p>
+                            <p className="text-xs text-gray-500 truncate">{place.structuredFormatting.secondaryText}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex gap-4 mt-10 mb-6">
+                <button
+                  onClick={() => setIsRouteModalOpen(false)}
+                  className="flex-1 py-4 rounded-2xl font-black text-sm bg-gray-100 dark:bg-zinc-900 text-gray-500"
+                >
+                  Dismiss
+                </button>
+                <button
+                  onClick={handleSaveRoute}
+                  className="flex-[2] py-4 rounded-2xl font-black text-sm bg-leaf-600 dark:bg-leaf-500 text-white shadow-xl shadow-leaf-500/20"
+                >
+                  Save Daily Route
+                </button>
+              </div>
+              <p className="text-center text-[10px] text-gray-400 font-bold uppercase tracking-widest">Publishing your route allows riders to find you.</p>
+            </div>
+          </div>
+        )
+      }
+
+      {
+        isNotificationsOpen && (
+          <div className="absolute inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-end justify-center">
+            <div className="bg-white dark:bg-zinc-950 w-full max-w-lg rounded-t-[40px] p-8 animate-in slide-in-from-bottom duration-300 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+              <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-8 shrink-0" onClick={() => setIsNotificationsOpen(false)}></div>
+              <div className="flex justify-between items-center mb-8 shrink-0">
+                <h3 className="text-3xl font-black dark:text-white">Activity</h3>
+                <button onClick={() => setIsNotificationsOpen(false)} className="size-12 bg-gray-50 dark:bg-zinc-900 rounded-2xl flex items-center justify-center">
+                  <span className="material-icons-outlined dark:text-white">close</span>
+                </button>
+              </div>
+
+              <div className="space-y-4 overflow-y-auto pr-2 pb-10 custom-scrollbar flex-1">
+                {notifications.length === 0 ? (
+                  <div className="text-center py-20 opacity-20">
+                    <span className="material-icons-outlined text-7xl mb-4 block">notifications_none</span>
+                    <p className="font-black text-xl">Quiet for now</p>
+                  </div>
+                ) : (
+                  notifications.map((n) => (
+                    <div
+                      key={n._id}
+                      className={`p-6 rounded-[32px] border transition-all ${n.isRead ? 'bg-transparent border-gray-100 dark:border-zinc-900' : 'bg-green-50/50 dark:bg-green-900/10 border-green-100 dark:border-green-800'}`}
+                      onClick={() => markNotificationRead(n._id)}
+                    >
+                      <div className="flex gap-5">
+                        <div className="size-14 bg-black dark:bg-white rounded-2xl flex items-center justify-center shrink-0 shadow-lg">
+                          <span className="material-icons-outlined text-white dark:text-black text-2xl">
+                            {n.type === 'DAILY_JOIN_REQUEST' ? 'group_add' : 'info'}
+                          </span>
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex justify-between items-start mb-2">
+                            <h4 className="font-black text-black dark:text-white text-lg leading-none">{n.title}</h4>
+                            <span className="text-[10px] text-gray-400 font-bold uppercase tracking-tight">{new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          </div>
+                          <p className="text-sm text-gray-500 dark:text-zinc-400 font-medium leading-relaxed mb-4">{n.message}</p>
+
+                          {n.type === 'DAILY_JOIN_REQUEST' && !n.isRead && (
+                            <div className="flex gap-3">
+                              <button className="flex-1 py-3 bg-black dark:bg-white text-white dark:text-black rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg">Partner Accept</button>
+                              <button className="flex-1 py-3 bg-gray-100 dark:bg-zinc-900 text-gray-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Later</button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {chatOpen && activeRide && (
-        <div className="fixed inset-0 z-[110] bg-black/90 backdrop-blur-xl flex flex-col h-full animate-in fade-in zoom-in-95 duration-300">
-          <div className="h-12 w-full flex items-center justify-between px-6 pt-10 mb-4 shrink-0">
-            <button onClick={() => setChatOpen(false)} className="size-12 bg-white/10 rounded-2xl flex items-center justify-center">
-              <span className="material-icons-outlined text-white">close</span>
-            </button>
-            <div className="text-center">
-              <p className="text-[10px] font-bold text-white/50 uppercase tracking-[.2em]">Live Chat</p>
-              <p className="text-xl font-black text-white">{riderDetails?.name || 'Rider'}</p>
-            </div>
-            <div className="size-12"></div>
-          </div>
-
-          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6 custom-scrollbar">
-            {chatMessages.length === 0 && (
-              <div className="h-full flex flex-col items-center justify-center opacity-30 text-white">
-                <span className="material-icons-outlined text-5xl mb-4">chat</span>
-                <p className="font-bold">Starts the conversation...</p>
+                  ))
+                )}
               </div>
-            )}
-            {chatMessages.map((msg, idx) => (
-              <div key={`${msg.createdAt}-${idx}`} className={`flex ${msg.senderRole === 'DRIVER' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[85%] rounded-[24px] px-6 py-4 text-sm shadow-xl ${msg.senderRole === 'DRIVER'
-                  ? 'bg-leaf-600 text-white rounded-br-none'
-                  : 'bg-white text-black rounded-bl-none'
-                  }`}>
-                  <p className="font-medium leading-relaxed">{msg.message}</p>
-                  <p className={`text-[9px] mt-2 font-black uppercase tracking-widest ${msg.senderRole === 'DRIVER' ? 'text-white/40' : 'text-black/30'}`}>
-                    {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </p>
+            </div>
+          </div>
+        )
+      }
+
+      {
+        chatOpen && activeRide && (
+          <div className="fixed inset-0 z-[110] bg-black/90 backdrop-blur-xl flex flex-col h-full animate-in fade-in zoom-in-95 duration-300">
+            <div className="h-12 w-full flex items-center justify-between px-6 pt-10 mb-4 shrink-0">
+              <button onClick={() => setChatOpen(false)} className="size-12 bg-white/10 rounded-2xl flex items-center justify-center">
+                <span className="material-icons-outlined text-white">close</span>
+              </button>
+              <div className="text-center">
+                <p className="text-[10px] font-bold text-white/50 uppercase tracking-[.2em]">Live Chat</p>
+                <p className="text-xl font-black text-white">{riderDetails?.name || 'Rider'}</p>
+              </div>
+              <div className="size-12"></div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6 custom-scrollbar">
+              {chatMessages.length === 0 && (
+                <div className="h-full flex flex-col items-center justify-center opacity-30 text-white">
+                  <span className="material-icons-outlined text-5xl mb-4">chat</span>
+                  <p className="font-bold">Starts the conversation...</p>
                 </div>
-              </div>
-            ))}
-          </div>
+              )}
+              {chatMessages.map((msg, idx) => (
+                <div key={`${msg.createdAt}-${idx}`} className={`flex ${msg.senderRole === 'DRIVER' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[85%] rounded-[24px] px-6 py-4 text-sm shadow-xl ${msg.senderRole === 'DRIVER'
+                    ? 'bg-leaf-600 text-white rounded-br-none'
+                    : 'bg-white text-black rounded-bl-none'
+                    }`}>
+                    <p className="font-medium leading-relaxed">{msg.message}</p>
+                    <p className={`text-[9px] mt-2 font-black uppercase tracking-widest ${msg.senderRole === 'DRIVER' ? 'text-white/40' : 'text-black/30'}`}>
+                      {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
 
-          <form onSubmit={handleSendChat} className="p-6 pb-12 shrink-0 flex gap-3 bg-black/50 border-t border-white/5">
-            <input
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              className="flex-1 bg-white/10 rounded-2xl px-6 py-4 text-white text-sm font-bold placeholder:text-white/30 outline-none focus:ring-2 focus:ring-leaf-500 border border-white/5"
-              placeholder="Write your message..."
-            />
-            <button
-              type="submit"
-              className="bg-leaf-500 size-14 rounded-2xl flex items-center justify-center shadow-lg shadow-leaf-500/20 active:scale-95 transition-all"
-            >
-              <span className="material-icons-outlined text-white">send</span>
-            </button>
-          </form>
-        </div>
-      )}
-    </div>
+            <form onSubmit={handleSendChat} className="p-6 pb-12 shrink-0 flex gap-3 bg-black/50 border-t border-white/5">
+              <input
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                className="flex-1 bg-white/10 rounded-2xl px-6 py-4 text-white text-sm font-bold placeholder:text-white/30 outline-none focus:ring-2 focus:ring-leaf-500 border border-white/5"
+                placeholder="Write your message..."
+              />
+              <button
+                type="submit"
+                className="bg-leaf-500 size-14 rounded-2xl flex items-center justify-center shadow-lg shadow-leaf-500/20 active:scale-95 transition-all"
+              >
+                <span className="material-icons-outlined text-white">send</span>
+              </button>
+            </form>
+          </div>
+        )
+      }
+    </div >
   );
 };
 

@@ -125,6 +125,36 @@ io.on('connection', (socket) => {
             io.to('drivers:online').emit('nearby:rider:remove', { rideId: socket.data.searchRideId });
         }
     });
+
+    // --- New: Pooling Consent ---
+    socket.on('pool:rider-consent', async ({ rideId, newRiderId, approved }) => {
+        try {
+            const ride = await Ride.findById(rideId);
+            if (!ride) return;
+
+            const requestIndex = ride.pooledRiders.findIndex(r => r.userId.toString() === newRiderId && r.status === 'PENDING_CONSENT');
+            if (requestIndex === -1) return;
+
+            if (approved) {
+                ride.pooledRiders[requestIndex].status = 'APPROVED';
+                await ride.save();
+                // Notify driver that they can now add this rider
+                io.to(`user:${ride.driverId}`).emit('pool:consent-received', {
+                    rideId,
+                    newRiderId,
+                    approved: true,
+                    riderName: `${ride.pooledRiders[requestIndex].firstName} ${ride.pooledRiders[requestIndex].lastName}`
+                });
+            } else {
+                ride.pooledRiders[requestIndex].status = 'REJECTED';
+                await ride.save();
+                // Notify new rider that they were rejected
+                io.to(`user:${newRiderId}`).emit('pool:join-result', { rideId, approved: false });
+            }
+        } catch (error) {
+            console.error('Consent error:', error);
+        }
+    });
 });
 
 const OLA_API_KEY = process.env.OLA_MAPS_API_KEY;
@@ -563,6 +593,74 @@ app.get('/api/rides/nearby-by-location', async (req, res) => {
     }
 });
 
+// ── Get Active Ride for Driver ──
+app.get('/api/driver/:userId/active-ride', async (req, res) => {
+    try {
+        const ride = await Ride.findOne({
+            driverId: req.params.userId,
+            status: { $in: ['ACCEPTED', 'ARRIVED', 'IN_PROGRESS'] }
+        });
+        if (!ride) return res.json({ ride: null });
+
+        const driver = await User.findById(ride.driverId);
+        const rider = await User.findById(ride.userId);
+
+        res.json({
+            ride,
+            driver: driver ? {
+                id: driver._id,
+                name: `${driver.firstName} ${driver.lastName}`,
+                rating: driver.rating || 4.8,
+                vehicle: `${driver.vehicleMake || 'Car'} ${driver.vehicleModel || ''}`.trim(),
+                vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
+                photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
+                maskedPhone: maskPhone(driver.phone)
+            } : null,
+            rider: rider ? {
+                id: rider._id,
+                name: `${rider.firstName} ${rider.lastName}`,
+                maskedPhone: maskPhone(rider.phone)
+            } : null
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching active ride' });
+    }
+});
+
+// ── Get Active Ride for Rider ──
+app.get('/api/rider/:userId/active-ride', async (req, res) => {
+    try {
+        const ride = await Ride.findOne({
+            userId: req.params.userId,
+            status: { $in: ['ACCEPTED', 'ARRIVED', 'IN_PROGRESS'] }
+        });
+        if (!ride) return res.json({ ride: null });
+
+        const driver = await User.findById(ride.driverId);
+        const rider = await User.findById(ride.userId);
+
+        res.json({
+            ride,
+            driver: driver ? {
+                id: driver._id,
+                name: `${driver.firstName} ${driver.lastName}`,
+                rating: driver.rating || 4.8,
+                vehicle: `${driver.vehicleMake || 'Car'} ${driver.vehicleModel || ''}`.trim(),
+                vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
+                photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
+                maskedPhone: maskPhone(driver.phone)
+            } : null,
+            rider: rider ? {
+                id: rider._id,
+                name: `${rider.firstName} ${rider.lastName}`,
+                maskedPhone: maskPhone(rider.phone)
+            } : null
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching active ride' });
+    }
+});
+
 // ── Find in-progress pooled rides for joining ──
 app.get('/api/rides/pooled-in-progress', async (req, res) => {
     try {
@@ -596,7 +694,6 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
             const pickupDist = getDistanceKm(latNum, lngNum, ride.pickup.lat, ride.pickup.lng);
             if (pickupDist === null || pickupDist > radiusNum) return false;
 
-            // Check if dropoff is in similar direction (optional enhancement)
             return true;
         });
 
@@ -612,6 +709,7 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
         res.status(500).json({ message: 'Error fetching pooled rides' });
     }
 });
+
 
 app.get('/api/rides/:rideId', async (req, res) => {
     try {
@@ -873,12 +971,24 @@ app.post('/api/rides/:rideId/pool/add', async (req, res) => {
             req.body.fareAdjustment :
             Math.round((ride.currentFare || ride.fare || 0) * -0.3);
 
+        const newRiderId = req.body && req.body.userId;
+        const requestIndex = ride.pooledRiders.findIndex(r => r.userId.toString() === newRiderId);
+
+        if (requestIndex !== -1) {
+            ride.pooledRiders[requestIndex].status = 'JOINED';
+            ride.pooledRiders[requestIndex].joinedAt = new Date();
+            ride.pooledRiders[requestIndex].fareAdjustment = adjustment;
+        } else {
+            // Fallback for cases where it might not have been pre-added (though it should be for the consent flow)
+            ride.pooledRiders.push({
+                userId: newRiderId,
+                fareAdjustment: adjustment,
+                joinedAt: new Date(),
+                status: 'JOINED'
+            });
+        }
+
         ride.currentFare = Math.max(0, (ride.currentFare || ride.fare || 0) + adjustment);
-        ride.pooledRiders.push({
-            userId: req.body && req.body.userId,
-            fareAdjustment: adjustment,
-            joinedAt: new Date()
-        });
         await ride.save();
 
         io.to(`ride:${ride._id}`).emit('ride:pooled-rider-added', {
@@ -886,6 +996,9 @@ app.post('/api/rides/:rideId/pool/add', async (req, res) => {
             currentFare: ride.currentFare,
             pooledRiders: ride.pooledRiders
         });
+
+        // Also notify the new rider that they have joined
+        io.to(`user:${newRiderId}`).emit('pool:join-result', { rideId: ride._id, approved: true });
 
         res.json(ride);
     } catch (error) {
@@ -912,16 +1025,31 @@ app.post('/api/rides/:rideId/pool/join', async (req, res) => {
             return res.status(400).json({ message: 'Not enough seats available' });
         }
 
-        // Notify driver about pool request
-        io.to(`ride:${pooledRide._id}`).emit('pool:join-request', {
-            rideId: pooledRide._id,
+        // Notify first rider about pool request for consent
+        const newRider = await User.findById(userId);
+
+        pooledRide.pooledRiders.push({
             userId,
+            firstName: newRider.firstName,
+            lastName: newRider.lastName,
             pickup,
             dropoff,
-            passengers
+            status: 'PENDING_CONSENT'
+        });
+        await pooledRide.save();
+
+        io.to(`user:${pooledRide.userId}`).emit('pool:consent-request', {
+            rideId: pooledRide._id,
+            newRider: {
+                id: userId,
+                name: `${newRider.firstName} ${newRider.lastName}`,
+                pickup,
+                dropoff,
+                passengers
+            }
         });
 
-        res.json({ message: 'Pool join request sent to driver', pooledRideId: pooledRide._id });
+        res.json({ message: 'Request sent to first rider for consent', pooledRideId: pooledRide._id });
     } catch (error) {
         console.error('Pool join error:', error);
         res.status(500).json({ message: 'Error joining pooled ride' });
@@ -1121,6 +1249,45 @@ app.get('/api/drivers/nearby', async (req, res) => {
         res.json(drivers);
     } catch (error) {
         res.status(500).json({ message: 'Error fetching nearby drivers' });
+    }
+});
+
+// ── SOS Emergency Alert ──
+app.post('/api/rides/:rideId/sos', async (req, res) => {
+    try {
+        const { userId, userRole, location } = req.body;
+        const ride = await Ride.findById(req.params.rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        console.log(`🚨 SOS ALERT: Ride ${ride._id}, User: ${userId}, Role: ${userRole}`);
+
+        // In a real app, this would:
+        // 1. Alert emergency services
+        // 2. Notify platform support
+        // 3. Share live location
+        // 4. Record the incident
+
+        // Notify both driver and rider
+        io.to(`user:${ride.userId}`).emit('ride:sos', {
+            rideId: ride._id,
+            alertedBy: userRole,
+            location,
+            timestamp: new Date()
+        });
+
+        if (ride.driverId) {
+            io.to(`user:${ride.driverId}`).emit('ride:sos', {
+                rideId: ride._id,
+                alertedBy: userRole,
+                location,
+                timestamp: new Date()
+            });
+        }
+
+        res.json({ ok: true, message: 'SOS alert sent' });
+    } catch (error) {
+        console.error('SOS error:', error);
+        res.status(500).json({ message: 'Error sending SOS alert' });
     }
 });
 
