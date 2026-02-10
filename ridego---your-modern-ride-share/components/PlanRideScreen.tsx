@@ -89,6 +89,9 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const driverLocationRef = useRef<{ lat: number; lng: number } | null>(null);
     const lastRouteUpdateRef = useRef<number>(0);
     const lastRouteLocationRef = useRef<{ lat: number; lng: number } | null>(null);
+    const pickupManuallyEditedRef = useRef(false);
+    const pickupSelectedByUserRef = useRef(false);
+    const resolvedPickupCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
 
     const [availableRoutes, setAvailableRoutes] = useState<any[]>([]);
     const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
@@ -243,9 +246,10 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         const userStr = localStorage.getItem('leaflift_user');
         const user = userStr ? JSON.parse(userStr) : null;
         if (rideStatus === 'SEARCHING' && activeRideId && pickupCoords) {
+            const resolvedPickup = resolvedPickupCoordsRef.current || pickupCoords;
             socket.emit('rider:search', {
                 rideId: activeRideId, riderId: user?._id,
-                pickup: { address: pickup, lat: pickupCoords.lat, lng: pickupCoords.lng },
+                pickup: { address: pickup, lat: resolvedPickup.lat, lng: resolvedPickup.lng },
                 dropoff: dropoffCoords
                     ? { address: destination, lat: dropoffCoords.lat, lng: dropoffCoords.lng }
                     : null,
@@ -486,7 +490,10 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             navigator.geolocation.getCurrentPosition(
                 async (position) => {
                     const { latitude, longitude } = position.coords;
+                    // Don't overwrite user-selected pickup coords with GPS
+                    if (pickupSelectedByUserRef.current) return;
                     setPickupCoords({ lat: latitude, lng: longitude });
+                    resolvedPickupCoordsRef.current = { lat: latitude, lng: longitude };
                     if (mapRef.current) {
                         mapRef.current.flyTo({ center: [longitude, latitude], zoom: 15 });
                         const el = document.createElement('div');
@@ -496,7 +503,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             .setLngLat([longitude, latitude]).addTo(mapRef.current);
                         marker.on('dragend', async () => {
                             const lngLat = marker.getLngLat();
-                            setPickupCoords({ lat: lngLat.lat, lng: lngLat.lng });
+                            const dragCoords = { lat: lngLat.lat, lng: lngLat.lng };
+                            setPickupCoords(dragCoords);
+                            resolvedPickupCoordsRef.current = dragCoords;
+                            pickupManuallyEditedRef.current = false;
+                            pickupSelectedByUserRef.current = true;
                             setPickup('Locating...');
                             const address = await reverseGeocode(lngLat.lat, lngLat.lng);
                             setPickup(address);
@@ -505,6 +516,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         try {
                             const address = await reverseGeocode(latitude, longitude);
                             setPickup(address);
+                            pickupManuallyEditedRef.current = false;
                         } catch { }
                     }
                     // Fetch nearby drivers to show on map
@@ -557,6 +569,9 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         if (focusedInput === 'pickup') {
             setPickup(place.structuredFormatting.mainText);
             setPickupCoords(coords);
+            resolvedPickupCoordsRef.current = coords;
+            pickupManuallyEditedRef.current = false;
+            pickupSelectedByUserRef.current = true;
             setFocusedInput('dropoff');
             if (pickupMarkerRef.current && mapRef.current) {
                 pickupMarkerRef.current.setLngLat([lng, lat]);
@@ -566,8 +581,25 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             setDestination(place.structuredFormatting.mainText);
             setDropoffCoords(coords);
             setSuggestions([]);
-            if (pickupCoords) {
-                await calculateRoute(pickupCoords, coords);
+            // Geocode pickup text if user typed it manually without selecting a suggestion
+            let startCoords = pickupCoords;
+            if (pickupManuallyEditedRef.current && pickup && pickup.length > 2) {
+                try {
+                    const results = await searchPlaces(pickup);
+                    if (results.length > 0 && results[0].latitude && results[0].longitude) {
+                        startCoords = { lat: results[0].latitude, lng: results[0].longitude };
+                        setPickupCoords(startCoords);
+                        resolvedPickupCoordsRef.current = startCoords;
+                        pickupManuallyEditedRef.current = false;
+                        pickupSelectedByUserRef.current = true;
+                        if (pickupMarkerRef.current) {
+                            pickupMarkerRef.current.setLngLat([startCoords.lng, startCoords.lat]);
+                        }
+                    }
+                } catch { }
+            }
+            if (startCoords) {
+                await calculateRoute(startCoords, coords);
                 setShowOptions(true);
             }
         }
@@ -803,6 +835,23 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         const user = userStr ? JSON.parse(userStr) : null;
         if (!user?._id) { alert('Please log in'); setIsRequesting(false); return; }
 
+        // Resolve pickup coords: prefer the ref (set during route calc), fallback to state
+        let finalPickupCoords = resolvedPickupCoordsRef.current || pickupCoords;
+
+        // Safety net: if pickup text was manually edited, geocode it before creating ride
+        if (pickupManuallyEditedRef.current && pickup && pickup.length > 2) {
+            try {
+                const results = await searchPlaces(pickup);
+                if (results.length > 0 && results[0].latitude && results[0].longitude) {
+                    finalPickupCoords = { lat: results[0].latitude, lng: results[0].longitude };
+                    setPickupCoords(finalPickupCoords);
+                    resolvedPickupCoordsRef.current = finalPickupCoords;
+                    pickupManuallyEditedRef.current = false;
+                    pickupSelectedByUserRef.current = true;
+                }
+            } catch { }
+        }
+
         const selectedRoute = availableRoutes[selectedRouteIndex];
         const price = categoryPrices.get(selectedCategory) || 0;
         const cat = VEHICLE_CATEGORIES.find(c => c.id === selectedCategory);
@@ -810,7 +859,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         const rideData = {
             userId: user._id,
             status: 'SEARCHING',
-            pickup: { address: pickup, lat: pickupCoords?.lat, lng: pickupCoords?.lng },
+            pickup: { address: pickup, lat: finalPickupCoords?.lat, lng: finalPickupCoords?.lng },
             dropoff: { address: destination, lat: dropoffCoords?.lat, lng: dropoffCoords?.lng },
             fare: price,
             distance: routeInfo?.distance,
@@ -952,7 +1001,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 <input
                                     type="text"
                                     value={pickup}
-                                    onChange={(e) => setPickup(e.target.value)}
+                                    onChange={(e) => { setPickup(e.target.value); pickupManuallyEditedRef.current = true; }}
                                     onFocus={() => setFocusedInput('pickup')}
                                     className="flex-1 bg-transparent border-none p-2 text-sm font-bold focus:ring-0 focus:outline-none dark:text-white"
                                     placeholder="Current Location"
@@ -972,10 +1021,29 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             </div>
                         </div>
                         <button
-                            onClick={() => {
-                                if (destination && pickupCoords && dropoffCoords) {
-                                    calculateRoute(pickupCoords, dropoffCoords);
-                                    setShowOptions(true);
+                            onClick={async () => {
+                                if (destination && dropoffCoords) {
+                                    let startCoords = pickupCoords;
+                                    if (pickupManuallyEditedRef.current && pickup && pickup.length > 2) {
+                                        try {
+                                            const results = await searchPlaces(pickup);
+                                            if (results.length > 0 && results[0].latitude && results[0].longitude) {
+                                                startCoords = { lat: results[0].latitude, lng: results[0].longitude };
+                                                setPickupCoords(startCoords);
+                                                resolvedPickupCoordsRef.current = startCoords;
+                                                pickupManuallyEditedRef.current = false;
+                                                pickupSelectedByUserRef.current = true;
+                                                if (pickupMarkerRef.current) {
+                                                    pickupMarkerRef.current.setLngLat([startCoords.lng, startCoords.lat]);
+                                                }
+                                            }
+                                        } catch { }
+                                    }
+                                    if (startCoords) {
+                                        resolvedPickupCoordsRef.current = startCoords;
+                                        calculateRoute(startCoords, dropoffCoords);
+                                        setShowOptions(true);
+                                    }
                                 }
                             }}
                             disabled={!destination || !pickupCoords}

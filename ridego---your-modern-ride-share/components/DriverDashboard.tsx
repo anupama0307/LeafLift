@@ -286,6 +286,13 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
     }
   };
 
+  // Fetch nearby ride requests once GPS is available
+  useEffect(() => {
+    if (isOnline && driverLocation && !activeRide) {
+      fetchRequests();
+    }
+  }, [isOnline, !!driverLocation]);
+
   useEffect(() => {
     if (!isOnline && !activeRide) return;
     if (!navigator.geolocation) return;
@@ -360,7 +367,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
   }, [riderLocation, driverLocation, mapLoaded]);
 
   const isWithinRadius = (req: any, radiusKm = 6) => {
-    if (!driverLocation || !req.pickup) return true;
+    if (!driverLocation || !req.pickup) return false;
     const R = 6371;
     const toRad = (v: number) => (v * Math.PI) / 180;
     const dLat = toRad(req.pickup.lat - driverLocation.lat);
@@ -400,10 +407,19 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
       setIsOnline(true);
     }
     try {
-      const resp = await fetch(`${API_BASE_URL}/api/users`);
+      if (!driverLocation) return;
+      const resp = await fetch(`${API_BASE_URL}/api/rides/nearby?lat=${driverLocation.lat}&lng=${driverLocation.lng}&radius=6`);
       if (resp.ok) {
-        // Mocking fetching nearby riders from all users if they have active searches
-        // In real app, there would be a dedicated /api/rides/nearby endpoint
+        const rides = await resp.json();
+        const newRequests = rides.map((ride: any) => ({
+          rideId: ride._id,
+          pickup: ride.pickup,
+          dropoff: ride.dropoff,
+          fare: ride.fare,
+          isPooled: ride.isPooled
+        }));
+        setRequests(newRequests);
+        newRequests.forEach((r: any) => addOrUpdateRequestMarker(r));
       }
     } catch (error) {
       console.error('Fetch requests error:', error);

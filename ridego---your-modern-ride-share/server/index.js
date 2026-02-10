@@ -109,14 +109,23 @@ io.on('connection', (socket) => {
     socket.on('rider:search', ({ rideId, riderId, pickup, dropoff, fare, isPooled }) => {
         if (!rideId || !pickup || !pickup.lat || !pickup.lng) return;
         socket.data.searchRideId = rideId;
-        io.to('drivers:online').emit('nearby:rider:update', {
-            rideId,
-            riderId,
-            pickup,
-            dropoff,
-            fare,
-            isPooled
-        });
+        const NEARBY_RADIUS_KM = 6;
+        const payload = { rideId, riderId, pickup, dropoff, fare, isPooled };
+
+        // Send only to drivers within radius instead of broadcasting to all
+        for (const [driverId, entry] of onlineDrivers.entries()) {
+            if (!entry.location || typeof entry.location.lat !== 'number') {
+                // Driver has no GPS yet, skip
+                continue;
+            }
+            const dist = getDistanceKm(entry.location.lat, entry.location.lng, pickup.lat, pickup.lng);
+            if (dist !== null && dist <= NEARBY_RADIUS_KM) {
+                // Emit to each socket this driver has
+                for (const sid of entry.socketIds) {
+                    io.to(sid).emit('nearby:rider:update', payload);
+                }
+            }
+        }
     });
 
     socket.on('rider:search:stop', ({ rideId }) => {
@@ -628,7 +637,18 @@ app.get('/api/rides/driver/:driverId', async(req, res) => {
 app.get('/api/rides/nearby', async(req, res) => {
     try {
         const { lat, lng, radius = 6 } = req.query;
-        const rides = await Ride.find({ status: 'SEARCHING' }).sort({ bookingTime: -1 });
+        // Only return rides created in the last 15 minutes to avoid stale requests
+        const staleThreshold = new Date(Date.now() - 15 * 60 * 1000);
+        const rides = await Ride.find({
+            status: 'SEARCHING',
+            createdAt: { $gte: staleThreshold }
+        }).sort({ bookingTime: -1 });
+
+        // Auto-cancel old stale SEARCHING rides
+        await Ride.updateMany(
+            { status: 'SEARCHING', createdAt: { $lt: staleThreshold } },
+            { $set: { status: 'CANCELED' } }
+        );
 
         const latNum = lat ? Number(lat) : null;
         const lngNum = lng ? Number(lng) : null;
