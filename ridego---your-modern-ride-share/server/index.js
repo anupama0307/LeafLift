@@ -24,6 +24,7 @@ const emailTransporter = nodemailer.createTransport({
     },
 });
 const Ride = require('./models/Ride');
+const Notification = require('./models/Notification');
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -292,9 +293,18 @@ app.post('/api/signup', async(req, res) => {
         } : {};
 
         user = new User({
-            role, email, phone, firstName, lastName, dob, gender,
-            license, aadhar, authProvider: authProvider || 'email',
-            emailVerified: true, photoUrl,
+            role,
+            email,
+            phone,
+            firstName,
+            lastName,
+            dob,
+            gender,
+            license,
+            aadhar,
+            authProvider: authProvider || 'email',
+            emailVerified: true,
+            photoUrl,
             ...driverDefaults
         });
         await user.save();
@@ -374,34 +384,6 @@ app.get('/api/users', async(req, res) => {
         res.json(users);
     } catch (error) {
         res.status(500).json({ message: 'Error fetching users' });
-    }
-});
-
-// Get single user by ID
-app.get('/api/users/:userId', async(req, res) => {
-    try {
-        const user = await User.findById(req.params.userId);
-        if (!user) return res.status(404).json({ message: 'User not found' });
-        res.json(user);
-    } catch (error) {
-        res.status(500).json({ message: 'Error fetching user' });
-    }
-});
-
-// Update user profile
-app.put('/api/users/:userId', async(req, res) => {
-    try {
-        const allowedFields = ['firstName', 'lastName', 'email', 'phone', 'dob', 'gender', 'photoUrl', 'license', 'aadhar', 'vehicleMake', 'vehicleModel', 'vehicleNumber'];
-        const updates = {};
-        for (const key of allowedFields) {
-            if (req.body[key] !== undefined) updates[key] = req.body[key];
-        }
-        const user = await User.findByIdAndUpdate(req.params.userId, updates, { new: true, runValidators: true });
-        if (!user) return res.status(404).json({ message: 'User not found' });
-        res.json(user);
-    } catch (error) {
-        console.error('Update user error:', error);
-        res.status(500).json({ message: 'Error updating user' });
     }
 });
 
@@ -1090,5 +1072,5 @@ app.get('/api/drivers/nearby', async(req, res) => {
 });
 
 httpServer.listen(PORT, () => {
-    console.log(`✅ OLA Maps Server running on port ${PORT}`);
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
 });

@@ -17,6 +17,8 @@ interface AuthScreenProps {
 
 type AuthMode = 'WELCOME' | 'SIGNIN' | 'SIGNUP_FORM' | 'EMAIL_OTP' | 'OAUTH_COMPLETE';
 type UserRole = 'RIDER' | 'DRIVER';
+type AuthRole = 'RIDER' | 'DRIVER';
+type AuthStep = 'ROLE' | 'LANDING' | 'OTP' | 'NAME' | 'DOB' | 'GENDER' | 'LICENSE' | 'AADHAR';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 

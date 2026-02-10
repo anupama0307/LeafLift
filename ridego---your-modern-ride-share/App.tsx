@@ -99,7 +99,7 @@ const App: React.FC = () => {
       case AppScreen.CHAT_DETAIL:
         return <ChatDetailScreen chatId={activeChatId!} onBack={() => setCurrentScreen(AppScreen.INBOX)} />;
       case AppScreen.PLAN_RIDE:
-        return <PlanRideScreen onBack={() => setCurrentScreen(AppScreen.HOME)} initialVehicleCategory={selectedVehicleCategory} />;
+        return <PlanRideScreen user={user} onBack={() => setCurrentScreen(AppScreen.HOME)} initialVehicleCategory={selectedVehicleCategory} />;
       case AppScreen.ACCOUNT:
         return <AccountScreen user={user} onSignOut={handleSignOut} />;
       default:
