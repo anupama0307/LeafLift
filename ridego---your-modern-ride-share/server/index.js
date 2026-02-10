@@ -387,6 +387,186 @@ app.get('/api/users', async(req, res) => {
     }
 });
 
+// Get single user by ID
+app.get('/api/users/:userId', async(req, res) => {
+    try {
+        const user = await User.findById(req.params.userId);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        res.json(user);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching user' });
+    }
+});
+
+// Update user profile
+app.put('/api/users/:userId', async(req, res) => {
+    try {
+        const allowedFields = ['firstName', 'lastName', 'email', 'phone', 'dob', 'gender', 'photoUrl', 'license', 'aadhar', 'vehicleMake', 'vehicleModel', 'vehicleNumber'];
+        const updates = {};
+        for (const key of allowedFields) {
+            if (req.body[key] !== undefined) updates[key] = req.body[key];
+        }
+        const user = await User.findByIdAndUpdate(req.params.userId, updates, { new: true, runValidators: true });
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        res.json(user);
+    } catch (error) {
+        console.error('Update user error:', error);
+        res.status(500).json({ message: 'Error updating user' });
+    }
+});
+
+// ── Driver Daily Route ──
+app.post('/api/driver/route', async(req, res) => {
+    console.log('📬 Received route update request:', JSON.stringify(req.body, null, 2));
+    try {
+        const { userId, source, destination, isActive } = req.body;
+
+        const dailyRoute = {
+            source: {
+                address: source.address,
+                lat: Number(source.lat),
+                lng: Number(source.lng)
+            },
+            destination: {
+                address: destination.address,
+                lat: Number(destination.lat),
+                lng: Number(destination.lng)
+            },
+            isActive: isActive !== undefined ? isActive : true
+        };
+
+        const user = await User.findByIdAndUpdate(
+            userId, { dailyRoute }, { new: true, runValidators: false }
+        );
+
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        console.log('✅ Route updated successfully for user:', userId);
+        res.json({ message: 'Route updated', dailyRoute: user.dailyRoute });
+    } catch (error) {
+        console.error('❌ Update route error:', error);
+        res.status(500).json({ message: 'Error updating route', error: error.message });
+    }
+});
+
+app.get('/api/rider/match-driver', async(req, res) => {
+    try {
+        const { pickupLat, pickupLng, dropoffLat, dropoffLng } = req.query;
+        if (!pickupLat || !pickupLng || !dropoffLat || !dropoffLng) {
+            return res.status(400).json({ message: 'Missing coordinates' });
+        }
+
+        const pLat = Number(pickupLat);
+        const pLng = Number(pickupLng);
+        const dLat = Number(dropoffLat);
+        const dLng = Number(dropoffLng);
+
+        // Find drivers with active daily routes matching the rider's request
+        const drivers = await User.find({
+            role: 'DRIVER',
+            'dailyRoute.isActive': true
+        });
+
+        const matches = drivers.filter(driver => {
+            const route = driver.dailyRoute;
+            if (!route || !route.source || !route.destination) return false;
+
+            // Check pickup proximity (within 5km of driver source)
+            const pickupDist = getDistanceKm(pLat, pLng, route.source.lat, route.source.lng);
+            // Check dropoff proximity (within 5km of driver destination)
+            const dropoffDist = getDistanceKm(dLat, dLng, route.destination.lat, route.destination.lng);
+
+            return pickupDist <= 5 && dropoffDist <= 5;
+        });
+
+        res.json(matches.map(d => ({
+            id: d._id,
+            name: `${d.firstName} ${d.lastName}`,
+            rating: d.rating || 4.8,
+            vehicle: `${d.vehicleMake || ''} ${d.vehicleModel || ''}`,
+            vehicleNumber: d.vehicleNumber,
+            photoUrl: d.photoUrl,
+            phone: maskPhone(d.phone),
+            dailyRoute: d.dailyRoute
+        })));
+    } catch (error) {
+        console.error('Match driver error:', error);
+        res.status(500).json({ message: 'Error matching drivers' });
+    }
+});
+
+// ── Notifications ──
+app.get('/api/notifications/:userId', async(req, res) => {
+    try {
+        const notifications = await Notification.find({ userId: req.params.userId }).sort({ createdAt: -1 }).limit(20);
+        res.json(notifications);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching notifications' });
+    }
+});
+
+app.post('/api/notifications/:id/read', async(req, res) => {
+    try {
+        await Notification.findByIdAndUpdate(req.params.id, { isRead: true });
+        res.json({ ok: true });
+    } catch (error) {
+        res.status(500).json({ message: 'Error marking notification as read' });
+    }
+});
+
+app.get('/api/notifications/sent/:userId', async(req, res) => {
+    try {
+        const notifications = await Notification.find({ fromId: req.params.userId }).sort({ createdAt: -1 }).limit(20);
+        res.json(notifications);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching sent requests' });
+    }
+});
+
+// ── Daily Route Join Request ──
+app.post('/api/rider/request-daily-join', async(req, res) => {
+    console.log('📬 Daily join request received:', JSON.stringify(req.body, null, 2));
+    try {
+        const { riderId, driverId, pickup, dropoff } = req.body;
+
+        if (!riderId || !driverId || !pickup || !dropoff) {
+            console.error('❌ Missing fields in join request');
+            return res.status(400).json({ message: 'Missing required fields' });
+        }
+
+        const rider = await User.findById(riderId);
+        if (!rider) {
+            console.error('❌ Rider not found:', riderId);
+            return res.status(404).json({ message: 'Rider not found' });
+        }
+
+        const pickupAddr = pickup.address || 'Unknown Pickup';
+        const dropoffAddr = dropoff.address || 'Unknown Dropoff';
+
+        const notification = new Notification({
+            userId: driverId,
+            fromId: riderId,
+            title: 'New Daily Route Partner?',
+            message: `${rider.firstName} wants to join your daily route from ${pickupAddr.split(',')[0]} to ${dropoffAddr.split(',')[0]}.`,
+            type: 'DAILY_JOIN_REQUEST',
+            data: { riderId, pickup, dropoff }
+        });
+
+        await notification.save();
+        console.log('✅ Notification saved for driver:', driverId);
+
+        if (io) {
+            io.to(`user:${driverId}`).emit('notification:new', notification);
+            console.log('📡 Socket notification emitted to:', `user:${driverId}`);
+        }
+
+        res.json({ message: 'Request sent successfully', notification });
+    } catch (error) {
+        console.error('❌ Request daily join error:', error);
+        res.status(500).json({ message: 'Error sending join request', error: error.message });
+    }
+});
+
 // Ride Routes
 app.post('/api/rides', async(req, res) => {
     try {
