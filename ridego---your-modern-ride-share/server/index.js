@@ -38,10 +38,11 @@ const Notification = require('./models/Notification');
 
 const app = express();
 const PORT = process.env.PORT || 5001;
+const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:3005';
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
     cors: {
-        origin: '*',
+        origin: CORS_ORIGIN,
         methods: ['GET', 'POST', 'PUT']
     }
 });
