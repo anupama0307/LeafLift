@@ -467,7 +467,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ onBack, initialVehicleC
                         mapRef.current.flyTo({ center: [longitude, latitude], zoom: 15 });
                         const el = document.createElement('div');
                         el.style.cssText = 'width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:white;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.35);border:3px solid #22C55E;cursor:grab';
-                        el.innerHTML = '<span class="material-icons" style="font-size:20px;color:#22C55E">person_pin_circle</span>';
+                        el.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="#22C55E"><path d="M12 2C8.14 2 5 5.14 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.86-3.14-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>';
                         const marker = new window.maplibregl.Marker({ element: el, draggable: true })
                             .setLngLat([longitude, latitude]).addTo(mapRef.current);
                         marker.on('dragend', async () => {

@@ -377,6 +377,34 @@ app.get('/api/users', async(req, res) => {
     }
 });
 
+// Get single user by ID
+app.get('/api/users/:userId', async(req, res) => {
+    try {
+        const user = await User.findById(req.params.userId);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        res.json(user);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching user' });
+    }
+});
+
+// Update user profile
+app.put('/api/users/:userId', async(req, res) => {
+    try {
+        const allowedFields = ['firstName', 'lastName', 'email', 'phone', 'dob', 'gender', 'photoUrl', 'license', 'aadhar', 'vehicleMake', 'vehicleModel', 'vehicleNumber'];
+        const updates = {};
+        for (const key of allowedFields) {
+            if (req.body[key] !== undefined) updates[key] = req.body[key];
+        }
+        const user = await User.findByIdAndUpdate(req.params.userId, updates, { new: true, runValidators: true });
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        res.json(user);
+    } catch (error) {
+        console.error('Update user error:', error);
+        res.status(500).json({ message: 'Error updating user' });
+    }
+});
+
 // Ride Routes
 app.post('/api/rides', async(req, res) => {
     try {
@@ -954,7 +982,7 @@ app.get('/api/users/:userId/wallet', async(req, res) => {
     try {
         const user = await User.findById(req.params.userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
-        res.json({ balance: user.walletBalance || 0 });
+        res.json({ walletBalance: user.walletBalance || 0 });
     } catch (error) {
         res.status(500).json({ message: 'Error fetching wallet' });
     }
@@ -968,7 +996,7 @@ app.post('/api/users/:userId/wallet/add', async(req, res) => {
             req.params.userId, { $inc: { walletBalance: amount } }, { new: true }
         );
         if (!user) return res.status(404).json({ message: 'User not found' });
-        res.json({ balance: user.walletBalance });
+        res.json({ walletBalance: user.walletBalance });
     } catch (error) {
         res.status(500).json({ message: 'Error adding to wallet' });
     }
