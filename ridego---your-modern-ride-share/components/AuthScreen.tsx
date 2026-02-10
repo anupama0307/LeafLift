@@ -46,6 +46,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
   const [emailOtp, setEmailOtp] = useState(['', '', '', '', '', '']);
   const [otpSentTo, setOtpSentTo] = useState('');
   const [otpTimer, setOtpTimer] = useState(0);
+  const [otpPurpose, setOtpPurpose] = useState<'signup' | 'signin'>('signup');
+  const [pendingSignInUser, setPendingSignInUser] = useState<any>(null);
 
   // OAuth complete state (for filling remaining fields after Google/Apple sign in)
   const [oauthUser, setOauthUser] = useState<any>(null);
@@ -103,7 +105,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     handleRedirectResult();
   }, []);
 
-  // --- OAuth Sign In (check if user exists in DB) ---
+  // --- OAuth Sign In (check if user exists in DB, then send OTP) ---
   const handleOAuthSignIn = async (firebaseUser: any) => {
     setIsLoading(true);
     setError(null);
@@ -115,7 +117,11 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
       });
       const data = await response.json();
       if (data.exists && data.user) {
-        onAuthSuccess(data.user);
+        // Store user data and send OTP for verification
+        setPendingSignInUser(data.user);
+        setOtpPurpose('signin');
+        setIsLoading(false);
+        await sendEmailOTP(firebaseUser.email);
       } else {
         setError('No account found with this email. Please sign up first.');
         setIsLoading(false);
@@ -169,7 +175,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     }
   };
 
-  // --- Email/Password Sign In ---
+  // --- Email/Password Sign In (verify credentials, then send OTP) ---
   const handleEmailSignIn = async () => {
     if (!signInEmail || !signInPassword) {
       setError('Please enter email and password');
@@ -189,7 +195,11 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
       });
       const data = await response.json();
       if (data.exists && data.user) {
-        onAuthSuccess(data.user);
+        // Store user data and send OTP for verification
+        setPendingSignInUser(data.user);
+        setOtpPurpose('signin');
+        setIsLoading(false);
+        await sendEmailOTP(signInEmail);
       } else {
         setError('Account not found in our system. Please sign up.');
         setIsLoading(false);
@@ -268,7 +278,13 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Invalid OTP');
 
-      await completeSignup();
+      if (otpPurpose === 'signin' && pendingSignInUser) {
+        // Sign-in OTP verified — complete login
+        onAuthSuccess(pendingSignInUser);
+      } else {
+        // Sign-up OTP verified — complete registration
+        await completeSignup();
+      }
     } catch (err: any) {
       setError(err.message || 'OTP verification failed');
       setIsLoading(false);
@@ -352,6 +368,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
       return;
     }
     setError(null);
+    setOtpPurpose('signup');
     sendEmailOTP(email);
   };
 
@@ -515,12 +532,12 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
         ) : 'Sign In'}
       </button>
 
-      <p className="text-center text-gray-500 dark:text-zinc-400 font-medium mt-6">
+      <div className="text-center text-gray-500 dark:text-zinc-400 font-medium mt-6">
         Don't have an account?{' '}
-        <button onClick={() => { setMode('SIGNUP_FORM'); setError(null); setSuccessMessage(null); }} className="text-leaf-600 dark:text-leaf-400 font-bold hover:underline">
+        <button onClick={() => { setMode('SIGNUP_FORM'); setError(null); setSuccessMessage(null); }} className="text-leaf-600 dark:text-leaf-400 font-bold underline cursor-pointer">
           Sign Up
         </button>
-      </p>
+      </div>
     </div>
   );
 
@@ -719,12 +736,12 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
         ) : 'Continue'}
       </button>
 
-      <p className="text-center text-gray-500 dark:text-zinc-400 font-medium">
+      <div className="text-center text-gray-500 dark:text-zinc-400 font-medium">
         Already have an account?{' '}
-        <button onClick={() => { setMode('SIGNIN'); setError(null); setSuccessMessage(null); }} className="text-leaf-600 dark:text-leaf-400 font-bold hover:underline">
+        <button onClick={() => { setMode('SIGNIN'); setError(null); setSuccessMessage(null); }} className="text-leaf-600 dark:text-leaf-400 font-bold underline cursor-pointer">
           Sign In
         </button>
-      </p>
+      </div>
     </div>
   );
 
@@ -884,7 +901,12 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     <div className="flex-1 px-6 pt-8 animate-in fade-in slide-in-from-right duration-300">
       <StepHeader
         onBack={() => {
-          setMode(oauthUser ? 'OAUTH_COMPLETE' : 'SIGNUP_FORM');
+          if (otpPurpose === 'signin') {
+            setMode('SIGNIN');
+            setPendingSignInUser(null);
+          } else {
+            setMode(oauthUser ? 'OAUTH_COMPLETE' : 'SIGNUP_FORM');
+          }
           setEmailOtp(['', '', '', '', '', '']);
           setError(null);
           setSuccessMessage(null);
@@ -927,7 +949,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
       >
         {isLoading ? (
           <><span className="material-icons-outlined animate-spin">sync</span> Verifying...</>
-        ) : 'Verify & Sign Up'}
+        ) : otpPurpose === 'signin' ? 'Verify & Sign In' : 'Verify & Sign Up'}
       </button>
 
       <button
