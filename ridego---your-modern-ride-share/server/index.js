@@ -1271,6 +1271,11 @@ app.get('/api/drivers/nearby', async(req, res) => {
     }
 });
 
-httpServer.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
-});
+// Only start listening when run directly (not when imported for testing)
+if (require.main === module) {
+    httpServer.listen(PORT, () => {
+        console.log(`🚀 Server running on http://localhost:${PORT}`);
+    });
+}
+
+module.exports = { app, httpServer, io, onlineDrivers, otpStore };
