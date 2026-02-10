@@ -12,6 +12,7 @@ declare global {
 
 interface DriverDashboardProps {
   user: any;
+  onNavigate?: (screen: string) => void;
 }
 
 type RideStatus = 'IDLE' | 'SEARCHING' | 'ACCEPTED' | 'ARRIVED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELED';
@@ -25,7 +26,7 @@ interface ChatMessage {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
-const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
+const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) => {
   const [isOnline, setIsOnline] = useState(false);
   const [requests, setRequests] = useState<any[]>([]);
   const [activeRide, setActiveRide] = useState<any>(null);
@@ -1049,6 +1050,24 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
               </button>
             </>
           )}
+        </div>
+      )}
+
+      {/* Floating Nav - hidden during active ride to avoid overlapping the ride panel */}
+      {!activeRide && (
+        <div className="absolute bottom-8 left-0 right-0 z-40 px-8 flex justify-between pointer-events-none">
+          <button
+            onClick={() => onNavigate?.('ACCOUNT')}
+            className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
+          >
+            <span className="material-icons-outlined">person</span>
+          </button>
+          <button
+            onClick={() => onNavigate?.('INBOX')}
+            className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
+          >
+            <span className="material-icons-outlined">chat_bubble</span>
+          </button>
         </div>
       )}
 

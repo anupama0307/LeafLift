@@ -87,7 +87,7 @@ const App: React.FC = () => {
 
     switch (currentScreen) {
       case AppScreen.DRIVER_DASHBOARD:
-        return <DriverDashboard user={user} />;
+        return <DriverDashboard user={user} onNavigate={(s) => setCurrentScreen(s === 'ACCOUNT' ? AppScreen.ACCOUNT : s === 'INBOX' ? AppScreen.INBOX : AppScreen.DRIVER_DASHBOARD)} />;
       case AppScreen.HOME:
         return <HomeScreen onOpenPlan={(vehicleCategory?: string, schedule?: { scheduledFor: string; forName?: string; forPhone?: string }) => {
           setSelectedVehicleCategory(vehicleCategory);
@@ -105,7 +105,7 @@ const App: React.FC = () => {
       case AppScreen.ACCOUNT:
         return <AccountScreen user={user} onSignOut={handleSignOut} />;
       default:
-        return user?.role === 'DRIVER' ? <DriverDashboard user={user} /> : <HomeScreen onOpenPlan={(vehicleCategory?: string, schedule?: { scheduledFor: string; forName?: string; forPhone?: string }) => {
+        return user?.role === 'DRIVER' ? <DriverDashboard user={user} onNavigate={(s) => setCurrentScreen(s === 'ACCOUNT' ? AppScreen.ACCOUNT : s === 'INBOX' ? AppScreen.INBOX : AppScreen.DRIVER_DASHBOARD)} /> : <HomeScreen onOpenPlan={(vehicleCategory?: string, schedule?: { scheduledFor: string; forName?: string; forPhone?: string }) => {
           setSelectedVehicleCategory(vehicleCategory);
           setScheduleInfo(schedule);
           setCurrentScreen(AppScreen.PLAN_RIDE);
