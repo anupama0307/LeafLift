@@ -4,12 +4,25 @@ const cors = require('cors');
 const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
+const nodemailer = require('nodemailer');
 
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 require('dotenv').config();
 
 const axios = require('axios');
 const User = require('./models/User');
+
+// In-memory OTP store (use Redis in production)
+const otpStore = new Map();
+
+// Email transporter for sending OTPs
+const emailTransporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: process.env.OTP_EMAIL_USER,
+        pass: process.env.OTP_EMAIL_PASS,
+    },
+});
 const Ride = require('./models/Ride');
 
 const app = express();
@@ -231,8 +244,13 @@ mongoose.connect(MONGODB_URI)
 // User Routes
 app.post('/api/login', async(req, res) => {
     try {
-        const { phone, role } = req.body;
-        const user = await User.findOne({ phone, role });
+        const { email, phone, role } = req.body;
+        let user;
+        if (email) {
+            user = await User.findOne({ email });
+        } else if (phone && role) {
+            user = await User.findOne({ phone, role });
+        }
         res.json({ exists: !!user, user });
     } catch (error) {
         console.error('Login error:', error);
@@ -244,6 +262,7 @@ app.post('/api/signup', async(req, res) => {
     try {
         const {
             role,
+            email,
             phone,
             firstName,
             lastName,
@@ -251,6 +270,7 @@ app.post('/api/signup', async(req, res) => {
             gender,
             license,
             aadhar,
+            authProvider,
             vehicleMake,
             vehicleModel,
             vehicleNumber,
@@ -258,9 +278,9 @@ app.post('/api/signup', async(req, res) => {
             photoUrl
         } = req.body;
 
-        let user = await User.findOne({ phone, role });
+        let user = await User.findOne({ email });
         if (user) {
-            return res.status(400).json({ message: 'User already exists' });
+            return res.status(400).json({ message: 'User already exists with this email' });
         }
 
         const driverDefaults = role === 'DRIVER' ? {
@@ -268,15 +288,83 @@ app.post('/api/signup', async(req, res) => {
             vehicleModel: vehicleModel || 'Nexon',
             vehicleNumber: vehicleNumber || 'TN 37 AB 1234',
             rating: rating || 4.8,
-            photoUrl: photoUrl || `https://i.pravatar.cc/150?u=${phone}`
+            photoUrl: photoUrl || `https://i.pravatar.cc/150?u=${email}`
         } : {};
 
-        user = new User({ role, phone, firstName, lastName, dob, gender, license, aadhar, ...driverDefaults });
+        user = new User({
+            role, email, phone, firstName, lastName, dob, gender,
+            license, aadhar, authProvider: authProvider || 'email',
+            emailVerified: true, photoUrl,
+            ...driverDefaults
+        });
         await user.save();
         res.status(201).json({ message: 'User created', user });
     } catch (error) {
         console.error('Signup error:', error);
         res.status(500).json({ message: 'Server error during signup' });
+    }
+});
+
+// --- Email OTP Endpoints ---
+app.post('/api/send-otp', async(req, res) => {
+    try {
+        const { email } = req.body;
+        if (!email) return res.status(400).json({ message: 'Email is required' });
+
+        // Generate 6-digit OTP
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
+
+        otpStore.set(email, { otp, expiresAt });
+
+        // Check if email transporter is configured
+        if (process.env.OTP_EMAIL_USER && process.env.OTP_EMAIL_PASS) {
+            await emailTransporter.sendMail({
+                from: `"LeafLift" <${process.env.OTP_EMAIL_USER}>`,
+                to: email,
+                subject: 'LeafLift - Email Verification OTP',
+                html: `
+                    <div style="font-family: Arial, sans-serif; max-width: 400px; margin: 0 auto; padding: 20px;">
+                        <h2 style="color: #16a34a;">LeafLift</h2>
+                        <p>Your email verification code is:</p>
+                        <div style="background: #f3f4f6; padding: 20px; text-align: center; border-radius: 12px; margin: 20px 0;">
+                            <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #111;">${otp}</span>
+                        </div>
+                        <p style="color: #666; font-size: 14px;">This code expires in 5 minutes. Do not share it with anyone.</p>
+                    </div>
+                `,
+            });
+            console.log(`📧 OTP sent to ${email}`);
+        } else {
+            // Dev fallback: log OTP to console
+            console.log(`📧 [DEV] OTP for ${email}: ${otp}`);
+        }
+
+        res.json({ message: 'OTP sent successfully' });
+    } catch (error) {
+        console.error('Send OTP error:', error);
+        res.status(500).json({ message: 'Failed to send OTP' });
+    }
+});
+
+app.post('/api/verify-otp', async(req, res) => {
+    try {
+        const { email, otp } = req.body;
+        if (!email || !otp) return res.status(400).json({ message: 'Email and OTP are required' });
+
+        const stored = otpStore.get(email);
+        if (!stored) return res.status(400).json({ message: 'No OTP found. Please request a new one.' });
+        if (Date.now() > stored.expiresAt) {
+            otpStore.delete(email);
+            return res.status(400).json({ message: 'OTP expired. Please request a new one.' });
+        }
+        if (stored.otp !== otp) return res.status(400).json({ message: 'Invalid OTP. Please try again.' });
+
+        otpStore.delete(email);
+        res.json({ message: 'OTP verified successfully', verified: true });
+    } catch (error) {
+        console.error('Verify OTP error:', error);
+        res.status(500).json({ message: 'Failed to verify OTP' });
     }
 });
 
