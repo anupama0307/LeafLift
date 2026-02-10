@@ -1089,6 +1089,11 @@ app.get('/api/drivers/nearby', async(req, res) => {
     }
 });
 
-httpServer.listen(PORT, () => {
-    console.log(`✅ OLA Maps Server running on port ${PORT}`);
-});
+// Only start listening if this file is run directly (not imported for testing)
+if (require.main === module) {
+    httpServer.listen(PORT, () => {
+        console.log(`✅ OLA Maps Server running on port ${PORT}`);
+    });
+}
+
+module.exports = { app, httpServer, io, onlineDrivers, otpStore };
