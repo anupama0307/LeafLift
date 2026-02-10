@@ -171,7 +171,12 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
 
         socket.on('chat:message', (msg: any) => {
             if (!msg?.message) return;
-            setChatMessages(prev => [...prev, { ...msg, createdAt: msg.createdAt || new Date().toISOString() }]);
+            // Avoid duplicating optimistically-added messages from self
+            setChatMessages(prev => {
+                const isDupe = prev.some(m => m.message === msg.message && m.senderRole === msg.senderRole && Math.abs(new Date(m.createdAt).getTime() - new Date(msg.createdAt || Date.now()).getTime()) < 3000);
+                if (isDupe) return prev;
+                return [...prev, { ...msg, createdAt: msg.createdAt || new Date().toISOString() }];
+            });
         });
 
         socket.on('nearby:driver:update', (payload: any) => {
@@ -852,12 +857,24 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         if (!chatInput.trim() || !activeRideId) return;
         const userStr = localStorage.getItem('leaflift_user');
         const user = userStr ? JSON.parse(userStr) : null;
-        await fetch(`${API_BASE_URL}/api/rides/${activeRideId}/messages`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ senderId: user?._id, senderRole: 'RIDER', message: chatInput.trim() })
-        }).catch(() => { });
+        const msgText = chatInput.trim();
+        const optimisticMsg = {
+            senderId: user?._id,
+            senderRole: 'RIDER',
+            message: msgText,
+            createdAt: new Date().toISOString()
+        };
+        setChatMessages(prev => [...prev, optimisticMsg]);
         setChatInput('');
+        try {
+            await fetch(`${API_BASE_URL}/api/rides/${activeRideId}/messages`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ senderId: user?._id, senderRole: 'RIDER', message: msgText })
+            });
+        } catch (err) {
+            console.error('Failed to send message', err);
+        }
     };
 
     // ─── Confirm ride completion ───
@@ -894,6 +911,8 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         nearbyDriverMarkersRef.current.forEach(m => m.remove());
         nearbyDriverMarkersRef.current.clear();
         nearbyDriverPositionsRef.current.clear();
+        // Navigate back to home screen
+        onBack();
     };
 
     // ─── RENDER ───
