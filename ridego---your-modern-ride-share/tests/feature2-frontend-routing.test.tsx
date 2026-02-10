@@ -1,3 +1,4 @@
+/// <reference types="vitest/globals" />
 /**
  * Feature 2: Frontend Routing & Auth Guards
  * Tests that the App component correctly guards private routes
