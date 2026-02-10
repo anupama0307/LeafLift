@@ -90,35 +90,61 @@ const ChatDetailScreen: React.FC<ChatDetailScreenProps> = ({ chatId, onBack }) =
         <button onClick={onBack} className="p-2 -ml-2 rounded-full hover:bg-gray-100 dark:hover:bg-zinc-800">
           <span className="material-icons-outlined">arrow_back</span>
         </button>
-        <div className="flex-1 ml-2">
-          <h3 className="font-bold text-sm">Ride Chat</h3>
+        <div className="size-10 rounded-full bg-gray-100 dark:bg-zinc-800 flex items-center justify-center ml-2">
+          <span className="material-icons-outlined text-lg text-gray-500">{isRider ? 'directions_car' : 'person'}</span>
+        </div>
+        <div className="flex-1 ml-3">
+          <h3 className="font-bold text-sm">{maskedPhone || (isRider ? 'Driver' : 'Rider')}</h3>
           <div className="flex items-center gap-2">
+            <div className={`size-1.5 rounded-full ${ride?.status === 'IN_PROGRESS' ? 'bg-leaf-500' : ride?.status === 'COMPLETED' ? 'bg-gray-400' : 'bg-blue-500'}`}></div>
             <span className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">{ride?.status || 'Active'}</span>
-            {maskedPhone && <span className="text-[10px] text-gray-400">• {maskedPhone}</span>}
+            {ride?.pickup?.address && <span className="text-[10px] text-gray-400 truncate max-w-[120px]">• {ride.pickup.address.split(',')[0]}</span>}
           </div>
         </div>
         {maskedPhone && (
-          <button onClick={() => alert(`Call via masked number: ${maskedPhone}`)} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-zinc-800">
-            <span className="material-icons-outlined text-xl">phone</span>
+          <button onClick={() => alert(`Call via masked number: ${maskedPhone}`)} className="size-10 rounded-full bg-leaf-50 dark:bg-leaf-900/20 flex items-center justify-center hover:scale-105 transition-transform">
+            <span className="material-icons text-lg text-leaf-600 dark:text-leaf-400">phone</span>
           </button>
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.map((m, idx) => (
-          <div key={`${m.createdAt}-${idx}`} className={`flex ${m.senderRole === user?.role ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[80%] rounded-2xl px-4 py-3 ${
-              m.senderRole === user?.role
-                ? 'bg-black text-white dark:bg-white dark:text-black rounded-tr-none'
-                : 'bg-gray-100 dark:bg-zinc-800 rounded-tl-none'
-            }`}>
-              <p className="text-sm font-medium">{m.message}</p>
-              <p className={`text-[10px] mt-1 ${m.senderRole === user?.role ? 'opacity-50' : 'text-gray-400'}`}>
-                {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </p>
-            </div>
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {messages.length === 0 && (
+          <div className="text-center py-12">
+            <span className="material-icons-outlined text-4xl text-gray-200 dark:text-zinc-700 mb-2">chat</span>
+            <p className="text-xs text-gray-400 dark:text-gray-500 font-semibold">No messages yet</p>
+            <p className="text-[10px] text-gray-300 dark:text-gray-600 mt-0.5">Send a message to your {isRider ? 'driver' : 'rider'}</p>
           </div>
-        ))}
+        )}
+        {messages.map((m, idx) => {
+          const isMine = m.senderRole === user?.role;
+          // Show date separator if day changes
+          const prevMsg = idx > 0 ? messages[idx - 1] : null;
+          const showDate = !prevMsg || new Date(m.createdAt).toDateString() !== new Date(prevMsg.createdAt).toDateString();
+          return (
+            <React.Fragment key={`${m.createdAt}-${idx}`}>
+              {showDate && (
+                <div className="flex justify-center my-2">
+                  <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-zinc-800 px-3 py-1 rounded-full">
+                    {new Date(m.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </span>
+                </div>
+              )}
+              <div className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 ${
+                  isMine
+                    ? 'bg-black text-white dark:bg-white dark:text-black rounded-tr-sm'
+                    : 'bg-gray-100 dark:bg-zinc-800 rounded-tl-sm'
+                }`}>
+                  <p className="text-sm font-medium leading-relaxed">{m.message}</p>
+                  <p className={`text-[10px] mt-1 ${isMine ? 'opacity-40 text-right' : 'text-gray-400'}`}>
+                    {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                </div>
+              </div>
+            </React.Fragment>
+          );
+        })}
         <div ref={scrollRef} />
       </div>
 
