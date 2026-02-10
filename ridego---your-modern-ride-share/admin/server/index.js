@@ -304,7 +304,7 @@ app.get('/api/admin/fleet/utilization', async(req, res) => {
 
         const categories = ['BIKE', 'AUTO', 'CAR', 'BIG_CAR'];
         const icons = { BIKE: 'two_wheeler', AUTO: 'electric_rickshaw', CAR: 'directions_car', BIG_CAR: 'airport_shuttle' };
-        const labels = { BIKE: 'Bike', AUTO: 'Auto', CAR: 'Car', BIG_CAR: 'Big Car' };
+        const labels = { BIKE: 'Bike', AUTO: 'Auto', CAR: 'Car', BIG_CAR: 'SUV' };
 
         let dateFilter = {};
         const now = new Date();

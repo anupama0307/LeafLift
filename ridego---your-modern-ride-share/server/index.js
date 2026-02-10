@@ -77,6 +77,10 @@ io.on('connection', (socket) => {
         if (role === 'DRIVER') {
             socket.data.role = 'DRIVER';
             socket.join('drivers:online');
+            // Track this socket in onlineDrivers so location-filtered emits work
+            const entry = onlineDrivers.get(userId) || { socketIds: new Set(), location: null };
+            entry.socketIds.add(socket.id);
+            onlineDrivers.set(userId, entry);
         }
         if (role === 'RIDER') {
             socket.data.role = 'RIDER';
@@ -95,6 +99,7 @@ io.on('connection', (socket) => {
     socket.on('driver:location', ({ driverId, lat, lng }) => {
         if (!driverId || typeof lat !== 'number' || typeof lng !== 'number') return;
         const entry = onlineDrivers.get(driverId) || { socketIds: new Set(), location: null };
+        entry.socketIds.add(socket.id);
         entry.location = { lat, lng, updatedAt: new Date() };
         onlineDrivers.set(driverId, entry);
         io.to('riders:online').emit('nearby:driver:update', { driverId, lat, lng });
@@ -490,9 +495,9 @@ app.get('/api/rider/match-driver', async(req, res) => {
 
         res.json(matches.map(d => ({
             id: d._id,
-            name: `${d.firstName} ${d.lastName}`,
+            name: [d.firstName, d.lastName].filter(Boolean).join(' ') || d.email || 'Driver',
             rating: d.rating || 4.8,
-            vehicle: `${d.vehicleMake || ''} ${d.vehicleModel || ''}`,
+            vehicle: [d.vehicleMake || '', d.vehicleModel || ''].filter(Boolean).join(' ') || 'Car',
             vehicleNumber: d.vehicleNumber,
             photoUrl: d.photoUrl,
             phone: maskPhone(d.phone),
@@ -597,7 +602,9 @@ app.post('/api/rides', async(req, res) => {
         const ride = new Ride(payload);
         await ride.save();
 
-        io.to('drivers:online').emit('ride:request', {
+        // Location-filtered broadcast: only send to drivers within 6 km of pickup
+        const RIDE_BROADCAST_RADIUS_KM = 6;
+        const ridePayload = {
             rideId: ride._id,
             pickup: ride.pickup,
             dropoff: ride.dropoff,
@@ -606,7 +613,25 @@ app.post('/api/rides', async(req, res) => {
             isPooled: ride.isPooled,
             routeIndex: ride.routeIndex,
             bookingTime: ride.bookingTime
-        });
+        };
+
+        if (ride.pickup && typeof ride.pickup.lat === 'number' && typeof ride.pickup.lng === 'number') {
+            let sentCount = 0;
+            for (const [driverId, entry] of onlineDrivers.entries()) {
+                if (!entry.location || typeof entry.location.lat !== 'number') continue;
+                const dist = getDistanceKm(entry.location.lat, entry.location.lng, ride.pickup.lat, ride.pickup.lng);
+                if (dist !== null && dist <= RIDE_BROADCAST_RADIUS_KM) {
+                    for (const sid of entry.socketIds) {
+                        io.to(sid).emit('ride:request', ridePayload);
+                    }
+                    sentCount++;
+                }
+            }
+            console.log(`ride:request sent to ${sentCount} nearby drivers (within ${RIDE_BROADCAST_RADIUS_KM}km)`);
+        } else {
+            // Fallback: no pickup coords, broadcast to all
+            io.to('drivers:online').emit('ride:request', ridePayload);
+        }
 
         res.status(201).json(ride);
     } catch (error) {
@@ -836,16 +861,16 @@ app.post('/api/rides/:rideId/accept', async(req, res) => {
             ride,
             driver: driver ? {
                 id: driver._id,
-                name: `${driver.firstName} ${driver.lastName}`,
+                name: [driver.firstName, driver.lastName].filter(Boolean).join(' ') || driver.email || 'Driver',
                 rating: driver.rating || 4.8,
-                vehicle: `${driver.vehicleMake || 'Car'} ${driver.vehicleModel || ''}`.trim(),
+                vehicle: [driver.vehicleMake || 'Car', driver.vehicleModel || ''].filter(Boolean).join(' '),
                 vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                 photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
                 maskedPhone: maskPhone(driver.phone)
             } : null,
             rider: rider ? {
                 id: rider._id,
-                name: `${rider.firstName} ${rider.lastName}`,
+                name: [rider.firstName, rider.lastName].filter(Boolean).join(' ') || rider.email || 'Rider',
                 maskedPhone: maskPhone(rider.phone)
             } : null
         };

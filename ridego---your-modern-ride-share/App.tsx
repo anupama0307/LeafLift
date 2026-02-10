@@ -20,6 +20,7 @@ const App: React.FC = () => {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [selectedVehicleCategory, setSelectedVehicleCategory] = useState<string | undefined>(undefined);
+  const [scheduleInfo, setScheduleInfo] = useState<{ scheduledFor: string; forName?: string; forPhone?: string } | undefined>(undefined);
 
   useEffect(() => {
     const savedUser = localStorage.getItem('leaflift_user');
@@ -88,8 +89,9 @@ const App: React.FC = () => {
       case AppScreen.DRIVER_DASHBOARD:
         return <DriverDashboard user={user} />;
       case AppScreen.HOME:
-        return <HomeScreen onOpenPlan={(vehicleCategory?: string) => {
+        return <HomeScreen onOpenPlan={(vehicleCategory?: string, schedule?: { scheduledFor: string; forName?: string; forPhone?: string }) => {
           setSelectedVehicleCategory(vehicleCategory);
+          setScheduleInfo(schedule);
           setCurrentScreen(AppScreen.PLAN_RIDE);
         }} />;
       case AppScreen.ACTIVITY:
@@ -99,12 +101,13 @@ const App: React.FC = () => {
       case AppScreen.CHAT_DETAIL:
         return <ChatDetailScreen chatId={activeChatId!} onBack={() => setCurrentScreen(AppScreen.INBOX)} />;
       case AppScreen.PLAN_RIDE:
-        return <PlanRideScreen user={user} onBack={() => setCurrentScreen(AppScreen.HOME)} initialVehicleCategory={selectedVehicleCategory} />;
+        return <PlanRideScreen user={user} onBack={() => setCurrentScreen(AppScreen.HOME)} initialVehicleCategory={selectedVehicleCategory} scheduleInfo={scheduleInfo} />;
       case AppScreen.ACCOUNT:
         return <AccountScreen user={user} onSignOut={handleSignOut} />;
       default:
-        return user?.role === 'DRIVER' ? <DriverDashboard user={user} /> : <HomeScreen onOpenPlan={(vehicleCategory?: string) => {
+        return user?.role === 'DRIVER' ? <DriverDashboard user={user} /> : <HomeScreen onOpenPlan={(vehicleCategory?: string, schedule?: { scheduledFor: string; forName?: string; forPhone?: string }) => {
           setSelectedVehicleCategory(vehicleCategory);
+          setScheduleInfo(schedule);
           setCurrentScreen(AppScreen.PLAN_RIDE);
         }} />;
     }

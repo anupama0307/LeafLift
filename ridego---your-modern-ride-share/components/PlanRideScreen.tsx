@@ -14,6 +14,7 @@ interface PlanRideScreenProps {
     user: any;
     onBack: () => void;
     initialVehicleCategory?: string;
+    scheduleInfo?: { scheduledFor: string; forName?: string; forPhone?: string };
 }
 
 type RideStatus = 'IDLE' | 'SEARCHING' | 'ACCEPTED' | 'ARRIVED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELED';
@@ -39,7 +40,7 @@ interface RideChatMessage {
 const NEARBY_RADIUS_KM = 6;
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
-const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVehicleCategory }) => {
+const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVehicleCategory, scheduleInfo }) => {
     const [destination, setDestination] = useState('');
     const [pickup, setPickup] = useState('Current Location');
     const [showOptions, setShowOptions] = useState(false);
@@ -61,6 +62,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [maskedDriverPhone, setMaskedDriverPhone] = useState<string | null>(null);
     const [passengers, setPassengers] = useState(1);
     const [maxPassengers, setMaxPassengers] = useState(4);
+    const [safetyPrefs, setSafetyPrefs] = useState({ womenOnly: false, verifiedOnly: false, noSmoking: false });
     const [confirmCompleteData, setConfirmCompleteData] = useState<any>(null);
     const [inProgressPooledRides, setInProgressPooledRides] = useState<any[]>([]);
     const [matchedDrivers, setMatchedDrivers] = useState<DriverDetails[]>([]);
@@ -701,7 +703,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                 const prices = new Map<string, number>();
                 VEHICLE_CATEGORIES.forEach(cat => {
                     const price = Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate);
-                    prices.set(cat.id, rideMode === 'Pooled' ? Math.round(price * 0.67) : price);
+                    prices.set(cat.id, rideMode === 'Pooled' ? Math.round(price * 0.67 * passengers) : price);
                 });
                 setCategoryPrices(prices);
 
@@ -776,7 +778,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         const prices = new Map<string, number>();
         VEHICLE_CATEGORIES.forEach(cat => {
             const price = Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate);
-            prices.set(cat.id, rideMode === 'Pooled' ? Math.round(price * 0.67) : price);
+            prices.set(cat.id, rideMode === 'Pooled' ? Math.round(price * 0.67 * passengers) : price);
         });
         setCategoryPrices(prices);
         availableRoutes.forEach((_, i) => {
@@ -788,7 +790,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         });
     };
 
-    // ─── Recalc prices on mode change ───
+    // ─── Recalc prices on mode/passenger change ───
     useEffect(() => {
         if (availableRoutes.length === 0) return;
         const route = availableRoutes[selectedRouteIndex];
@@ -796,10 +798,20 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         const prices = new Map<string, number>();
         VEHICLE_CATEGORIES.forEach(cat => {
             const price = Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate);
-            prices.set(cat.id, rideMode === 'Pooled' ? Math.round(price * 0.67) : price);
+            prices.set(cat.id, rideMode === 'Pooled' ? Math.round(price * 0.67 * passengers) : price);
         });
         setCategoryPrices(prices);
-    }, [rideMode, selectedRouteIndex, availableRoutes]);
+    }, [rideMode, selectedRouteIndex, availableRoutes, passengers]);
+
+    // ─── Auto-switch from BIKE when entering Pooled mode, reset passengers on Solo ───
+    useEffect(() => {
+        if (rideMode === 'Pooled' && selectedCategory === 'BIKE') {
+            setSelectedCategory('CAR');
+        }
+        if (rideMode === 'Solo') {
+            setPassengers(1);
+        }
+    }, [rideMode]);
 
     // ─── Fetch in-progress pooled rides for joining ───
     useEffect(() => {
@@ -858,7 +870,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
 
         const rideData = {
             userId: user._id,
-            status: 'SEARCHING',
+            status: scheduleInfo ? 'SCHEDULED' : 'SEARCHING',
             pickup: { address: pickup, lat: finalPickupCoords?.lat, lng: finalPickupCoords?.lng },
             dropoff: { address: destination, lat: dropoffCoords?.lat, lng: dropoffCoords?.lng },
             fare: price,
@@ -875,21 +887,36 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             isPooled: rideMode === 'Pooled' && (selectedCategory === 'CAR' || selectedCategory === 'BIG_CAR'),
             passengers,
             maxPassengers: rideMode === 'Pooled' ? maxPassengers : passengers,
-            bookingTime: new Date().toISOString()
+            ...(rideMode === 'Pooled' ? { safetyPreferences: safetyPrefs } : {}),
+            bookingTime: new Date().toISOString(),
+            ...(scheduleInfo ? {
+                isScheduled: true,
+                scheduledFor: scheduleInfo.scheduledFor,
+                scheduledForName: scheduleInfo.forName,
+                scheduledForPhone: scheduleInfo.forPhone
+            } : {})
         };
 
         try {
-            const resp = await fetch(`${API_BASE_URL}/api/rides`, {
+            const endpoint = scheduleInfo
+                ? `${API_BASE_URL}/api/rides/schedule`
+                : `${API_BASE_URL}/api/rides`;
+            const resp = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(rideData)
             });
             if (resp.ok) {
                 const data = await resp.json();
-                setActiveRideId(data._id);
-                setRideStatus('SEARCHING');
-                setCurrentFare(data.currentFare || data.fare || price);
-                setShowOptions(false);
+                if (scheduleInfo) {
+                    alert(`Ride scheduled for ${new Date(scheduleInfo.scheduledFor).toLocaleString()}!`);
+                    onBack();
+                } else {
+                    setActiveRideId(data._id);
+                    setRideStatus('SEARCHING');
+                    setCurrentFare(data.currentFare || data.fare || price);
+                    setShowOptions(false);
+                }
             } else {
                 alert('Failed to book ride.');
             }
@@ -1119,48 +1146,78 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             </div>
                         )}
 
-                        {/* Mode Toggle */}
-                        <div className="flex gap-2 mt-3">
-                            <button
-                                onClick={() => setRideMode('Solo')}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Solo'
-                                    ? 'bg-black dark:bg-white text-white dark:text-black'
-                                    : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
-                                    }`}
-                            >
-                                Solo
-                            </button>
-                            <button
-                                onClick={() => setRideMode('Pooled')}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Pooled'
-                                    ? 'bg-green-500 text-white'
-                                    : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
-                                    }`}
-                            >
-                                🌱 Pool
-                            </button>
-                        </div>
+                        {/* Mode Toggle with Savings */}
+                        {(() => {
+                            const route = availableRoutes[selectedRouteIndex];
+                            const cat = VEHICLE_CATEGORIES.find(c => c.id === selectedCategory);
+                            const soloPrice = route && cat ? Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate) : 0;
+                            const poolPrice = route && cat ? Math.round(soloPrice * 0.67) : 0;
+                            const fareSaved = soloPrice - poolPrice;
+                            const co2Solo = route ? calculateCO2(route.distance, selectedCategory) : 0;
+                            const co2Pool = route ? calculateCO2(route.distance, 'pool') : 0;
+                            const co2Saved = co2Solo - co2Pool;
+                            return (
+                                <>
+                                    <div className="flex gap-2 mt-3">
+                                        <button
+                                            onClick={() => setRideMode('Solo')}
+                                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Solo'
+                                                ? 'bg-black dark:bg-white text-white dark:text-black'
+                                                : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
+                                                }`}
+                                        >
+                                            Solo {rideMode === 'Solo' && route ? `• ₹${soloPrice}` : ''}
+                                        </button>
+                                        <button
+                                            onClick={() => setRideMode('Pooled')}
+                                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Pooled'
+                                                ? 'bg-green-500 text-white'
+                                                : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
+                                                }`}
+                                        >
+                                            🌱 Pool {rideMode === 'Pooled' && route ? `• ₹${poolPrice}` : ''}
+                                        </button>
+                                    </div>
+                                    {route && fareSaved > 0 && (
+                                        <div className={`mt-2 p-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all ${rideMode === 'Pooled'
+                                            ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
+                                            : 'bg-gray-50 dark:bg-zinc-800 text-gray-500 dark:text-gray-400'
+                                            }`}>
+                                            <span>🌱</span>
+                                            <span>
+                                                Pool & save ₹{fareSaved} per person • {co2Saved > 0 ? `${co2Saved}g less CO₂` : ''}
+                                            </span>
+                                        </div>
+                                    )}
+                                </>
+                            );
+                        })()}
+                    </div>
 
-                        {/* Passengers */}
-                        <div className="flex items-center gap-3 mt-3">
-                            <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Passengers:</span>
-                            {[1, 2, 3, 4].map(n => (
-                                <button
-                                    key={n}
-                                    onClick={() => setPassengers(n)}
-                                    className={`w-8 h-8 rounded-full text-xs font-bold ${passengers === n
-                                        ? 'bg-black dark:bg-white text-white dark:text-black'
-                                        : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300'
-                                        }`}
-                                >
-                                    {n}
-                                </button>
-                            ))}
-                        </div>
+                    {/* Scrollable content area */}
+                    <div className="flex-1 overflow-y-auto hide-scrollbar">
+                        {/* Passengers (Pooled only) */}
+                        {rideMode === 'Pooled' && (
+                            <div className="flex items-center gap-3 px-4 mt-2">
+                                <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Passengers:</span>
+                                {[1, 2, 3, 4].map(n => (
+                                    <button
+                                        key={n}
+                                        onClick={() => setPassengers(n)}
+                                        className={`w-8 h-8 rounded-full text-xs font-bold ${passengers === n
+                                            ? 'bg-black dark:bg-white text-white dark:text-black'
+                                            : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300'
+                                            }`}
+                                    >
+                                        {n}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
 
                         {/* Max Passengers for Pooled Rides (CAR/BIG_CAR only) */}
                         {rideMode === 'Pooled' && (selectedCategory === 'CAR' || selectedCategory === 'BIG_CAR') && (
-                            <div className="flex items-center gap-3 mt-3">
+                            <div className="flex items-center gap-3 px-4 mt-2">
                                 <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Max Pool:</span>
                                 {[2, 3, 4, selectedCategory === 'BIG_CAR' ? 6 : null].filter(Boolean).map(n => (
                                     <button
@@ -1177,20 +1234,58 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             </div>
                         )}
 
-                        {rideMode === 'Pooled' && (selectedCategory === 'BIKE' || selectedCategory === 'AUTO') && (
-                            <div className="mt-3 p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
-                                <p className="text-xs text-yellow-700 dark:text-yellow-400">⚠️ Pooling only available for Car & Big Car</p>
+                        {/* Safety Preferences (Pooled only) */}
+                        {rideMode === 'Pooled' && (
+                            <div className="px-4 mt-3">
+                                <span className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-2 block">Safety Preferences:</span>
+                                <div className="flex flex-col gap-2">
+                                    {[
+                                        { key: 'womenOnly' as const, label: 'Women Only', icon: 'female', desc: 'Match with women riders & drivers only' },
+                                        { key: 'verifiedOnly' as const, label: 'Verified Riders', icon: 'verified_user', desc: 'Only verified profiles' },
+                                        { key: 'noSmoking' as const, label: 'No Smoking', icon: 'smoke_free', desc: 'Smoke-free ride' },
+                                    ].map(pref => (
+                                        <label
+                                            key={pref.key}
+                                            className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition-all ${
+                                                safetyPrefs[pref.key]
+                                                    ? 'border-green-400 bg-green-50 dark:bg-green-900/20 dark:border-green-700'
+                                                    : 'border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50'
+                                            }`}
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                checked={safetyPrefs[pref.key]}
+                                                onChange={() => setSafetyPrefs(prev => ({ ...prev, [pref.key]: !prev[pref.key] }))}
+                                                className="sr-only"
+                                            />
+                                            <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-all ${
+                                                safetyPrefs[pref.key]
+                                                    ? 'bg-green-500 border-green-500'
+                                                    : 'border-gray-300 dark:border-zinc-600'
+                                            }`}>
+                                                {safetyPrefs[pref.key] && (
+                                                    <span className="material-icons-outlined text-white" style={{ fontSize: '14px' }}>check</span>
+                                                )}
+                                            </div>
+                                            <span className="material-icons-outlined text-sm text-gray-500 dark:text-gray-400">{pref.icon}</span>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="text-xs font-bold dark:text-white">{pref.label}</div>
+                                                <div className="text-[10px] text-gray-400 dark:text-gray-500">{pref.desc}</div>
+                                            </div>
+                                        </label>
+                                    ))}
+                                </div>
                             </div>
                         )}
-                    </div>
+
 
                     {/* In-Progress Pooled Rides */}
                     {rideMode === 'Pooled' && inProgressPooledRides.length > 0 && (
-                        <div className="px-4 py-3 border-t border-gray-200 dark:border-zinc-700">
+                        <div className="px-4 py-2">
                             <h3 className="text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">
                                 🚗 Join Ongoing Pool Rides
                             </h3>
-                            <div className="space-y-2 max-h-40 overflow-y-auto">
+                            <div className="space-y-2">
                                 {inProgressPooledRides.map((ride) => (
                                     <div
                                         key={ride._id}
@@ -1203,14 +1298,34 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                         {ride.vehicleCategory === 'BIG_CAR' ? 'airport_shuttle' : 'directions_car'}
                                                     </span>
                                                     <span className="text-sm font-bold text-gray-800 dark:text-gray-200">
-                                                        {ride.vehicleCategory === 'BIG_CAR' ? 'Big Car' : 'Car'}
-                                                    </span>
-                                                    <span className="text-xs text-gray-600 dark:text-gray-400">
-                                                        • {ride.availableSeats} seat{ride.availableSeats > 1 ? 's' : ''} left
+                                                        {ride.vehicleCategory === 'BIG_CAR' ? 'SUV' : 'Car'}
                                                     </span>
                                                 </div>
-                                                <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                                                    {ride.status === 'ACCEPTED' ? '📍 Picking up' : '🚗 In progress'}
+                                                <div className="flex items-center gap-3 mt-1.5">
+                                                    <div className="flex items-center gap-1">
+                                                        <span className="material-icons-outlined text-gray-500 dark:text-gray-400" style={{ fontSize: '14px' }}>group</span>
+                                                        <span className="text-xs font-bold text-gray-700 dark:text-gray-300">
+                                                            {ride.currentPassengers || ride.passengers || 1} in car
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex items-center gap-1">
+                                                        <span className="material-icons-outlined text-green-500" style={{ fontSize: '14px' }}>event_seat</span>
+                                                        <span className="text-xs font-bold text-green-600 dark:text-green-400">
+                                                            {ride.availableSeats} seat{ride.availableSeats > 1 ? 's' : ''} free
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-0.5 mt-1">
+                                                    {Array.from({ length: ride.maxPassengers || 4 }).map((_, i) => (
+                                                        <span
+                                                            key={i}
+                                                            className="material-icons-outlined"
+                                                            style={{ fontSize: '14px', color: i < (ride.currentPassengers || ride.passengers || 1) ? '#16a34a' : '#d1d5db' }}
+                                                        >person</span>
+                                                    ))}
+                                                </div>
+                                                <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
+                                                    {ride.status === 'ACCEPTED' ? '📍 Picking up' : '🚗 En route'}
                                                 </p>
                                             </div>
                                             <button
@@ -1294,10 +1409,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                     )}
 
                     {/* Vehicle Categories */}
-                    <div className="flex-1 overflow-y-auto px-4 py-2 hide-scrollbar">
-                        {VEHICLE_CATEGORIES.map(cat => {
+                    <div className="px-4 py-2">
+                        {VEHICLE_CATEGORIES.filter(cat => !(rideMode === 'Pooled' && cat.id === 'BIKE')).map(cat => {
                             const price = categoryPrices.get(cat.id) || 0;
                             const route = availableRoutes[selectedRouteIndex];
+                            const soloPrice = route ? Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate) : 0;
                             const co2 = route ? calculateCO2(route.distance, cat.id) : 0;
                             const co2Pool = route ? calculateCO2(route.distance, 'pool') : 0;
                             const etaMin = route ? Math.round(route.duration / 60) : 0;
@@ -1331,6 +1447,9 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                     </div>
                                     <div className="text-right">
                                         <div className="font-bold text-lg dark:text-white">₹{price}</div>
+                                        {rideMode === 'Pooled' && soloPrice > price && (
+                                            <div className="text-xs text-gray-400 line-through">₹{soloPrice}</div>
+                                        )}
                                         {selectedCategory === cat.id && (
                                             <div className="text-green-500 text-xs mt-1">✓</div>
                                         )}
@@ -1339,9 +1458,18 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             );
                         })}
                     </div>
+                    </div>{/* end scrollable area */}
 
                     {/* Footer */}
                     <div className="p-4 border-t border-gray-200 dark:border-zinc-800">
+                        {scheduleInfo && (
+                            <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl flex items-center gap-2">
+                                <span className="material-icons-outlined text-blue-500 text-lg">schedule</span>
+                                <span className="text-sm font-bold text-blue-700 dark:text-blue-300">
+                                    Scheduled: {new Date(scheduleInfo.scheduledFor).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                                </span>
+                            </div>
+                        )}
                         <button
                             onClick={() => setShowPaymentModal(true)}
                             className="w-full flex items-center justify-between mb-3 p-3 bg-gray-50 dark:bg-zinc-800 rounded-xl hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors"
@@ -1352,13 +1480,15 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         <button
                             onClick={handleConfirmRide}
                             disabled={isRequesting}
-                            className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-4 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg"
+                            className={`w-full text-white font-bold py-4 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg ${scheduleInfo ? 'bg-blue-500 hover:bg-blue-600' : 'bg-green-500 hover:bg-green-600'}`}
                         >
                             {isRequesting ? (
                                 <span className="flex items-center justify-center gap-2">
                                     <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                                    Booking...
+                                    {scheduleInfo ? 'Scheduling...' : 'Booking...'}
                                 </span>
+                            ) : scheduleInfo ? (
+                                `Schedule ${VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label} - ₹${categoryPrices.get(selectedCategory) || 0}`
                             ) : (
                                 `Book ${VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label} - ₹${categoryPrices.get(selectedCategory) || 0}`
                             )}

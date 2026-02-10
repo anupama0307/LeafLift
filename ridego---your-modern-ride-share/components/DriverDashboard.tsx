@@ -70,6 +70,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
   const activeRouteLayerRef = useRef<string | null>(null);
   const lastRouteUpdateRef = useRef<number>(0);
   const lastRouteLocationRef = useRef<{ lat: number; lng: number } | null>(null);
+  const driverLocationRef = useRef<{ lat: number; lng: number } | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(() => document.documentElement.classList.contains('dark'));
 
   const getMapStyle = (darkMode: boolean) => {
@@ -140,6 +141,17 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
         isPooled: payload.isPooled,
         routeIndex: payload.routeIndex
       };
+      // Client-side location filter: only show rides within 6 km
+      const loc = driverLocationRef.current;
+      if (loc && request.pickup && typeof request.pickup.lat === 'number') {
+        const R = 6371;
+        const toR = (v: number) => (v * Math.PI) / 180;
+        const dLat = toR(request.pickup.lat - loc.lat);
+        const dLon = toR(request.pickup.lng - loc.lng);
+        const a = Math.sin(dLat / 2) ** 2 + Math.cos(toR(loc.lat)) * Math.cos(toR(request.pickup.lat)) * Math.sin(dLon / 2) ** 2;
+        const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        if (dist > 6) return; // Too far, ignore
+      }
       addOrUpdateRequestMarker(request);
       setRequests((prev) => {
         if (prev.some((r) => r.rideId === payload.rideId)) return prev;
@@ -292,6 +304,20 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
       fetchRequests();
     }
   }, [isOnline, !!driverLocation]);
+
+  // Keep driverLocationRef in sync for socket handler access
+  useEffect(() => {
+    driverLocationRef.current = driverLocation;
+  }, [driverLocation]);
+
+  // Poll for nearby rides every 30 seconds to stay fresh
+  useEffect(() => {
+    if (!isOnline || !driverLocation || activeRide) return;
+    const interval = setInterval(() => {
+      fetchRequests();
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [isOnline, !!driverLocation, activeRide]);
 
   useEffect(() => {
     if (!isOnline && !activeRide) return;
@@ -574,9 +600,9 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
         const data = await resp.json();
         setActiveRide(data.ride);
         setRiderDetails({
-          name: data.rider?.firstName + ' ' + data.rider?.lastName,
+          name: data.rider?.name || 'Rider',
           phone: data.rider?.phone,
-          maskedPhone: data.ride?.contact?.riderMasked
+          maskedPhone: data.rider?.maskedPhone || data.ride?.contact?.riderMasked
         });
         setRideStatus('ACCEPTED');
         setSelectedRequest(null);

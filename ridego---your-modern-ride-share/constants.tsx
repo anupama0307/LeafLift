@@ -48,7 +48,7 @@ export const VEHICLE_CATEGORIES = [
   },
   {
     id: 'BIG_CAR',
-    label: 'Big Car',
+    label: 'SUV',
     icon: 'airport_shuttle',
     description: 'For groups & luggage',
     baseRate: 50,
@@ -119,7 +119,7 @@ export const MAIN_SUGGESTIONS: SuggestionItem[] = [
   },
   {
     id: 's4',
-    label: 'Big Car',
+    label: 'SUV',
     iconUrl: 'airport_shuttle',
     isCustomIcon: true
   }
@@ -140,7 +140,7 @@ export const ACTIVITY_HISTORY: ActivityItem[] = [
     date: 'Oct 22, 10:15 AM',
     price: '₹510.00',
     status: 'Completed',
-    carType: 'Big Car'
+    carType: 'SUV'
   },
   {
     id: 'act3',
