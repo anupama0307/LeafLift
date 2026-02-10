@@ -357,6 +357,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     if (!gender) return 'Please select your gender';
     if (role === 'DRIVER') {
       if (!license.trim()) return 'Driving license number is required';
+      if (license.length > 16) return 'Driving license number must be at most 16 characters';
       if (!aadhar.trim() || aadhar.length < 12) return 'Please enter a valid 12-digit Aadhar number';
     }
     return null;
@@ -709,8 +710,10 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
                 className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
                 placeholder="DL-XXXXXXXXXXXXX"
                 value={license}
-                onChange={(e) => setLicense(e.target.value)}
+                maxLength={16}
+                onChange={(e) => setLicense(e.target.value.slice(0, 16).toUpperCase())}
               />
+              <p className="text-xs text-gray-400 font-medium mt-1 px-1">Maximum 16 characters</p>
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">Aadhar Number</label>
@@ -869,8 +872,10 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
                 className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
                 placeholder="DL-XXXXXXXXXXXXX"
                 value={license}
-                onChange={(e) => setLicense(e.target.value)}
+                maxLength={16}
+                onChange={(e) => setLicense(e.target.value.slice(0, 16).toUpperCase())}
               />
+              <p className="text-xs text-gray-400 font-medium mt-1 px-1">Maximum 16 characters</p>
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">Aadhar Number</label>
@@ -983,11 +988,14 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     <div className="flex-1 flex flex-col bg-white dark:bg-black overflow-y-auto">
       <div className="h-12 w-full flex items-center justify-between px-6 pt-2">
         <span className="text-black dark:text-white font-bold text-sm">9:41</span>
-        <div className="flex items-center gap-1.5">
-          <span className="material-icons-outlined text-[18px] text-black dark:text-white">signal_cellular_4_bar</span>
-          <span className="material-icons-outlined text-[18px] text-black dark:text-white">wifi</span>
-          <span className="material-icons-outlined text-[22px] text-black dark:text-white">battery_full</span>
-        </div>
+        <button onClick={toggleTheme} className="flex items-center gap-1.5 bg-gray-100 dark:bg-zinc-800 px-3 py-1.5 rounded-full hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors">
+          <span className="material-icons-outlined text-base text-leaf-600 dark:text-leaf-400">
+            {isDark ? 'light_mode' : 'dark_mode'}
+          </span>
+          <span className="text-xs font-bold text-gray-600 dark:text-zinc-400">
+            {isDark ? 'Light' : 'Dark'}
+          </span>
+        </button>
       </div>
       {renderContent()}
       <div className="pb-4 flex justify-center w-full mt-auto">

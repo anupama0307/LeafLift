@@ -639,10 +639,13 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut }) => {
             <p className="text-xs text-red-500/70">Call for immediate assistance</p>
           </div>
         </div>
-        <a href="tel:112" className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-3 rounded-xl text-sm transition-colors flex items-center justify-center gap-2">
+        <button 
+          onClick={() => window.open('tel:112', '_self')}
+          className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-3 rounded-xl text-sm transition-colors flex items-center justify-center gap-2"
+        >
           <span className="material-icons-outlined text-lg">call</span>
           Call 112
-        </a>
+        </button>
       </div>
 
       {/* FAQ Section */}
@@ -668,7 +671,10 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut }) => {
       {/* Contact Options */}
       <SectionTitle>Contact Us</SectionTitle>
       <div className="space-y-3 mb-6">
-        <a href="mailto:support@leaflift.com" className="flex items-center gap-4 bg-gray-50 dark:bg-zinc-900/50 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors">
+        <button 
+          onClick={() => window.open('https://mail.google.com/mail/?view=cm&to=support@leaflift.com&su=Support%20Request', '_blank')}
+          className="w-full flex items-center gap-4 bg-gray-50 dark:bg-zinc-900/50 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors text-left"
+        >
           <div className="size-12 rounded-xl bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
             <span className="material-icons-outlined text-blue-500 text-xl">email</span>
           </div>
@@ -677,8 +683,11 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut }) => {
             <p className="text-xs text-gray-500 dark:text-zinc-500">support@leaflift.com</p>
           </div>
           <span className="material-icons-outlined text-gray-400">chevron_right</span>
-        </a>
-        <a href="tel:+911234567890" className="flex items-center gap-4 bg-gray-50 dark:bg-zinc-900/50 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors">
+        </button>
+        <button 
+          onClick={() => window.open('tel:+911234567890', '_self')}
+          className="w-full flex items-center gap-4 bg-gray-50 dark:bg-zinc-900/50 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors text-left"
+        >
           <div className="size-12 rounded-xl bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
             <span className="material-icons-outlined text-green-500 text-xl">phone</span>
           </div>
@@ -687,7 +696,7 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut }) => {
             <p className="text-xs text-gray-500 dark:text-zinc-500">+91 123 456 7890</p>
           </div>
           <span className="material-icons-outlined text-gray-400">chevron_right</span>
-        </a>
+        </button>
         <button className="w-full flex items-center gap-4 bg-gray-50 dark:bg-zinc-900/50 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors text-left">
           <div className="size-12 rounded-xl bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center">
             <span className="material-icons-outlined text-purple-500 text-xl">chat</span>
