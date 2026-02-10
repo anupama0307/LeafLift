@@ -425,6 +425,17 @@ app.post('/api/driver/route', async(req, res) => {
     try {
         const { userId, source, destination, isActive } = req.body;
 
+        // Validate required fields
+        if (!userId) {
+            return res.status(400).json({ message: 'userId is required' });
+        }
+        if (!source || !source.address || source.lat === undefined || source.lng === undefined) {
+            return res.status(400).json({ message: 'source with address, lat, lng is required' });
+        }
+        if (!destination || !destination.address || destination.lat === undefined || destination.lng === undefined) {
+            return res.status(400).json({ message: 'destination with address, lat, lng is required' });
+        }
+
         const dailyRoute = {
             source: {
                 address: source.address,
