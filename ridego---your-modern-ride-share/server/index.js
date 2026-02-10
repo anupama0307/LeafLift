@@ -238,9 +238,13 @@ app.get('/api/health', (req, res) => {
 
 // MongoDB Connection
 const MONGODB_URI = process.env.MONGODB_URI;
-mongoose.connect(MONGODB_URI)
-    .then(() => console.log('✅ Connected to MongoDB'))
-    .catch(err => console.error('❌ MongoDB error:', err));
+if (MONGODB_URI) {
+    mongoose.connect(MONGODB_URI)
+        .then(() => console.log('✅ Connected to MongoDB'))
+        .catch(err => console.error('❌ MongoDB error:', err));
+} else {
+    console.warn('⚠️ MONGODB_URI not set - database features will not work');
+}
 
 // User Routes
 app.post('/api/login', async(req, res) => {
