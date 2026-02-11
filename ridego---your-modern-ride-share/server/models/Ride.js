@@ -25,6 +25,16 @@ const RideSchema = new mongoose.Schema({
         lat: Number,
         lng: Number
     },
+    // Multi-stop waypoints
+    stops: [{
+        address: { type: String, required: true },
+        lat: { type: Number, required: true },
+        lng: { type: Number, required: true },
+        order: { type: Number, required: true },
+        status: { type: String, enum: ['PENDING', 'REACHED', 'SKIPPED'], default: 'PENDING' },
+        reachedAt: Date
+    }],
+    currentStopIndex: { type: Number, default: 0 },
     fare: Number,
     distance: String,
     duration: String,

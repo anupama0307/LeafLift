@@ -205,10 +205,10 @@ app.get('/api/ola/autocomplete', async(req, res) => {
     }
 });
 
-// ✅ OLA Maps Directions Proxy
+// ✅ OLA Maps Directions Proxy (with multi-stop waypoints support)
 app.post('/api/ola/directions', async(req, res) => {
     try {
-        const { origin, destination, alternatives } = req.body;
+        const { origin, destination, alternatives, waypoints } = req.body;
 
         if (!origin || !destination) {
             return res.status(400).json({ error: 'Origin and destination required' });
@@ -218,9 +218,14 @@ app.post('/api/ola/directions', async(req, res) => {
             return res.status(500).json({ error: 'OLA_MAPS_API_KEY not configured' });
         }
 
-        const url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&alternatives=${alternatives || false}&steps=true&overview=full&language=en&traffic_metadata=true&api_key=${OLA_API_KEY}`;
+        let url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&alternatives=${alternatives || false}&steps=true&overview=full&language=en&traffic_metadata=true&api_key=${OLA_API_KEY}`;
 
-        console.log(`🗺️ OLA Directions: ${origin} → ${destination}`);
+        // Add waypoints for multi-stop rides (format: "lat,lng|lat,lng")
+        if (waypoints && Array.isArray(waypoints) && waypoints.length > 0) {
+            url += `&waypoints=${waypoints.join('|')}`;
+        }
+
+        console.log(`🗺️ OLA Directions: ${origin} → ${destination}${waypoints ? ` via ${waypoints.length} stops` : ''}`);
         const response = await axios.post(url);
         res.json(response.data);
 
@@ -1333,6 +1338,90 @@ app.get('/api/drivers/nearby', async(req, res) => {
         res.json(drivers);
     } catch (error) {
         res.status(500).json({ message: 'Error fetching nearby drivers' });
+    }
+});
+
+// ── Multi-Stop: Mark stop as reached ──
+app.post('/api/rides/:rideId/stops/:stopIndex/reached', async(req, res) => {
+    try {
+        const ride = await Ride.findById(req.params.rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        const stopIdx = parseInt(req.params.stopIndex, 10);
+        if (!ride.stops || stopIdx < 0 || stopIdx >= ride.stops.length) {
+            return res.status(400).json({ message: 'Invalid stop index' });
+        }
+
+        ride.stops[stopIdx].status = 'REACHED';
+        ride.stops[stopIdx].reachedAt = new Date();
+        ride.currentStopIndex = stopIdx + 1;
+        await ride.save();
+
+        const payload = {
+            rideId: ride._id,
+            stopIndex: stopIdx,
+            currentStopIndex: ride.currentStopIndex,
+            stops: ride.stops
+        };
+
+        io.to(`ride:${ride._id}`).emit('ride:stop-reached', payload);
+        io.to(`user:${ride.userId}`).emit('ride:stop-reached', payload);
+        if (ride.driverId) io.to(`user:${ride.driverId}`).emit('ride:stop-reached', payload);
+
+        res.json({ ok: true, ride });
+    } catch (error) {
+        console.error('Stop reached error:', error);
+        res.status(500).json({ message: 'Error marking stop as reached' });
+    }
+});
+
+// ── Multi-Stop: Skip a stop ──
+app.post('/api/rides/:rideId/stops/:stopIndex/skip', async(req, res) => {
+    try {
+        const ride = await Ride.findById(req.params.rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        const stopIdx = parseInt(req.params.stopIndex, 10);
+        if (!ride.stops || stopIdx < 0 || stopIdx >= ride.stops.length) {
+            return res.status(400).json({ message: 'Invalid stop index' });
+        }
+
+        ride.stops[stopIdx].status = 'SKIPPED';
+        ride.currentStopIndex = stopIdx + 1;
+        await ride.save();
+
+        const payload = {
+            rideId: ride._id,
+            stopIndex: stopIdx,
+            currentStopIndex: ride.currentStopIndex,
+            stops: ride.stops
+        };
+
+        io.to(`ride:${ride._id}`).emit('ride:stop-skipped', payload);
+        io.to(`user:${ride.userId}`).emit('ride:stop-skipped', payload);
+        if (ride.driverId) io.to(`user:${ride.driverId}`).emit('ride:stop-skipped', payload);
+
+        res.json({ ok: true, ride });
+    } catch (error) {
+        console.error('Stop skip error:', error);
+        res.status(500).json({ message: 'Error skipping stop' });
+    }
+});
+
+// ── Multi-Stop: Get ride stops info ──
+app.get('/api/rides/:rideId/stops', async(req, res) => {
+    try {
+        const ride = await Ride.findById(req.params.rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        res.json({
+            stops: ride.stops || [],
+            currentStopIndex: ride.currentStopIndex || 0,
+            pickup: ride.pickup,
+            dropoff: ride.dropoff
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching stops' });
     }
 });
 
