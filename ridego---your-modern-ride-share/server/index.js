@@ -287,9 +287,10 @@ app.post('/api/signup', async (req, res) => {
             vehicleModel,
             vehicleNumber,
             rating,
-            rating,
             photoUrl,
-            accessibilitySupport
+            accessibilitySupport,
+            licenseUrl,
+            aadharUrl
         } = req.body;
 
         let user = await User.findOne({ phone, role });
@@ -305,7 +306,7 @@ app.post('/api/signup', async (req, res) => {
             photoUrl: photoUrl || `https://i.pravatar.cc/150?u=${phone}`
         } : {};
 
-        user = new User({ role, phone, firstName, lastName, dob, gender, license, aadhar, accessibilitySupport, ...driverDefaults });
+        user = new User({ role, phone, firstName, lastName, dob, gender, license, aadhar, licenseUrl, aadharUrl, accessibilitySupport, ...driverDefaults });
         await user.save();
         res.status(201).json({ message: 'User created', user });
     } catch (error) {

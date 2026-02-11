@@ -9,7 +9,9 @@ const userSchema = new mongoose.Schema({
     gender: { type: String, required: true },
     // Driver specific fields
     license: { type: String },
+    licenseUrl: { type: String },
     aadhar: { type: String },
+    aadharUrl: { type: String },
     vehicleMake: { type: String },
     vehicleModel: { type: String },
     vehicleNumber: { type: String },
