@@ -88,6 +88,16 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [currentStopIndex, setCurrentStopIndex] = useState(0);
     const stopMarkerRefs = useRef<any[]>([]);
 
+    // ─── Cancellation State ───
+    const [showCancelModal, setShowCancelModal] = useState(false);
+    const [riderCancelReason, setRiderCancelReason] = useState('');
+    const [isCanceling, setIsCanceling] = useState(false);
+    const [canceledByDriver, setCanceledByDriver] = useState(false);
+    const [driverCancelInfo, setDriverCancelInfo] = useState<{ cancelReason: string; cancellationFee: number } | null>(null);
+    const [isAutoReSearching, setIsAutoReSearching] = useState(false);
+    const [reSearchDriversNotified, setReSearchDriversNotified] = useState(0);
+    const reSearchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
     const mapRef = useRef<any>(null);
     const mapContainerRef = useRef<HTMLDivElement>(null);
     const [mapLoaded, setMapLoaded] = useState(false);
@@ -155,6 +165,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             setEtaToPickup(payload.ride.etaToPickup || null);
             setMaskedDriverPhone(payload.driver?.maskedPhone || null);
             setCurrentFare(payload.ride.currentFare || payload.ride.fare || null);
+            // Clear re-search / cancel state
+            setIsAutoReSearching(false);
+            setCanceledByDriver(false);
+            setDriverCancelInfo(null);
+            if (reSearchTimeoutRef.current) clearTimeout(reSearchTimeoutRef.current);
         });
 
         socket.on('ride:otp', (payload: any) => {
@@ -232,6 +247,39 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                 setActiveRideStops(prev => prev.map((s, i) =>
                     i === payload.stopIndex ? { ...s, status: 'SKIPPED' } : s
                 ));
+            }
+        });
+
+        // ─── Ride Canceled Handler ───
+        socket.on('ride:canceled', (payload: any) => {
+            if (payload?.canceledBy === 'DRIVER') {
+                setCanceledByDriver(true);
+                setDriverCancelInfo({
+                    cancelReason: payload.cancelReason || '',
+                    cancellationFee: payload.cancellationFee || 0
+                });
+                setRideStatus('CANCELED');
+                setDriverDetails(null);
+                setEtaToPickup(null);
+                setOtpCode(null);
+                setLiveEtaText(null);
+            }
+        });
+
+        // ─── Auto Re-Search Handler ───
+        socket.on('ride:re-search', (payload: any) => {
+            if (payload?.newRideId) {
+                setIsAutoReSearching(true);
+                setActiveRideId(payload.newRideId);
+                setReSearchDriversNotified(payload.driversNotified || 0);
+                setRideStatus('SEARCHING');
+                setCanceledByDriver(false);
+                setDriverCancelInfo(null);
+                // Auto-timeout after 60s if no driver accepts
+                if (reSearchTimeoutRef.current) clearTimeout(reSearchTimeoutRef.current);
+                reSearchTimeoutRef.current = setTimeout(() => {
+                    setIsAutoReSearching(false);
+                }, 60000);
             }
         });
 
@@ -1102,6 +1150,44 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         }
     };
 
+    // ─── Cancel Ride (Rider) ───
+    const handleRiderCancelRide = async () => {
+        if (!activeRideId) return;
+        setIsCanceling(true);
+        try {
+            const resp = await fetch(`${API_BASE_URL}/api/rides/${activeRideId}/cancel`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    canceledBy: 'RIDER',
+                    cancelReason: riderCancelReason || 'Rider canceled'
+                })
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                setShowCancelModal(false);
+                setRiderCancelReason('');
+                setRideStatus('IDLE');
+                setActiveRideId(null);
+                setDriverDetails(null);
+                setEtaToPickup(null);
+                setOtpCode(null);
+                setCurrentFare(null);
+                setShowOptions(false);
+                if (data.cancellationFee > 0) {
+                    alert(`Ride canceled. A ₹${data.cancellationFee} fee has been charged.`);
+                }
+            } else {
+                const err = await resp.json();
+                alert(err.message || 'Failed to cancel ride');
+            }
+        } catch {
+            alert('Network error while canceling');
+        } finally {
+            setIsCanceling(false);
+        }
+    };
+
     // ─── Chat ───
     const handleSendChat = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -1174,6 +1260,12 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         setCurrentStopIndex(0);
         stopMarkerRefs.current.forEach(m => m.remove());
         stopMarkerRefs.current = [];
+        // Clear cancellation state
+        setCanceledByDriver(false);
+        setDriverCancelInfo(null);
+        setIsAutoReSearching(false);
+        setReSearchDriversNotified(0);
+        if (reSearchTimeoutRef.current) clearTimeout(reSearchTimeoutRef.current);
         // Navigate back to home screen
         onBack();
     };
@@ -1782,6 +1874,12 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                         Estimate ₹{currentFare}
                                     </div>
                                 )}
+                                <button
+                                    onClick={handleResetRide}
+                                    className="mt-6 py-3 px-8 border-2 border-gray-200 dark:border-zinc-700 text-gray-500 dark:text-zinc-400 rounded-2xl font-bold text-sm hover:bg-gray-50 dark:hover:bg-zinc-800 transition-colors"
+                                >
+                                    Cancel Search
+                                </button>
                             </div>
                         ) : (
                             <div className="flex flex-col items-center text-center pb-8">
@@ -1818,8 +1916,73 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                 </div>
             )}
 
+            {/* ── Driver Canceled + Auto Re-Search Overlay ── */}
+            {canceledByDriver && rideStatus === 'CANCELED' && (
+                <div className="absolute inset-0 z-[55] flex items-end">
+                    <div className="w-full bg-white dark:bg-zinc-900 rounded-t-[40px] shadow-2xl p-8 animate-in slide-in-from-bottom duration-500">
+                        <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-6"></div>
+                        <div className="flex flex-col items-center text-center pb-6">
+                            <div className="relative mb-6">
+                                <div className="size-20 bg-red-50 dark:bg-red-900/10 rounded-full flex items-center justify-center">
+                                    <span className="material-icons-outlined text-4xl text-red-500">cancel</span>
+                                </div>
+                            </div>
+                            <h3 className="text-2xl font-black mb-2 dark:text-white">Driver Canceled</h3>
+                            {driverCancelInfo?.cancelReason && (
+                                <p className="text-sm text-gray-500 dark:text-gray-400 font-medium mb-1">
+                                    Reason: {driverCancelInfo.cancelReason}
+                                </p>
+                            )}
+                            <p className="text-sm text-gray-400 dark:text-gray-500 mb-4">
+                                Don't worry — we're automatically searching for another driver nearby.
+                            </p>
+
+                            {/* Auto-searching animation */}
+                            <div className="w-full p-4 bg-green-50 dark:bg-green-900/10 rounded-2xl border border-green-100 dark:border-green-800 mb-4">
+                                <div className="flex items-center gap-3">
+                                    <div className="relative">
+                                        <div className="size-10 bg-green-100 dark:bg-green-800/30 rounded-full flex items-center justify-center">
+                                            <span className="material-icons-outlined text-green-500">radar</span>
+                                        </div>
+                                        <div className="absolute inset-0 border-2 border-green-500/30 rounded-full animate-ping"></div>
+                                    </div>
+                                    <div className="text-left">
+                                        <p className="text-sm font-bold text-green-700 dark:text-green-400">
+                                            Searching within 5 km...
+                                        </p>
+                                        <p className="text-xs text-green-600 dark:text-green-500">
+                                            Looking for drivers on your route
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex gap-3 w-full mt-2">
+                                <button
+                                    onClick={handleResetRide}
+                                    className="flex-1 py-4 bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-400 rounded-2xl font-black text-sm uppercase tracking-widest"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setCanceledByDriver(false);
+                                        setDriverCancelInfo(null);
+                                        setRideStatus('IDLE');
+                                        setShowOptions(true);
+                                    }}
+                                    className="flex-[2] py-4 bg-black dark:bg-white text-white dark:text-black rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl"
+                                >
+                                    Rebook Manually
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* ── Active Ride Panel ── */}
-            {rideStatus !== 'IDLE' && rideStatus !== 'SEARCHING' && (
+            {rideStatus !== 'IDLE' && rideStatus !== 'SEARCHING' && rideStatus !== 'CANCELED' && (
                 <div className="absolute bottom-0 left-0 right-0 z-50 bg-white dark:bg-zinc-900 rounded-t-3xl shadow-2xl p-6">
                     <div className="flex items-center justify-between mb-4">
                         <div>
@@ -1848,39 +2011,6 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             </div>
                         )}
                     </div>
-
-                    {driverDetails && (
-                        <div className="flex items-center gap-3 mb-4">
-                            <img
-                                src={driverDetails.photoUrl}
-                                className="w-12 h-12 rounded-full object-cover"
-                                alt=""
-                            />
-                            <div className="flex-1">
-                                <div className="font-bold dark:text-white">{driverDetails.name}</div>
-                                <div className="text-xs text-gray-500 dark:text-gray-400">
-                                    {driverDetails.vehicle} • {driverDetails.vehicleNumber}
-                                </div>
-                                <div className="text-xs text-gray-500 dark:text-gray-400">
-                                    ⭐ {driverDetails.rating?.toFixed(1)}
-                                </div>
-                            </div>
-                            <button
-                                onClick={() => maskedDriverPhone && alert(`Call: ${maskedDriverPhone}`)}
-                                className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
-                                title="Call driver"
-                            >
-                                <span className="material-icons-outlined">phone</span>
-                            </button>
-                            <button
-                                onClick={() => setChatOpen(true)}
-                                className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
-                                title="Chat"
-                            >
-                                <span className="material-icons-outlined">chat</span>
-                            </button>
-                        </div>
-                    )}
 
                     {driverDetails && (
                         <div className="flex items-center gap-3 mb-4">
@@ -1978,6 +2108,17 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             <span className="text-sm text-gray-500 dark:text-gray-400">Current Fare</span>
                             <span className="font-bold text-lg dark:text-white">₹{currentFare}</span>
                         </div>
+                    )}
+
+                    {/* ── Rider Cancel Button (ACCEPTED / ARRIVED) ── */}
+                    {(rideStatus === 'ACCEPTED' || rideStatus === 'ARRIVED') && (
+                        <button
+                            onClick={() => setShowCancelModal(true)}
+                            className="w-full py-3 border-2 border-red-200 dark:border-red-800 text-red-500 font-bold rounded-xl mb-3 flex items-center justify-center gap-2 hover:bg-red-50 dark:hover:bg-red-900/10 transition-colors"
+                        >
+                            <span className="material-icons-outlined" style={{ fontSize: '18px' }}>close</span>
+                            Cancel Ride
+                        </button>
                     )}
 
                     {rideStatus === 'COMPLETED' && (
@@ -2144,6 +2285,93 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             {!isStopSearching && stopSearchQuery.length > 2 && stopSuggestions.length === 0 && (
                                 <p className="text-sm text-gray-400 text-center py-4">No results found</p>
                             )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Rider Cancel Reason Modal ── */}
+            {showCancelModal && (
+                <div className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4">
+                    <div className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-3xl p-6 shadow-2xl">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-bold dark:text-white flex items-center gap-2">
+                                <span className="material-icons-outlined text-red-500">warning</span>
+                                Cancel Ride
+                            </h3>
+                            <button
+                                onClick={() => { setShowCancelModal(false); setRiderCancelReason(''); }}
+                                className="p-2 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-full transition-colors"
+                            >
+                                <span className="material-icons-outlined text-gray-500">close</span>
+                            </button>
+                        </div>
+
+                        {rideStatus === 'ACCEPTED' || rideStatus === 'ARRIVED' ? (
+                            <div className="bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800 p-3 rounded-xl mb-4">
+                                <p className="text-xs text-amber-700 dark:text-amber-400 font-semibold flex items-center gap-1">
+                                    <span className="material-icons-outlined" style={{ fontSize: '14px' }}>info</span>
+                                    A cancellation fee of ₹25 will be charged as the driver has already accepted.
+                                </p>
+                            </div>
+                        ) : null}
+
+                        <p className="text-sm text-gray-500 dark:text-gray-400 mb-3 font-medium">
+                            Why are you canceling?
+                        </p>
+                        <div className="space-y-2 mb-4">
+                            {[
+                                'Changed plans',
+                                'Found alternative transport',
+                                'Wrong pickup/destination',
+                                'Taking too long',
+                                'Price too high',
+                            ].map((reason) => (
+                                <button
+                                    key={reason}
+                                    onClick={() => setRiderCancelReason(reason)}
+                                    className={`w-full text-left px-4 py-3 rounded-xl border-2 text-sm font-semibold transition-all ${
+                                        riderCancelReason === reason
+                                            ? 'border-red-500 bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400'
+                                            : 'border-gray-100 dark:border-zinc-700 text-gray-600 dark:text-zinc-400 hover:bg-gray-50 dark:hover:bg-zinc-800'
+                                    }`}
+                                >
+                                    {reason}
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => { setShowCancelModal(false); setRiderCancelReason(''); }}
+                                className="flex-1 py-3 bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-400 rounded-xl font-bold"
+                            >
+                                Go Back
+                            </button>
+                            <button
+                                onClick={() => {
+                                    if (!riderCancelReason) return;
+                                    handleRiderCancelRide();
+                                }}
+                                disabled={!riderCancelReason || isCanceling}
+                                className={`flex-1 py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${
+                                    riderCancelReason && !isCanceling
+                                        ? 'bg-red-500 text-white shadow-lg'
+                                        : 'bg-gray-200 dark:bg-zinc-700 text-gray-400 dark:text-zinc-500 cursor-not-allowed'
+                                }`}
+                            >
+                                {isCanceling ? (
+                                    <>
+                                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                                        </svg>
+                                        Canceling...
+                                    </>
+                                ) : (
+                                    'Cancel Ride'
+                                )}
+                            </button>
                         </div>
                     </div>
                 </div>

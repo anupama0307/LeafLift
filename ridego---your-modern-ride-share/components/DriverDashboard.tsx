@@ -64,6 +64,11 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
   const [currentStopIdx, setCurrentStopIdx] = useState(0);
   const [stopActionLoading, setStopActionLoading] = useState(false);
 
+  // ─── Cancellation State ───
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [isCanceling, setIsCanceling] = useState(false);
+
   const mapRef = useRef<any>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const driverMarkerRef = useRef<any>(null);
@@ -255,6 +260,20 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
       }
     };
 
+    const handleRideCanceled = (payload: any) => {
+      if (payload?.canceledBy === 'RIDER') {
+        alert('Rider has canceled the ride.');
+        setActiveRide(null);
+        setRiderDetails(null);
+        setRideStatus('IDLE');
+        setOtpInput('');
+        setRiderLocation(null);
+        setCurrentFare(null);
+        setRideStops([]);
+        setCurrentStopIdx(0);
+      }
+    };
+
     socket.on('ride:request', handleRequest);
     socket.on('ride:status', handleStatus);
     socket.on('ride:otp', handleOtp);
@@ -267,6 +286,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
     socket.on('pool:join-request', handlePoolJoinRequest);
     socket.on('ride:stop-reached', handleStopReached);
     socket.on('ride:stop-skipped', handleStopSkipped);
+    socket.on('ride:canceled', handleRideCanceled);
 
     return () => {
       socket.off('ride:request', handleRequest);
@@ -281,6 +301,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
       socket.off('pool:join-request', handlePoolJoinRequest);
       socket.off('ride:stop-reached', handleStopReached);
       socket.off('ride:stop-skipped', handleStopSkipped);
+      socket.off('ride:canceled', handleRideCanceled);
     };
   }, [user?._id, user?.id]);
 
@@ -740,6 +761,39 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
     fetchDriverRides();
   };
 
+  // ─── Cancel Ride (Driver) ───
+  const handleCancelRide = async () => {
+    if (!activeRide?._id) return;
+    setIsCanceling(true);
+    try {
+      const resp = await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          canceledBy: 'DRIVER',
+          cancelReason: cancelReason || 'Driver canceled'
+        })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        setShowCancelModal(false);
+        setCancelReason('');
+        handleClearRide();
+        if (data.cancellationFee > 0) {
+          alert(`Ride canceled. A ₹${data.cancellationFee} penalty has been applied.`);
+        }
+      } else {
+        const err = await resp.json();
+        alert(err.message || 'Failed to cancel ride');
+      }
+    } catch (e) {
+      console.error('Cancel error:', e);
+      alert('Network error while canceling');
+    } finally {
+      setIsCanceling(false);
+    }
+  };
+
   const handleAddPooledRider = async () => {
     if (!activeRide?._id) return;
     await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/pool/add`, { method: 'POST' });
@@ -781,6 +835,9 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
     setCurrentFare(null);
     setRideStops([]);
     setCurrentStopIdx(0);
+    setShowCancelModal(false);
+    setCancelReason('');
+    setIsCanceling(false);
     clearRoutePreview();
   };
 
@@ -1040,13 +1097,22 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
           )}
 
           {rideStatus === 'ACCEPTED' && (
-            <button onClick={handleReached} className="w-full bg-leaf-600 text-white py-3 rounded-xl font-bold shadow-lg active:scale-95 transition-all">
-              Reached Pickup
-            </button>
+            <div className="flex gap-3">
+              <button onClick={handleReached} className="flex-[2] bg-leaf-600 text-white py-3 rounded-xl font-bold shadow-lg active:scale-95 transition-all">
+                Reached Pickup
+              </button>
+              <button
+                onClick={() => setShowCancelModal(true)}
+                className="flex-1 bg-red-50 dark:bg-red-900/20 text-red-500 dark:text-red-400 py-3 rounded-xl font-bold text-sm border border-red-200 dark:border-red-800 active:scale-95 transition-all"
+              >
+                Cancel
+              </button>
+            </div>
           )}
 
           {rideStatus === 'ARRIVED' && (
-            <div className="bg-amber-50 dark:bg-amber-900/20 p-4 rounded-2xl mb-4">
+            <div className="space-y-3">
+            <div className="bg-amber-50 dark:bg-amber-900/20 p-4 rounded-2xl">
               <p className="text-xs font-bold text-amber-600 dark:text-amber-400 uppercase tracking-widest">
                 Enter rider's OTP
               </p>
@@ -1082,6 +1148,13 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
               <button onClick={handleVerifyOtp} className="w-full bg-black dark:bg-white text-white dark:text-black py-3 rounded-xl font-bold mt-3 active:scale-95 transition-all">
                 Start Trip
               </button>
+            </div>
+            <button
+              onClick={() => setShowCancelModal(true)}
+              className="w-full bg-red-50 dark:bg-red-900/20 text-red-500 dark:text-red-400 py-2.5 rounded-xl font-bold text-sm border border-red-200 dark:border-red-800 active:scale-95 transition-all"
+            >
+              Cancel Ride
+            </button>
             </div>
           )}
 
@@ -1395,6 +1468,68 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
                 Send
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Cancel Ride Modal ── */}
+      {showCancelModal && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4"
+          onClick={() => { setShowCancelModal(false); setCancelReason(''); }}
+        >
+          <div
+            className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-3xl p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 bg-red-50 dark:bg-red-900/20 rounded-2xl flex items-center justify-center">
+                <span className="material-icons-outlined text-red-500 text-2xl">cancel</span>
+              </div>
+              <div>
+                <h3 className="text-lg font-bold dark:text-white">Cancel Ride?</h3>
+                <p className="text-xs text-gray-500 dark:text-gray-400">A ₹50 penalty will be applied</p>
+              </div>
+            </div>
+
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">Select a reason:</p>
+            <div className="space-y-2 mb-4">
+              {[
+                'Rider not at pickup location',
+                'Waited too long',
+                'Vehicle issue / breakdown',
+                'Unsafe pickup location',
+                'Personal emergency'
+              ].map((reason) => (
+                <button
+                  key={reason}
+                  onClick={() => setCancelReason(reason)}
+                  className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                    cancelReason === reason
+                      ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border-2 border-red-300 dark:border-red-700'
+                      : 'bg-gray-50 dark:bg-zinc-800 text-gray-600 dark:text-gray-300 border-2 border-transparent hover:bg-gray-100 dark:hover:bg-zinc-700'
+                  }`}
+                >
+                  {reason}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setShowCancelModal(false); setCancelReason(''); }}
+                className="flex-1 py-3 rounded-xl font-bold bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300"
+              >
+                Go Back
+              </button>
+              <button
+                onClick={handleCancelRide}
+                disabled={!cancelReason || isCanceling}
+                className="flex-1 py-3 rounded-xl font-bold bg-red-500 text-white disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 transition-all"
+              >
+                {isCanceling ? 'Canceling...' : 'Cancel Ride'}
+              </button>
+            </div>
           </div>
         </div>
       )}
