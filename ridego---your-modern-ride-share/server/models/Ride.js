@@ -124,6 +124,17 @@ const RideSchema = new mongoose.Schema({
         type: Date,
         default: Date.now
     },
+    // Cancellation tracking
+    canceledBy: {
+        type: String,
+        enum: ['RIDER', 'DRIVER', 'SYSTEM', null],
+        default: null
+    },
+    cancelReason: { type: String, default: '' },
+    canceledAt: { type: Date, default: null },
+    cancellationFee: { type: Number, default: 0 },
+    autoReSearched: { type: Boolean, default: false },
+    previousDriverIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     createdAt: {
         type: Date,
         default: Date.now

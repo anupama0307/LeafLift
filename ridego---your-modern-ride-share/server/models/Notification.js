@@ -20,7 +20,7 @@ const NotificationSchema = new mongoose.Schema({
     },
     type: {
         type: String,
-        enum: ['DAILY_JOIN_REQUEST', 'RIDE_INFO', 'SYSTEM', 'DELAY_ALERT'],
+        enum: ['DAILY_JOIN_REQUEST', 'RIDE_INFO', 'SYSTEM', 'DELAY_ALERT', 'RIDE_CANCELED'],
         default: 'SYSTEM'
     },
     data: {

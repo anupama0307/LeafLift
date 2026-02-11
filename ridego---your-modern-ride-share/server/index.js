@@ -843,6 +843,195 @@ app.put('/api/rides/:rideId/status', async(req, res) => {
     }
 });
 
+// ─── Cancel Ride (Driver or Rider) with Auto Re-Search ───
+app.post('/api/rides/:rideId/cancel', async(req, res) => {
+    try {
+        const { canceledBy, cancelReason } = req.body;
+        if (!canceledBy || !['RIDER', 'DRIVER'].includes(canceledBy)) {
+            return res.status(400).json({ message: 'canceledBy must be RIDER or DRIVER' });
+        }
+
+        const ride = await Ride.findById(req.params.rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        // Only allow cancel for active statuses
+        if (!['SEARCHING', 'ACCEPTED', 'ARRIVED'].includes(ride.status)) {
+            return res.status(409).json({ message: `Cannot cancel ride with status ${ride.status}` });
+        }
+
+        // Calculate cancellation fee (only if ride was ACCEPTED or ARRIVED)
+        let cancellationFee = 0;
+        if (canceledBy === 'DRIVER' && ['ACCEPTED', 'ARRIVED'].includes(ride.status)) {
+            // Driver penalty: flat ₹50 for canceling after accepting
+            cancellationFee = 50;
+        } else if (canceledBy === 'RIDER' && ['ACCEPTED', 'ARRIVED'].includes(ride.status)) {
+            // Rider pays ₹25 if driver already started coming
+            cancellationFee = 25;
+        }
+
+        const previousDriverId = ride.driverId;
+
+        ride.status = 'CANCELED';
+        ride.canceledBy = canceledBy;
+        ride.cancelReason = cancelReason || '';
+        ride.canceledAt = new Date();
+        ride.cancellationFee = cancellationFee;
+        if (previousDriverId) {
+            ride.previousDriverIds = [...(ride.previousDriverIds || []), previousDriverId];
+        }
+        await ride.save();
+
+        // Notify the other party via socket
+        const cancelPayload = {
+            rideId: ride._id,
+            canceledBy,
+            cancelReason: cancelReason || '',
+            cancellationFee,
+            status: 'CANCELED'
+        };
+
+        if (canceledBy === 'DRIVER') {
+            // Notify rider
+            io.to(`user:${ride.userId}`).emit('ride:canceled', cancelPayload);
+            io.to(`ride:${ride._id}`).emit('ride:canceled', cancelPayload);
+
+            // Create notification for rider
+            try {
+                const driver = previousDriverId ? await User.findById(previousDriverId) : null;
+                const driverName = driver ? [driver.firstName, driver.lastName].filter(Boolean).join(' ') || 'Driver' : 'Driver';
+                await Notification.create({
+                    userId: ride.userId,
+                    fromId: previousDriverId,
+                    title: 'Ride Canceled by Driver',
+                    message: `${driverName} canceled your ride${cancelReason ? ': ' + cancelReason : ''}. We're searching for another driver.`,
+                    type: 'RIDE_CANCELED',
+                    data: { rideId: ride._id, canceledBy, cancellationFee }
+                });
+                io.to(`user:${ride.userId}`).emit('notification:new', {
+                    title: 'Ride Canceled by Driver',
+                    message: `${driverName} canceled your ride. Searching for a new driver...`,
+                    type: 'RIDE_CANCELED'
+                });
+            } catch (e) { console.error('Cancel notification error:', e); }
+
+            // ─── Auto Re-Search: Find nearby drivers within 5km traveling same route ───
+            const AUTO_SEARCH_RADIUS_KM = 5;
+            let nearbyDriversFound = 0;
+
+            if (ride.pickup && typeof ride.pickup.lat === 'number') {
+                // Create a new ride entry for re-search
+                const reSearchRide = new Ride({
+                    userId: ride.userId,
+                    status: 'SEARCHING',
+                    pickup: ride.pickup,
+                    dropoff: ride.dropoff,
+                    fare: ride.fare,
+                    currentFare: ride.currentFare || ride.fare,
+                    distance: ride.distance,
+                    duration: ride.duration,
+                    rideType: ride.rideType,
+                    paymentMethod: ride.paymentMethod,
+                    routeIndex: ride.routeIndex,
+                    vehicleCategory: ride.vehicleCategory,
+                    co2Emissions: ride.co2Emissions,
+                    co2Saved: ride.co2Saved,
+                    isPooled: ride.isPooled,
+                    passengers: ride.passengers,
+                    maxPassengers: ride.maxPassengers,
+                    stops: ride.stops || [],
+                    previousDriverIds: [...(ride.previousDriverIds || [])],
+                    autoReSearched: true,
+                    bookingTime: new Date()
+                });
+                await reSearchRide.save();
+
+                // Mark original ride as re-searched
+                ride.autoReSearched = true;
+                await ride.save();
+
+                // Broadcast to nearby drivers (excluding previous driver)
+                const ridePayload = {
+                    rideId: reSearchRide._id,
+                    pickup: reSearchRide.pickup,
+                    dropoff: reSearchRide.dropoff,
+                    fare: reSearchRide.fare,
+                    currentFare: reSearchRide.currentFare,
+                    isPooled: reSearchRide.isPooled,
+                    routeIndex: reSearchRide.routeIndex,
+                    bookingTime: reSearchRide.bookingTime,
+                    isReSearch: true
+                };
+
+                const excludeDriverIds = new Set((reSearchRide.previousDriverIds || []).map(id => id.toString()));
+
+                for (const [driverId, entry] of onlineDrivers.entries()) {
+                    // Skip the driver who just canceled
+                    if (excludeDriverIds.has(driverId)) continue;
+                    if (!entry.location || typeof entry.location.lat !== 'number') continue;
+
+                    const dist = getDistanceKm(
+                        entry.location.lat, entry.location.lng,
+                        ride.pickup.lat, ride.pickup.lng
+                    );
+                    if (dist !== null && dist <= AUTO_SEARCH_RADIUS_KM) {
+                        for (const sid of entry.socketIds) {
+                            io.to(sid).emit('ride:request', ridePayload);
+                        }
+                        nearbyDriversFound++;
+                    }
+                }
+
+                console.log(`Auto re-search: broadcast to ${nearbyDriversFound} nearby drivers (within ${AUTO_SEARCH_RADIUS_KM}km)`);
+
+                // Notify rider about re-search result
+                io.to(`user:${ride.userId}`).emit('ride:re-search', {
+                    oldRideId: ride._id,
+                    newRideId: reSearchRide._id,
+                    driversNotified: nearbyDriversFound,
+                    searchRadius: AUTO_SEARCH_RADIUS_KM
+                });
+            }
+
+        } else if (canceledBy === 'RIDER') {
+            // Notify driver
+            if (ride.driverId) {
+                io.to(`user:${ride.driverId}`).emit('ride:canceled', cancelPayload);
+            }
+            io.to(`ride:${ride._id}`).emit('ride:canceled', cancelPayload);
+
+            // Create notification for driver
+            if (ride.driverId) {
+                try {
+                    const rider = await User.findById(ride.userId);
+                    const riderName = rider ? [rider.firstName, rider.lastName].filter(Boolean).join(' ') || 'Rider' : 'Rider';
+                    await Notification.create({
+                        userId: ride.driverId,
+                        fromId: ride.userId,
+                        title: 'Ride Canceled by Rider',
+                        message: `${riderName} canceled the ride${cancelReason ? ': ' + cancelReason : ''}.`,
+                        type: 'RIDE_CANCELED',
+                        data: { rideId: ride._id, canceledBy, cancellationFee }
+                    });
+                    io.to(`user:${ride.driverId}`).emit('notification:new', {
+                        title: 'Ride Canceled by Rider',
+                        message: `${riderName} canceled the ride.`,
+                        type: 'RIDE_CANCELED'
+                    });
+                } catch (e) { console.error('Cancel notification error:', e); }
+            }
+        }
+
+        res.json({
+            ride,
+            cancellationFee,
+            canceledBy
+        });
+    } catch (error) {
+        console.error('Cancel ride error:', error);
+        res.status(500).json({ message: 'Error canceling ride' });
+    }
+});
+
 // Driver presence
 app.post('/api/drivers/online', async(req, res) => {
     const { driverId, location } = req.body;
