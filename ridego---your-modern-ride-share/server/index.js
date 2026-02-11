@@ -370,6 +370,22 @@ app.put('/api/users/:userId', async (req, res) => {
     }
 });
 
+app.put('/api/users/:userId/privacy', async (req, res) => {
+    try {
+        const { privacySettings } = req.body;
+        const user = await User.findByIdAndUpdate(
+            req.params.userId,
+            { privacySettings },
+            { new: true }
+        );
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        res.json(user);
+    } catch (error) {
+        console.error('Update privacy settings error:', error);
+        res.status(500).json({ message: 'Error updating privacy settings' });
+    }
+});
+
 // ── New: Driver Daily Route ──
 app.post('/api/driver/route', async (req, res) => {
     console.log('📬 Received route update request:', JSON.stringify(req.body, null, 2));

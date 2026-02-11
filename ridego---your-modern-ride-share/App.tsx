@@ -90,7 +90,7 @@ const App: React.FC = () => {
       case AppScreen.PLAN_RIDE:
         return <PlanRideScreen user={user} onBack={() => setCurrentScreen(AppScreen.HOME)} initialVehicleCategory={selectedVehicleCategory} />;
       case AppScreen.ACCOUNT:
-        return <AccountScreen user={user} onSignOut={handleSignOut} />;
+        return <AccountScreen user={user} onSignOut={handleSignOut} onUserUpdate={setUser} />;
       default:
         return user?.role === 'DRIVER' ? <DriverDashboard user={user} /> : <HomeScreen onOpenPlan={(vehicleCategory?: string) => {
           setSelectedVehicleCategory(vehicleCategory);

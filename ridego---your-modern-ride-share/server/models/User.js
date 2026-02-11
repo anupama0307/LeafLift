@@ -42,6 +42,10 @@ const userSchema = new mongoose.Schema({
             lng: Number
         },
         isActive: { type: Boolean, default: false }
+    },
+    privacySettings: {
+        shareStats: { type: Boolean, default: true },
+        publicProfile: { type: Boolean, default: true }
     }
 });
 

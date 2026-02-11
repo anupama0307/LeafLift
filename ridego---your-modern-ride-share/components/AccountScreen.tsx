@@ -4,16 +4,44 @@ import React, { useEffect, useState } from 'react';
 interface AccountScreenProps {
   user?: any;
   onSignOut?: () => void;
+  onUserUpdate?: (updatedUser: any) => void;
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
 
-const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut }) => {
+const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUpdate }) => {
   const isDriver = user?.role === 'DRIVER';
   const [stats, setStats] = useState<any>(null);
   const [walletBalance, setWalletBalance] = useState<number>(0);
   const [addAmount, setAddAmount] = useState('');
   const [showAddMoney, setShowAddMoney] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
+  const [privacySettings, setPrivacySettings] = useState(user?.privacySettings || { shareStats: true, publicProfile: true });
+
+  useEffect(() => {
+    if (user?.privacySettings) {
+      setPrivacySettings(user.privacySettings);
+    }
+  }, [user]);
+
+  const updatePrivacy = async (key: string, val: boolean) => {
+    const newSettings = { ...privacySettings, [key]: val };
+    setPrivacySettings(newSettings);
+    try {
+      const resp = await fetch(`${API_BASE_URL}/api/users/${user._id}/privacy`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ privacySettings: newSettings })
+      });
+      if (resp.ok) {
+        const updatedUser = await resp.json();
+        if (onUserUpdate) onUserUpdate(updatedUser);
+        localStorage.setItem('leaflift_user', JSON.stringify(updatedUser));
+      }
+    } catch (e) {
+      console.error('Failed to update privacy:', e);
+    }
+  };
 
   useEffect(() => {
     if (!user?._id) return;
@@ -67,7 +95,68 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut }) => {
     </button>
   );
 
+  const Toggle: React.FC<{ label: string; description?: string; enabled: boolean; onChange: (val: boolean) => void }> = ({ label, description, enabled, onChange }) => (
+    <div className="flex items-center justify-between py-4">
+      <div className="flex-1 pr-4">
+        <p className="text-[15px] font-bold text-black dark:text-white">{label}</p>
+        {description && <p className="text-xs text-slate-500 dark:text-zinc-500 mt-0.5">{description}</p>}
+      </div>
+      <button
+        onClick={() => onChange(!enabled)}
+        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${enabled ? 'bg-leaf-600' : 'bg-gray-200 dark:bg-zinc-800'}`}
+      >
+        <span
+          className={`inline-block size-4 transform rounded-full bg-white transition-transform ${enabled ? 'translate-x-6' : 'translate-x-1'}`}
+        />
+      </button>
+    </div>
+  );
+
   const fullName = user ? `${user.firstName} ${user.lastName}` : 'Guest User';
+
+  if (showPrivacy) {
+    return (
+      <div className="px-5 pb-24 pt-8 animate-in slide-in-from-right duration-300 bg-white dark:bg-black min-h-full">
+        <button
+          onClick={() => setShowPrivacy(false)}
+          className="size-10 rounded-full bg-gray-50 dark:bg-zinc-900 flex items-center justify-center mb-6"
+        >
+          <span className="material-icons-outlined">arrow_back</span>
+        </button>
+
+        <h1 className="text-3xl font-black text-black dark:text-white mb-2">Safety & Privacy</h1>
+        <p className="text-sm text-slate-500 dark:text-zinc-500 mb-8">Manage how your data is shared and who can see your profile details.</p>
+
+        <div className="space-y-2">
+          <div className="bg-gray-50 dark:bg-zinc-900/50 rounded-3xl p-6 border border-gray-100 dark:border-zinc-800">
+            <Toggle
+              label="Share Eco Stats"
+              description="Allow others to see your CO2 savings and eco-driving score."
+              enabled={privacySettings.shareStats}
+              onChange={(val) => updatePrivacy('shareStats', val)}
+            />
+            <div className="h-px bg-gray-100 dark:bg-zinc-800 my-2" />
+            <Toggle
+              label="Public Profile"
+              description="Makes your profile and rating visible to other members."
+              enabled={privacySettings.publicProfile}
+              onChange={(val) => updatePrivacy('publicProfile', val)}
+            />
+          </div>
+
+          <div className="mt-8 p-6 bg-leaf-50 dark:bg-leaf-900/20 rounded-3xl border border-leaf-100 dark:border-leaf-800/30">
+            <div className="flex gap-4">
+              <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400">gpp_good</span>
+              <div>
+                <p className="text-sm font-bold text-leaf-900 dark:text-leaf-100">End-to-End Encryption</p>
+                <p className="text-xs text-leaf-700/70 dark:text-leaf-400/70 mt-1">Your messages and documents are encrypted. Only you and the intended recipient can read them.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (isDriver) {
     return (
@@ -143,7 +232,12 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut }) => {
         {/* Driver Menu */}
         <div className="space-y-1">
           <MenuButton icon="analytics" title="Eco-Driving Insights" subtitle="Efficiency Score: 88%" badge="Eco" />
-          <MenuButton icon="security" title="Safety & Privacy" subtitle="Managed transmission & encryption" />
+          <MenuButton
+            icon="security"
+            title="Safety & Privacy"
+            subtitle="Managed transmission & encryption"
+            onClick={() => setShowPrivacy(true)}
+          />
           <MenuButton icon="settings" title="Dashboard Settings" />
           <MenuButton icon="help_outline" title="Driver Support" />
           <MenuButton icon="logout" title="Sign out" destructive onClick={onSignOut} />
@@ -276,7 +370,11 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut }) => {
 
       <div className="space-y-1">
         <MenuButton icon="settings" title="Settings" />
-        <MenuButton icon="security" title="Safety & Privacy" />
+        <MenuButton
+          icon="security"
+          title="Safety & Privacy"
+          onClick={() => setShowPrivacy(true)}
+        />
         <MenuButton icon="logout" title="Sign out" destructive onClick={onSignOut} />
       </div>
 
