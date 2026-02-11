@@ -20,11 +20,11 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut }) => {
     fetch(`${API_BASE_URL}/api/users/${user._id}/stats`)
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setStats(d); })
-      .catch(() => {});
+      .catch(() => { });
     fetch(`${API_BASE_URL}/api/users/${user._id}/wallet`)
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setWalletBalance(d.walletBalance || 0); })
-      .catch(() => {});
+      .catch(() => { });
   }, [user]);
 
   const handleAddMoney = async () => {
@@ -42,7 +42,7 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut }) => {
         setAddAmount('');
         setShowAddMoney(false);
       }
-    } catch {}
+    } catch { }
   };
 
   const MenuButton: React.FC<{ icon: string; title: string; subtitle?: string; badge?: string; onClick?: () => void; destructive?: boolean }> = ({ icon, title, subtitle, badge, onClick, destructive }) => (
@@ -81,10 +81,12 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut }) => {
             <div>
               <h1 className="text-3xl font-black text-black dark:text-white leading-tight">{fullName}</h1>
               <div className="flex items-center gap-2 mt-1">
-                <span className="bg-black dark:bg-white text-white dark:text-black text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest">Verified Driver</span>
+                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${user?.isVerified ? 'bg-black dark:bg-white text-white dark:text-black' : 'bg-amber-100 text-amber-700'}`}>
+                  {user?.isVerified ? 'Verified Driver' : (user?.verificationStatus === 'REJECTED' ? 'Verification Rejected' : 'Verification Pending')}
+                </span>
                 <div className="flex items-center text-leaf-600 dark:text-leaf-400">
                   <span className="material-icons text-sm">star</span>
-                  <span className="text-xs font-black ml-1">5.0</span>
+                  <span className="text-xs font-black ml-1">{user?.rating?.toFixed(1) || '5.0'}</span>
                 </div>
               </div>
             </div>
@@ -120,20 +122,20 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut }) => {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
                 <div className="size-10 rounded-2xl bg-white dark:bg-zinc-800 flex items-center justify-center shadow-sm">
-                  <span className="material-icons-outlined text-green-500">verified_user</span>
+                  <span className={`material-icons-outlined ${user?.license && user?.isVerified ? 'text-green-500' : 'text-amber-500'}`}>{user?.license && user?.isVerified ? 'verified_user' : 'hourglass_empty'}</span>
                 </div>
                 <span className="text-sm font-black">Driving License</span>
               </div>
-              <span className="material-icons text-green-500">check_circle</span>
+              <span className={`material-icons ${user?.license && user?.isVerified ? 'text-green-500' : 'text-amber-500'}`}>{user?.license && user?.isVerified ? 'check_circle' : 'pending'}</span>
             </div>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
                 <div className="size-10 rounded-2xl bg-white dark:bg-zinc-800 flex items-center justify-center shadow-sm">
-                  <span className="material-icons-outlined text-green-500">fingerprint</span>
+                  <span className={`material-icons-outlined ${user?.aadhar && user?.isVerified ? 'text-green-500' : 'text-amber-500'}`}>{user?.aadhar && user?.isVerified ? 'fingerprint' : 'hourglass_empty'}</span>
                 </div>
                 <span className="text-sm font-black">Aadhar Verification</span>
               </div>
-              <span className="material-icons text-green-500">check_circle</span>
+              <span className={`material-icons ${user?.aadhar && user?.isVerified ? 'text-green-500' : 'text-amber-500'}`}>{user?.aadhar && user?.isVerified ? 'check_circle' : 'pending'}</span>
             </div>
           </div>
         </div>
@@ -160,9 +162,15 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut }) => {
       <div className="flex justify-between items-center mt-6 mb-8">
         <div>
           <h1 className="text-4xl font-black tracking-tight text-black dark:text-white leading-tight">{fullName}</h1>
-          <div className="mt-2 inline-flex items-center px-2.5 py-1 rounded-full bg-leaf-50 dark:bg-leaf-900/30">
-            <span className="material-icons-outlined text-sm mr-1 text-leaf-600 dark:text-leaf-400">star</span>
-            <span className="text-sm font-black text-leaf-700 dark:text-leaf-400">5.0</span>
+          <div className="mt-2 inline-flex items-center px-2.5 py-1 rounded-full bg-leaf-50 dark:bg-leaf-900/30 gap-2">
+            <span className={`text-[9px] font-black uppercase tracking-widest ${user?.isVerified ? 'text-leaf-700 dark:text-leaf-400' : 'text-amber-600'}`}>
+              {user?.isVerified ? 'Verified Profile' : 'Verification Pending'}
+            </span>
+            <div className="w-px h-2.5 bg-leaf-200 dark:bg-leaf-700"></div>
+            <div className="flex items-center">
+              <span className="material-icons-outlined text-sm mr-1 text-leaf-600 dark:text-leaf-400">star</span>
+              <span className="text-sm font-black text-leaf-700 dark:text-leaf-400">{user?.rating?.toFixed(1) || '5.0'}</span>
+            </div>
           </div>
         </div>
         <div className="w-20 h-20 rounded-2xl bg-[#f3f3f3] dark:bg-zinc-800 flex items-center justify-center shadow-lg overflow-hidden">

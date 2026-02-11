@@ -17,6 +17,9 @@ const userSchema = new mongoose.Schema({
     vehicleNumber: { type: String },
     rating: { type: Number, default: 4.8 },
     photoUrl: { type: String },
+    isVerified: { type: Boolean, default: false },
+    verificationStatus: { type: String, enum: ['PENDING', 'APPROVED', 'REJECTED'], default: 'PENDING' },
+    verificationDate: { type: Date },
     accessibilitySupport: [String], // e.g. ['Wheelchair', 'Hearing Impaired Assistance']
     // Wallet
     walletBalance: { type: Number, default: 0 },

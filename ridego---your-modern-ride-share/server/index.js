@@ -52,6 +52,25 @@ const estimateEtaMinutes = (distanceKm, speedKmh = 28) => {
     return `${minutes} min`;
 };
 
+// --- New: Simulated Background Check API ---
+const performBackgroundCheck = async (userData) => {
+    console.log(`🔍 Starting background check for: ${userData.firstName} ${userData.lastName}`);
+    // Simulate API latency
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // Basic heuristic for demo: Always approve if Aadhar/License provided
+    // In production, this would call a real 3rd party service like Onfido/Checkr
+    const hasDocuments = (userData.role === 'RIDER') ? !!userData.aadhar : (!!userData.aadhar && !!userData.license);
+
+    if (hasDocuments) {
+        console.log(`✅ Background check PASSED for ${userData.firstName}`);
+        return { status: 'APPROVED', verified: true };
+    } else {
+        console.log(`⚠️ Background check PENDING for ${userData.firstName}`);
+        return { status: 'PENDING', verified: false };
+    }
+};
+
 app.use(cors());
 app.use(express.json());
 
@@ -306,9 +325,20 @@ app.post('/api/signup', async (req, res) => {
             photoUrl: photoUrl || `https://i.pravatar.cc/150?u=${phone}`
         } : {};
 
-        user = new User({ role, phone, firstName, lastName, dob, gender, license, aadhar, licenseUrl, aadharUrl, accessibilitySupport, ...driverDefaults });
+        user = new User({
+            role, phone, firstName, lastName, dob, gender,
+            license, aadhar, licenseUrl, aadharUrl,
+            accessibilitySupport, ...driverDefaults
+        });
+
+        // Run background check
+        const checkResult = await performBackgroundCheck(req.body);
+        user.verificationStatus = checkResult.status;
+        user.isVerified = checkResult.verified;
+        if (checkResult.verified) user.verificationDate = new Date();
+
         await user.save();
-        res.status(201).json({ message: 'User created', user });
+        res.status(201).json({ message: 'User created and verified', user });
     } catch (error) {
         console.error('Signup error:', error);
         res.status(500).json({ message: 'Server error during signup' });

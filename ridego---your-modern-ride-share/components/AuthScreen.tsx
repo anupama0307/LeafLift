@@ -432,15 +432,26 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
             <button
               onClick={handleNext}
               disabled={!currentUrl || isLoading}
-              className="w-full h-14 bg-black dark:bg-white text-white dark:text-black font-bold rounded-lg text-lg disabled:opacity-50 shadow-lg flex items-center justify-center gap-2"
+              className="w-full h-14 bg-black dark:bg-white text-white dark:text-black font-bold rounded-lg text-lg disabled:opacity-50 shadow-lg flex items-center justify-center gap-3 active:scale-95 transition-all overflow-hidden relative"
             >
               {isLoading ? (
                 <>
-                  <span className="material-icons-outlined animate-spin">sync</span>
-                  Processing...
+                  <div className="size-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                  <span>Running Background Check...</span>
                 </>
-              ) : isLicense ? 'Next' : 'Complete Registration'}
+              ) : (
+                <>
+                  <span className="material-icons-outlined text-xl">{isLicense ? 'arrow_forward' : 'verified_user'}</span>
+                  {isLicense ? 'Next' : 'Complete & Verify'}
+                </>
+              )}
             </button>
+            {!isLicense && !isLoading && (
+              <p className="mt-4 text-[10px] text-center text-gray-400 font-bold uppercase tracking-widest leading-relaxed">
+                By completing, you agree to our <span className="text-leaf-500">Identity Verification Protocol</span><br />
+                and background screening process.
+              </p>
+            )}
           </div>
         );
     }
