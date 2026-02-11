@@ -12,6 +12,7 @@ declare global {
 
 interface DriverDashboardProps {
   user: any;
+  onNavigate?: (screen: string) => void;
 }
 
 type RideStatus = 'IDLE' | 'SEARCHING' | 'ACCEPTED' | 'ARRIVED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELED';
@@ -25,7 +26,7 @@ interface ChatMessage {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
-const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
+const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) => {
   const [isOnline, setIsOnline] = useState(false);
   const [requests, setRequests] = useState<any[]>([]);
   const [activeRide, setActiveRide] = useState<any>(null);
@@ -70,6 +71,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
   const activeRouteLayerRef = useRef<string | null>(null);
   const lastRouteUpdateRef = useRef<number>(0);
   const lastRouteLocationRef = useRef<{ lat: number; lng: number } | null>(null);
+  const driverLocationRef = useRef<{ lat: number; lng: number } | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(() => document.documentElement.classList.contains('dark'));
 
   const getMapStyle = (darkMode: boolean) => {
@@ -140,6 +142,17 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
         isPooled: payload.isPooled,
         routeIndex: payload.routeIndex
       };
+      // Client-side location filter: only show rides within 6 km
+      const loc = driverLocationRef.current;
+      if (loc && request.pickup && typeof request.pickup.lat === 'number') {
+        const R = 6371;
+        const toR = (v: number) => (v * Math.PI) / 180;
+        const dLat = toR(request.pickup.lat - loc.lat);
+        const dLon = toR(request.pickup.lng - loc.lng);
+        const a = Math.sin(dLat / 2) ** 2 + Math.cos(toR(loc.lat)) * Math.cos(toR(request.pickup.lat)) * Math.sin(dLon / 2) ** 2;
+        const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        if (dist > 6) return; // Too far, ignore
+      }
       addOrUpdateRequestMarker(request);
       setRequests((prev) => {
         if (prev.some((r) => r.rideId === payload.rideId)) return prev;
@@ -171,7 +184,12 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
 
     const handleChatMessage = (msg: any) => {
       if (!msg?.message) return;
-      setChatMessages((prev) => [...prev, { ...msg, createdAt: msg.createdAt || new Date().toISOString() }]);
+      // Avoid duplicating optimistically-added messages from self
+      setChatMessages((prev) => {
+        const isDupe = prev.some(m => m.message === msg.message && m.senderRole === msg.senderRole && Math.abs(new Date(m.createdAt).getTime() - new Date(msg.createdAt || Date.now()).getTime()) < 3000);
+        if (isDupe) return prev;
+        return [...prev, { ...msg, createdAt: msg.createdAt || new Date().toISOString() }];
+      });
     };
 
     const handleNearbyRiderUpdate = (payload: any) => {
@@ -281,6 +299,27 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
     }
   };
 
+  // Fetch nearby ride requests once GPS is available
+  useEffect(() => {
+    if (isOnline && driverLocation && !activeRide) {
+      fetchRequests();
+    }
+  }, [isOnline, !!driverLocation]);
+
+  // Keep driverLocationRef in sync for socket handler access
+  useEffect(() => {
+    driverLocationRef.current = driverLocation;
+  }, [driverLocation]);
+
+  // Poll for nearby rides every 30 seconds to stay fresh
+  useEffect(() => {
+    if (!isOnline || !driverLocation || activeRide) return;
+    const interval = setInterval(() => {
+      fetchRequests();
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [isOnline, !!driverLocation, activeRide]);
+
   useEffect(() => {
     if (!isOnline && !activeRide) return;
     if (!navigator.geolocation) return;
@@ -355,7 +394,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
   }, [riderLocation, driverLocation, mapLoaded]);
 
   const isWithinRadius = (req: any, radiusKm = 6) => {
-    if (!driverLocation || !req.pickup) return true;
+    if (!driverLocation || !req.pickup) return false;
     const R = 6371;
     const toRad = (v: number) => (v * Math.PI) / 180;
     const dLat = toRad(req.pickup.lat - driverLocation.lat);
@@ -395,10 +434,19 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
       setIsOnline(true);
     }
     try {
-      const resp = await fetch(`${API_BASE_URL}/api/users`);
+      if (!driverLocation) return;
+      const resp = await fetch(`${API_BASE_URL}/api/rides/nearby?lat=${driverLocation.lat}&lng=${driverLocation.lng}&radius=6`);
       if (resp.ok) {
-        // Mocking fetching nearby riders from all users if they have active searches
-        // In real app, there would be a dedicated /api/rides/nearby endpoint
+        const rides = await resp.json();
+        const newRequests = rides.map((ride: any) => ({
+          rideId: ride._id,
+          pickup: ride.pickup,
+          dropoff: ride.dropoff,
+          fare: ride.fare,
+          isPooled: ride.isPooled
+        }));
+        setRequests(newRequests);
+        newRequests.forEach((r: any) => addOrUpdateRequestMarker(r));
       }
     } catch (error) {
       console.error('Fetch requests error:', error);
@@ -553,15 +601,22 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
         const data = await resp.json();
         setActiveRide(data.ride);
         setRiderDetails({
-          name: data.rider?.firstName + ' ' + data.rider?.lastName,
+          name: data.rider?.name || 'Rider',
           phone: data.rider?.phone,
-          maskedPhone: data.ride?.contact?.riderMasked
+          maskedPhone: data.rider?.maskedPhone || data.ride?.contact?.riderMasked
         });
         setRideStatus('ACCEPTED');
         setSelectedRequest(null);
         setRequests([]);
         requestMarkersRef.current.forEach(m => m.remove());
         requestMarkersRef.current.clear();
+        // Join ride room for real-time chat & events
+        joinRideRoom(rideId);
+        // Load existing chat messages
+        fetch(`${API_BASE_URL}/api/rides/${rideId}/messages`)
+          .then(r => r.ok ? r.json() : [])
+          .then(d => setChatMessages(d || []))
+          .catch(() => {});
       }
     } catch (e) {
       console.error(e);
@@ -626,16 +681,28 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
   const handleSendChat = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim() || !activeRide?._id) return;
-    await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        senderId: user?._id || user?.id,
-        senderRole: 'DRIVER',
-        message: chatInput.trim()
-      })
-    });
+    const msgText = chatInput.trim();
+    const optimisticMsg = {
+      senderId: user?._id || user?.id,
+      senderRole: 'DRIVER',
+      message: msgText,
+      createdAt: new Date().toISOString()
+    };
+    setChatMessages(prev => [...prev, optimisticMsg]);
     setChatInput('');
+    try {
+      await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          senderId: user?._id || user?.id,
+          senderRole: 'DRIVER',
+          message: msgText
+        })
+      });
+    } catch (err) {
+      console.error('Failed to send message', err);
+    }
   };
 
   const handleClearRide = () => {
@@ -850,67 +917,100 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
 
       {/* Shared Ride Overlay */}
       {activeRide && (
-        <div className="absolute bottom-0 inset-x-0 z-50 bg-white dark:bg-zinc-950 rounded-t-[40px] p-6 shadow-[0_-20px_50px_-12px_rgba(0,0,0,0.3)] border-t border-gray-100 dark:border-zinc-900">
-          <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-6"></div>
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-4">
-              <div className="size-16 bg-[#f3f3f3] dark:bg-zinc-900 rounded-2xl flex items-center justify-center shrink-0 border border-gray-100 dark:border-zinc-800 overflow-hidden">
-                <img src={riderDetails?.photoUrl || `https://i.pravatar.cc/150?u=${activeRide.userId}`} className="w-full h-full object-cover" />
-              </div>
-              <div>
-                <h3 className="text-xl font-black dark:text-white">{riderDetails?.name || 'Rider'}</h3>
-                <p className="text-xs font-black uppercase tracking-widest text-[#f2b90d]">{rideStatus.replace('_', ' ')}</p>
-              </div>
+        <div className="absolute bottom-0 inset-x-0 z-50 bg-white dark:bg-zinc-900 rounded-t-3xl shadow-2xl p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-xs uppercase tracking-widest text-gray-400 font-bold">Ride Status</p>
+              <h3 className="text-xl font-black dark:text-white">
+                {rideStatus.replace('_', ' ')}
+              </h3>
             </div>
-            <div className="text-right">
-              <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Total Fare</p>
-              <p className="text-2xl font-black text-green-600 dark:text-green-400">₹{currentFare || activeRide.fare}</p>
-            </div>
+            {(rideStatus === 'ACCEPTED' || rideStatus === 'ARRIVED') && (
+              <div className="bg-black dark:bg-white text-white dark:text-black px-3 py-1.5 rounded-full text-xs font-bold">
+                ETA {activeRide.etaToPickup || 'N/A'}
+              </div>
+            )}
           </div>
 
-          <div className="grid grid-cols-2 gap-3 mb-6">
-            <button
-              onClick={() => setChatOpen(true)}
-              className="bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl flex items-center justify-center gap-2 border border-gray-100 dark:border-zinc-800 group"
-            >
-              <span className="material-icons-outlined text-zinc-400 group-hover:text-black dark:group-hover:text-white transition-colors">chat_bubble</span>
-              <span className="text-sm font-black dark:text-white uppercase tracking-widest">Message</span>
-            </button>
+          <div className="flex items-center gap-3 mb-4">
+            <img
+              src={riderDetails?.photoUrl || `https://i.pravatar.cc/150?u=${activeRide.userId}`}
+              className="w-12 h-12 rounded-full object-cover"
+              alt=""
+            />
+            <div className="flex-1">
+              <div className="font-bold dark:text-white">{riderDetails?.name || 'Rider'}</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">
+                {activeRide.pickup?.address?.split(',')[0] || 'Pickup'} → {activeRide.dropoff?.address?.split(',')[0] || 'Drop'}
+              </div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">
+                ⭐ {riderDetails?.rating?.toFixed(1) || '4.8'}
+              </div>
+            </div>
             <button
               onClick={() => alert(`Call rider via masked number: ${riderDetails?.maskedPhone || 'Unavailable'}`)}
-              className="bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl flex items-center justify-center gap-2 border border-gray-100 dark:border-zinc-800 group"
+              className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
+              title="Call rider"
             >
-              <span className="material-icons-outlined text-zinc-400 group-hover:text-black dark:group-hover:text-white transition-colors">phone_enabled</span>
-              <span className="text-sm font-black dark:text-white uppercase tracking-widest">Call</span>
+              <span className="material-icons-outlined">phone</span>
+            </button>
+            <button
+              onClick={() => setChatOpen(true)}
+              className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
+              title="Chat"
+            >
+              <span className="material-icons-outlined">chat</span>
             </button>
           </div>
 
+          {currentFare !== null && (
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm text-gray-500 dark:text-gray-400">Current Fare</span>
+              <span className="font-bold text-lg dark:text-white">₹{currentFare || activeRide.fare}</span>
+            </div>
+          )}
+
           {rideStatus === 'ACCEPTED' && (
-            <button onClick={handleReached} className="w-full bg-[#f2b90d] text-black py-4 rounded-[28px] font-black shadow-xl shadow-[#f2b90d]/20 active:scale-95 transition-all text-lg">
+            <button onClick={handleReached} className="w-full bg-leaf-600 text-white py-3 rounded-xl font-bold shadow-lg active:scale-95 transition-all">
               Reached Pickup
             </button>
           )}
 
           {rideStatus === 'ARRIVED' && (
-            <div className="space-y-4">
-              <div className="flex gap-2">
+            <div className="bg-amber-50 dark:bg-amber-900/20 p-4 rounded-2xl mb-4">
+              <p className="text-xs font-bold text-amber-600 dark:text-amber-400 uppercase tracking-widest">
+                Enter rider's OTP
+              </p>
+              <div className="flex gap-3 mt-3">
                 {[0, 1, 2, 3].map(i => (
                   <input
                     key={i}
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={1}
                     value={otpInput[i] || ''}
                     onChange={(e) => {
-                      const val = e.target.value.slice(-1);
-                      const newOtp = otpInput.split('');
-                      newOtp[i] = val;
-                      setOtpInput(newOtp.join(''));
-                      if (val && e.target.nextElementSibling) (e.target.nextElementSibling as HTMLInputElement).focus();
+                      const val = e.target.value.replace(/[^0-9]/g, '').slice(-1);
+                      const arr = Array.from({length: 4}, (_, idx) => otpInput[idx] || '');
+                      arr[i] = val;
+                      setOtpInput(arr.join(''));
+                      if (val) {
+                        const next = e.target.nextElementSibling as HTMLInputElement | null;
+                        if (next) next.focus();
+                      }
                     }}
-                    className="flex-1 h-16 bg-gray-50 dark:bg-zinc-900 border-2 border-gray-100 dark:border-zinc-800 rounded-2xl text-center text-2xl font-black dark:text-white focus:border-leaf-500 focus:ring-0 transition-all"
-                    placeholder="-"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Backspace' && !otpInput[i]) {
+                        const prev = (e.target as HTMLInputElement).previousElementSibling as HTMLInputElement | null;
+                        if (prev) prev.focus();
+                      }
+                    }}
+                    className="w-14 h-14 bg-white dark:bg-zinc-800 border-2 border-amber-200 dark:border-amber-700 rounded-xl text-center text-2xl font-black dark:text-white focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-300 transition-all"
+                    placeholder="–"
                   />
                 ))}
               </div>
-              <button onClick={handleVerifyOtp} className="w-full bg-black dark:bg-white text-white dark:text-black py-4 rounded-[28px] font-black text-lg shadow-xl active:scale-95 transition-all h-20">
+              <button onClick={handleVerifyOtp} className="w-full bg-black dark:bg-white text-white dark:text-black py-3 rounded-xl font-bold mt-3 active:scale-95 transition-all">
                 Start Trip
               </button>
             </div>
@@ -941,16 +1041,33 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
           )}
 
           {rideStatus === 'COMPLETED' && (
-            <div className="text-center py-6">
-              <div className="size-20 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4 text-white">
-                <span className="material-icons-outlined text-4xl">check_circle</span>
+            <>
+              <div className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+                Ride completed. Fare: ₹{currentFare || activeRide.fare}
               </div>
-              <h4 className="text-2xl font-black mb-6 dark:text-white">Trip Completed!</h4>
-              <button onClick={handleClearRide} className="w-full bg-black dark:bg-white text-white dark:text-black py-4 rounded-[28px] font-black text-lg">
-                Back to Dashboard
+              <button onClick={handleClearRide} className="w-full bg-black dark:bg-white text-white dark:text-black font-bold py-3 rounded-xl">
+                Done
               </button>
-            </div>
+            </>
           )}
+        </div>
+      )}
+
+      {/* Floating Nav - hidden during active ride to avoid overlapping the ride panel */}
+      {!activeRide && (
+        <div className="absolute bottom-8 left-0 right-0 z-40 px-8 flex justify-between pointer-events-none">
+          <button
+            onClick={() => onNavigate?.('ACCOUNT')}
+            className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
+          >
+            <span className="material-icons-outlined">person</span>
+          </button>
+          <button
+            onClick={() => onNavigate?.('INBOX')}
+            className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
+          >
+            <span className="material-icons-outlined">chat_bubble</span>
+          </button>
         </div>
       )}
 
@@ -1088,54 +1205,61 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
       )}
 
       {chatOpen && activeRide && (
-        <div className="fixed inset-0 z-[110] bg-black/90 backdrop-blur-xl flex flex-col h-full animate-in fade-in zoom-in-95 duration-300">
-          <div className="h-12 w-full flex items-center justify-between px-6 pt-10 mb-4 shrink-0">
-            <button onClick={() => setChatOpen(false)} className="size-12 bg-white/10 rounded-2xl flex items-center justify-center">
-              <span className="material-icons-outlined text-white">close</span>
-            </button>
-            <div className="text-center">
-              <p className="text-[10px] font-bold text-white/50 uppercase tracking-[.2em]">Live Chat</p>
-              <p className="text-xl font-black text-white">{riderDetails?.name || 'Rider'}</p>
+        <div
+          className="fixed inset-0 z-[110] bg-black/60 flex items-center justify-center p-4"
+          onClick={() => setChatOpen(false)}
+        >
+          <div
+            className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-3xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-zinc-800">
+              <h3 className="font-bold dark:text-white">Ride Chat</h3>
+              <button
+                onClick={() => setChatOpen(false)}
+                className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-zinc-800"
+              >
+                <span className="material-icons-outlined">close</span>
+              </button>
             </div>
-            <div className="size-12"></div>
-          </div>
-
-          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6 custom-scrollbar">
-            {chatMessages.length === 0 && (
-              <div className="h-full flex flex-col items-center justify-center opacity-30 text-white">
-                <span className="material-icons-outlined text-5xl mb-4">chat</span>
-                <p className="font-bold">Starts the conversation...</p>
-              </div>
-            )}
-            {chatMessages.map((msg, idx) => (
-              <div key={`${msg.createdAt}-${idx}`} className={`flex ${msg.senderRole === 'DRIVER' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[85%] rounded-[24px] px-6 py-4 text-sm shadow-xl ${msg.senderRole === 'DRIVER'
-                  ? 'bg-leaf-600 text-white rounded-br-none'
-                  : 'bg-white text-black rounded-bl-none'
-                  }`}>
-                  <p className="font-medium leading-relaxed">{msg.message}</p>
-                  <p className={`text-[9px] mt-2 font-black uppercase tracking-widest ${msg.senderRole === 'DRIVER' ? 'text-white/40' : 'text-black/30'}`}>
-                    {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </p>
+            <div className="max-h-72 overflow-y-auto p-4 space-y-3">
+              {chatMessages.length === 0 && (
+                <p className="text-sm text-gray-400 text-center">No messages yet.</p>
+              )}
+              {chatMessages.map((msg, idx) => (
+                <div
+                  key={`${msg.createdAt}-${idx}`}
+                  className={`flex ${msg.senderRole === 'DRIVER' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div
+                    className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${msg.senderRole === 'DRIVER'
+                      ? 'bg-black text-white dark:bg-white dark:text-black'
+                      : 'bg-gray-100 dark:bg-zinc-800 dark:text-white'
+                      }`}
+                  >
+                    {msg.message}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-
-          <form onSubmit={handleSendChat} className="p-6 pb-12 shrink-0 flex gap-3 bg-black/50 border-t border-white/5">
-            <input
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              className="flex-1 bg-white/10 rounded-2xl px-6 py-4 text-white text-sm font-bold placeholder:text-white/30 outline-none focus:ring-2 focus:ring-leaf-500 border border-white/5"
-              placeholder="Write your message..."
-            />
-            <button
-              type="submit"
-              className="bg-leaf-500 size-14 rounded-2xl flex items-center justify-center shadow-lg shadow-leaf-500/20 active:scale-95 transition-all"
+              ))}
+            </div>
+            <form
+              onSubmit={handleSendChat}
+              className="p-3 border-t border-gray-100 dark:border-zinc-800 flex gap-2"
             >
-              <span className="material-icons-outlined text-white">send</span>
-            </button>
-          </form>
+              <input
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                className="flex-1 bg-gray-100 dark:bg-zinc-800 rounded-full px-4 text-sm dark:text-white"
+                placeholder="Type a message..."
+              />
+              <button
+                type="submit"
+                className="bg-black dark:bg-white text-white dark:text-black rounded-full px-4"
+              >
+                Send
+              </button>
+            </form>
+          </div>
         </div>
       )}
     </div>

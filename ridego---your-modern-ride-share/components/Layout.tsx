@@ -79,23 +79,6 @@ const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScre
         </div>
       )}
 
-      {/* Special Floating Navigation for Driver Dashboard Mode */}
-      {currentScreen === AppScreen.DRIVER_DASHBOARD && (
-        <div className="absolute bottom-8 left-0 right-0 z-50 px-8 flex justify-between pointer-events-none">
-          <button
-            onClick={() => setCurrentScreen(AppScreen.ACCOUNT)}
-            className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
-          >
-            <span className="material-icons-outlined">person</span>
-          </button>
-          <button
-            onClick={() => setCurrentScreen(AppScreen.INBOX)}
-            className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
-          >
-            <span className="material-icons-outlined">chat_bubble</span>
-          </button>
-        </div>
-      )}
     </div>
   );
 };

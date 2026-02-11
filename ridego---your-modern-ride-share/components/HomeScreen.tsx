@@ -5,7 +5,7 @@ import { MAIN_SUGGESTIONS, RECENT_LOCATIONS, VEHICLE_CATEGORIES } from '../const
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
 interface HomeScreenProps {
-  onOpenPlan: (vehicleCategory?: string) => void;
+  onOpenPlan: (vehicleCategory?: string, scheduleInfo?: { scheduledFor: string; forName?: string; forPhone?: string }) => void;
 }
 
 interface ScheduledRide {
@@ -222,8 +222,14 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenPlan }) => {
               </div>
               <button
                 onClick={() => {
+                  if (!scheduleDate || !scheduleTime) return;
+                  const scheduledFor = new Date(`${scheduleDate}T${scheduleTime}`).toISOString();
                   setShowScheduleModal(false);
-                  onOpenPlan();
+                  onOpenPlan(undefined, {
+                    scheduledFor,
+                    forName: scheduleForName || undefined,
+                    forPhone: scheduleForPhone || undefined
+                  });
                 }}
                 disabled={!scheduleDate || !scheduleTime}
                 className="w-full bg-leaf-600 dark:bg-leaf-500 text-white py-5 rounded-[28px] font-black shadow-xl shadow-leaf-500/20 disabled:opacity-30 disabled:shadow-none transition-all mt-4 text-lg"

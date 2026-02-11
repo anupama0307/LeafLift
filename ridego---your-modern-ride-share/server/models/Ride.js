@@ -68,6 +68,7 @@ const RideSchema = new mongoose.Schema({
         updatedAt: Date
     },
     etaToPickup: String,
+    etaToDropoff: String,
     otp: String,
     otpVerified: {
         type: Boolean,

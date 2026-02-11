@@ -14,6 +14,7 @@ interface PlanRideScreenProps {
     user: any;
     onBack: () => void;
     initialVehicleCategory?: string;
+    scheduleInfo?: { scheduledFor: string; forName?: string; forPhone?: string };
 }
 
 type RideStatus = 'IDLE' | 'SEARCHING' | 'ACCEPTED' | 'ARRIVED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELED';
@@ -39,7 +40,7 @@ interface RideChatMessage {
 const NEARBY_RADIUS_KM = 6;
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
-const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVehicleCategory }) => {
+const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVehicleCategory, scheduleInfo }) => {
     const [destination, setDestination] = useState('');
     const [pickup, setPickup] = useState('Current Location');
     const [showOptions, setShowOptions] = useState(false);
@@ -61,10 +62,17 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [maskedDriverPhone, setMaskedDriverPhone] = useState<string | null>(null);
     const [passengers, setPassengers] = useState(1);
     const [maxPassengers, setMaxPassengers] = useState(4);
+    const [safetyPrefs, setSafetyPrefs] = useState({ womenOnly: false, verifiedOnly: false, noSmoking: false });
     const [confirmCompleteData, setConfirmCompleteData] = useState<any>(null);
     const [inProgressPooledRides, setInProgressPooledRides] = useState<any[]>([]);
     const [matchedDrivers, setMatchedDrivers] = useState<DriverDetails[]>([]);
     const [isNoDriversFound, setIsNoDriversFound] = useState(false);
+
+    // ─── Live ETA State ───
+    const [liveEtaText, setLiveEtaText] = useState<string | null>(null);
+    const [liveEtaLabel, setLiveEtaLabel] = useState<'pickup' | 'dropoff' | null>(null);
+    const [liveEtaSource, setLiveEtaSource] = useState<string | null>(null);
+    const [liveEtaUpdatedAt, setLiveEtaUpdatedAt] = useState<string | null>(null);
 
     const mapRef = useRef<any>(null);
     const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -89,6 +97,9 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const driverLocationRef = useRef<{ lat: number; lng: number } | null>(null);
     const lastRouteUpdateRef = useRef<number>(0);
     const lastRouteLocationRef = useRef<{ lat: number; lng: number } | null>(null);
+    const pickupManuallyEditedRef = useRef(false);
+    const pickupSelectedByUserRef = useRef(false);
+    const resolvedPickupCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
 
     const [availableRoutes, setAvailableRoutes] = useState<any[]>([]);
     const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
@@ -165,13 +176,30 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             }
         });
 
+        socket.on('ride:eta-update', (payload: any) => {
+            if (!payload?.etaText) return;
+            setLiveEtaText(payload.etaText);
+            setLiveEtaLabel(payload.etaLabel || null);
+            setLiveEtaSource(payload.source || null);
+            setLiveEtaUpdatedAt(payload.updatedAt || new Date().toISOString());
+            // Also update the static etaToPickup if this is a pickup ETA
+            if (payload.etaLabel === 'pickup') {
+                setEtaToPickup(payload.etaText);
+            }
+        });
+
         socket.on('ride:fare-update', (payload: any) => {
             if (payload?.currentFare) setCurrentFare(payload.currentFare);
         });
 
         socket.on('chat:message', (msg: any) => {
             if (!msg?.message) return;
-            setChatMessages(prev => [...prev, { ...msg, createdAt: msg.createdAt || new Date().toISOString() }]);
+            // Avoid duplicating optimistically-added messages from self
+            setChatMessages(prev => {
+                const isDupe = prev.some(m => m.message === msg.message && m.senderRole === msg.senderRole && Math.abs(new Date(m.createdAt).getTime() - new Date(msg.createdAt || Date.now()).getTime()) < 3000);
+                if (isDupe) return prev;
+                return [...prev, { ...msg, createdAt: msg.createdAt || new Date().toISOString() }];
+            });
         });
 
         socket.on('nearby:driver:update', (payload: any) => {
@@ -221,6 +249,39 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         return () => { leaveRideRoom(activeRideId); };
     }, [activeRideId]);
 
+    // ─── Live ETA polling fallback (every 60s) ───
+    useEffect(() => {
+        if (!activeRideId || rideStatus === 'IDLE' || rideStatus === 'SEARCHING' || rideStatus === 'COMPLETED' || rideStatus === 'CANCELED') {
+            setLiveEtaText(null);
+            setLiveEtaLabel(null);
+            setLiveEtaSource(null);
+            setLiveEtaUpdatedAt(null);
+            return;
+        }
+
+        const fetchLiveEta = async () => {
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/rides/${activeRideId}/live-eta`);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.etaText && data.etaText !== 'N/A') {
+                    setLiveEtaText(data.etaText);
+                    setLiveEtaLabel(data.rideStatus === 'IN_PROGRESS' ? 'dropoff' : 'pickup');
+                    setLiveEtaSource(data.source || null);
+                    setLiveEtaUpdatedAt(new Date().toISOString());
+                    if (data.rideStatus !== 'IN_PROGRESS') {
+                        setEtaToPickup(data.etaText);
+                    }
+                }
+            } catch { }
+        };
+
+        // Fetch immediately on ride status change
+        fetchLiveEta();
+        const interval = setInterval(fetchLiveEta, 60000);
+        return () => clearInterval(interval);
+    }, [activeRideId, rideStatus]);
+
     // ─── Filter nearby drivers ───
     useEffect(() => {
         if (!pickupCoords) return;
@@ -238,9 +299,10 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         const userStr = localStorage.getItem('leaflift_user');
         const user = userStr ? JSON.parse(userStr) : null;
         if (rideStatus === 'SEARCHING' && activeRideId && pickupCoords) {
+            const resolvedPickup = resolvedPickupCoordsRef.current || pickupCoords;
             socket.emit('rider:search', {
                 rideId: activeRideId, riderId: user?._id,
-                pickup: { address: pickup, lat: pickupCoords.lat, lng: pickupCoords.lng },
+                pickup: { address: pickup, lat: resolvedPickup.lat, lng: resolvedPickup.lng },
                 dropoff: dropoffCoords
                     ? { address: destination, lat: dropoffCoords.lat, lng: dropoffCoords.lng }
                     : null,
@@ -481,7 +543,10 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             navigator.geolocation.getCurrentPosition(
                 async (position) => {
                     const { latitude, longitude } = position.coords;
+                    // Don't overwrite user-selected pickup coords with GPS
+                    if (pickupSelectedByUserRef.current) return;
                     setPickupCoords({ lat: latitude, lng: longitude });
+                    resolvedPickupCoordsRef.current = { lat: latitude, lng: longitude };
                     if (mapRef.current) {
                         mapRef.current.flyTo({ center: [longitude, latitude], zoom: 15 });
                         const el = document.createElement('div');
@@ -491,7 +556,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             .setLngLat([longitude, latitude]).addTo(mapRef.current);
                         marker.on('dragend', async () => {
                             const lngLat = marker.getLngLat();
-                            setPickupCoords({ lat: lngLat.lat, lng: lngLat.lng });
+                            const dragCoords = { lat: lngLat.lat, lng: lngLat.lng };
+                            setPickupCoords(dragCoords);
+                            resolvedPickupCoordsRef.current = dragCoords;
+                            pickupManuallyEditedRef.current = false;
+                            pickupSelectedByUserRef.current = true;
                             setPickup('Locating...');
                             const address = await reverseGeocode(lngLat.lat, lngLat.lng);
                             setPickup(address);
@@ -500,6 +569,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         try {
                             const address = await reverseGeocode(latitude, longitude);
                             setPickup(address);
+                            pickupManuallyEditedRef.current = false;
                         } catch { }
                     }
                     // Fetch nearby drivers to show on map
@@ -552,6 +622,9 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         if (focusedInput === 'pickup') {
             setPickup(place.structuredFormatting.mainText);
             setPickupCoords(coords);
+            resolvedPickupCoordsRef.current = coords;
+            pickupManuallyEditedRef.current = false;
+            pickupSelectedByUserRef.current = true;
             setFocusedInput('dropoff');
             if (pickupMarkerRef.current && mapRef.current) {
                 pickupMarkerRef.current.setLngLat([lng, lat]);
@@ -561,8 +634,25 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             setDestination(place.structuredFormatting.mainText);
             setDropoffCoords(coords);
             setSuggestions([]);
-            if (pickupCoords) {
-                await calculateRoute(pickupCoords, coords);
+            // Geocode pickup text if user typed it manually without selecting a suggestion
+            let startCoords = pickupCoords;
+            if (pickupManuallyEditedRef.current && pickup && pickup.length > 2) {
+                try {
+                    const results = await searchPlaces(pickup);
+                    if (results.length > 0 && results[0].latitude && results[0].longitude) {
+                        startCoords = { lat: results[0].latitude, lng: results[0].longitude };
+                        setPickupCoords(startCoords);
+                        resolvedPickupCoordsRef.current = startCoords;
+                        pickupManuallyEditedRef.current = false;
+                        pickupSelectedByUserRef.current = true;
+                        if (pickupMarkerRef.current) {
+                            pickupMarkerRef.current.setLngLat([startCoords.lng, startCoords.lat]);
+                        }
+                    }
+                } catch { }
+            }
+            if (startCoords) {
+                await calculateRoute(startCoords, coords);
                 setShowOptions(true);
             }
         }
@@ -664,7 +754,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                 const prices = new Map<string, number>();
                 VEHICLE_CATEGORIES.forEach(cat => {
                     const price = Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate);
-                    prices.set(cat.id, rideMode === 'Pooled' ? Math.round(price * 0.67) : price);
+                    prices.set(cat.id, rideMode === 'Pooled' ? Math.round(price * 0.67 * passengers) : price);
                 });
                 setCategoryPrices(prices);
 
@@ -739,7 +829,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         const prices = new Map<string, number>();
         VEHICLE_CATEGORIES.forEach(cat => {
             const price = Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate);
-            prices.set(cat.id, rideMode === 'Pooled' ? Math.round(price * 0.67) : price);
+            prices.set(cat.id, rideMode === 'Pooled' ? Math.round(price * 0.67 * passengers) : price);
         });
         setCategoryPrices(prices);
         availableRoutes.forEach((_, i) => {
@@ -751,7 +841,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         });
     };
 
-    // ─── Recalc prices on mode change ───
+    // ─── Recalc prices on mode/passenger change ───
     useEffect(() => {
         if (availableRoutes.length === 0) return;
         const route = availableRoutes[selectedRouteIndex];
@@ -759,10 +849,20 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         const prices = new Map<string, number>();
         VEHICLE_CATEGORIES.forEach(cat => {
             const price = Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate);
-            prices.set(cat.id, rideMode === 'Pooled' ? Math.round(price * 0.67) : price);
+            prices.set(cat.id, rideMode === 'Pooled' ? Math.round(price * 0.67 * passengers) : price);
         });
         setCategoryPrices(prices);
-    }, [rideMode, selectedRouteIndex, availableRoutes]);
+    }, [rideMode, selectedRouteIndex, availableRoutes, passengers]);
+
+    // ─── Auto-switch from BIKE when entering Pooled mode, reset passengers on Solo ───
+    useEffect(() => {
+        if (rideMode === 'Pooled' && selectedCategory === 'BIKE') {
+            setSelectedCategory('CAR');
+        }
+        if (rideMode === 'Solo') {
+            setPassengers(1);
+        }
+    }, [rideMode]);
 
     // ─── Fetch in-progress pooled rides for joining ───
     useEffect(() => {
@@ -798,14 +898,31 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         const user = userStr ? JSON.parse(userStr) : null;
         if (!user?._id) { alert('Please log in'); setIsRequesting(false); return; }
 
+        // Resolve pickup coords: prefer the ref (set during route calc), fallback to state
+        let finalPickupCoords = resolvedPickupCoordsRef.current || pickupCoords;
+
+        // Safety net: if pickup text was manually edited, geocode it before creating ride
+        if (pickupManuallyEditedRef.current && pickup && pickup.length > 2) {
+            try {
+                const results = await searchPlaces(pickup);
+                if (results.length > 0 && results[0].latitude && results[0].longitude) {
+                    finalPickupCoords = { lat: results[0].latitude, lng: results[0].longitude };
+                    setPickupCoords(finalPickupCoords);
+                    resolvedPickupCoordsRef.current = finalPickupCoords;
+                    pickupManuallyEditedRef.current = false;
+                    pickupSelectedByUserRef.current = true;
+                }
+            } catch { }
+        }
+
         const selectedRoute = availableRoutes[selectedRouteIndex];
         const price = categoryPrices.get(selectedCategory) || 0;
         const cat = VEHICLE_CATEGORIES.find(c => c.id === selectedCategory);
 
         const rideData = {
             userId: user._id,
-            status: 'SEARCHING',
-            pickup: { address: pickup, lat: pickupCoords?.lat, lng: pickupCoords?.lng },
+            status: scheduleInfo ? 'SCHEDULED' : 'SEARCHING',
+            pickup: { address: pickup, lat: finalPickupCoords?.lat, lng: finalPickupCoords?.lng },
             dropoff: { address: destination, lat: dropoffCoords?.lat, lng: dropoffCoords?.lng },
             fare: price,
             distance: routeInfo?.distance,
@@ -821,21 +938,36 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             isPooled: rideMode === 'Pooled' && (selectedCategory === 'CAR' || selectedCategory === 'BIG_CAR'),
             passengers,
             maxPassengers: rideMode === 'Pooled' ? maxPassengers : passengers,
-            bookingTime: new Date().toISOString()
+            ...(rideMode === 'Pooled' ? { safetyPreferences: safetyPrefs } : {}),
+            bookingTime: new Date().toISOString(),
+            ...(scheduleInfo ? {
+                isScheduled: true,
+                scheduledFor: scheduleInfo.scheduledFor,
+                scheduledForName: scheduleInfo.forName,
+                scheduledForPhone: scheduleInfo.forPhone
+            } : {})
         };
 
         try {
-            const resp = await fetch(`${API_BASE_URL}/api/rides`, {
+            const endpoint = scheduleInfo
+                ? `${API_BASE_URL}/api/rides/schedule`
+                : `${API_BASE_URL}/api/rides`;
+            const resp = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(rideData)
             });
             if (resp.ok) {
                 const data = await resp.json();
-                setActiveRideId(data._id);
-                setRideStatus('SEARCHING');
-                setCurrentFare(data.currentFare || data.fare || price);
-                setShowOptions(false);
+                if (scheduleInfo) {
+                    alert(`Ride scheduled for ${new Date(scheduleInfo.scheduledFor).toLocaleString()}!`);
+                    onBack();
+                } else {
+                    setActiveRideId(data._id);
+                    setRideStatus('SEARCHING');
+                    setCurrentFare(data.currentFare || data.fare || price);
+                    setShowOptions(false);
+                }
             } else {
                 alert('Failed to book ride.');
             }
@@ -852,12 +984,24 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         if (!chatInput.trim() || !activeRideId) return;
         const userStr = localStorage.getItem('leaflift_user');
         const user = userStr ? JSON.parse(userStr) : null;
-        await fetch(`${API_BASE_URL}/api/rides/${activeRideId}/messages`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ senderId: user?._id, senderRole: 'RIDER', message: chatInput.trim() })
-        }).catch(() => { });
+        const msgText = chatInput.trim();
+        const optimisticMsg = {
+            senderId: user?._id,
+            senderRole: 'RIDER',
+            message: msgText,
+            createdAt: new Date().toISOString()
+        };
+        setChatMessages(prev => [...prev, optimisticMsg]);
         setChatInput('');
+        try {
+            await fetch(`${API_BASE_URL}/api/rides/${activeRideId}/messages`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ senderId: user?._id, senderRole: 'RIDER', message: msgText })
+            });
+        } catch (err) {
+            console.error('Failed to send message', err);
+        }
     };
 
     // ─── Confirm ride completion ───
@@ -880,6 +1024,10 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         setActiveRideId(null);
         setDriverDetails(null);
         setEtaToPickup(null);
+        setLiveEtaText(null);
+        setLiveEtaLabel(null);
+        setLiveEtaSource(null);
+        setLiveEtaUpdatedAt(null);
         setOtpCode(null);
         setCurrentFare(null);
         setChatMessages([]);
@@ -894,6 +1042,8 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         nearbyDriverMarkersRef.current.forEach(m => m.remove());
         nearbyDriverMarkersRef.current.clear();
         nearbyDriverPositionsRef.current.clear();
+        // Navigate back to home screen
+        onBack();
     };
 
     // ─── RENDER ───
@@ -933,7 +1083,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 <input
                                     type="text"
                                     value={pickup}
-                                    onChange={(e) => setPickup(e.target.value)}
+                                    onChange={(e) => { setPickup(e.target.value); pickupManuallyEditedRef.current = true; }}
                                     onFocus={() => setFocusedInput('pickup')}
                                     className="flex-1 bg-transparent border-none p-2 text-sm font-bold focus:ring-0 focus:outline-none dark:text-white"
                                     placeholder="Current Location"
@@ -953,10 +1103,29 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             </div>
                         </div>
                         <button
-                            onClick={() => {
-                                if (destination && pickupCoords && dropoffCoords) {
-                                    calculateRoute(pickupCoords, dropoffCoords);
-                                    setShowOptions(true);
+                            onClick={async () => {
+                                if (destination && dropoffCoords) {
+                                    let startCoords = pickupCoords;
+                                    if (pickupManuallyEditedRef.current && pickup && pickup.length > 2) {
+                                        try {
+                                            const results = await searchPlaces(pickup);
+                                            if (results.length > 0 && results[0].latitude && results[0].longitude) {
+                                                startCoords = { lat: results[0].latitude, lng: results[0].longitude };
+                                                setPickupCoords(startCoords);
+                                                resolvedPickupCoordsRef.current = startCoords;
+                                                pickupManuallyEditedRef.current = false;
+                                                pickupSelectedByUserRef.current = true;
+                                                if (pickupMarkerRef.current) {
+                                                    pickupMarkerRef.current.setLngLat([startCoords.lng, startCoords.lat]);
+                                                }
+                                            }
+                                        } catch { }
+                                    }
+                                    if (startCoords) {
+                                        resolvedPickupCoordsRef.current = startCoords;
+                                        calculateRoute(startCoords, dropoffCoords);
+                                        setShowOptions(true);
+                                    }
                                 }
                             }}
                             disabled={!destination || !pickupCoords}
@@ -1032,48 +1201,78 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             </div>
                         )}
 
-                        {/* Mode Toggle */}
-                        <div className="flex gap-2 mt-3">
-                            <button
-                                onClick={() => setRideMode('Solo')}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Solo'
-                                    ? 'bg-black dark:bg-white text-white dark:text-black'
-                                    : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
-                                    }`}
-                            >
-                                Solo
-                            </button>
-                            <button
-                                onClick={() => setRideMode('Pooled')}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Pooled'
-                                    ? 'bg-green-500 text-white'
-                                    : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
-                                    }`}
-                            >
-                                🌱 Pool
-                            </button>
-                        </div>
+                        {/* Mode Toggle with Savings */}
+                        {(() => {
+                            const route = availableRoutes[selectedRouteIndex];
+                            const cat = VEHICLE_CATEGORIES.find(c => c.id === selectedCategory);
+                            const soloPrice = route && cat ? Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate) : 0;
+                            const poolPrice = route && cat ? Math.round(soloPrice * 0.67) : 0;
+                            const fareSaved = soloPrice - poolPrice;
+                            const co2Solo = route ? calculateCO2(route.distance, selectedCategory) : 0;
+                            const co2Pool = route ? calculateCO2(route.distance, 'pool') : 0;
+                            const co2Saved = co2Solo - co2Pool;
+                            return (
+                                <>
+                                    <div className="flex gap-2 mt-3">
+                                        <button
+                                            onClick={() => setRideMode('Solo')}
+                                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Solo'
+                                                ? 'bg-black dark:bg-white text-white dark:text-black'
+                                                : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
+                                                }`}
+                                        >
+                                            Solo {rideMode === 'Solo' && route ? `• ₹${soloPrice}` : ''}
+                                        </button>
+                                        <button
+                                            onClick={() => setRideMode('Pooled')}
+                                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Pooled'
+                                                ? 'bg-green-500 text-white'
+                                                : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
+                                                }`}
+                                        >
+                                            🌱 Pool {rideMode === 'Pooled' && route ? `• ₹${poolPrice}` : ''}
+                                        </button>
+                                    </div>
+                                    {route && fareSaved > 0 && (
+                                        <div className={`mt-2 p-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all ${rideMode === 'Pooled'
+                                            ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
+                                            : 'bg-gray-50 dark:bg-zinc-800 text-gray-500 dark:text-gray-400'
+                                            }`}>
+                                            <span>🌱</span>
+                                            <span>
+                                                Pool & save ₹{fareSaved} per person • {co2Saved > 0 ? `${co2Saved}g less CO₂` : ''}
+                                            </span>
+                                        </div>
+                                    )}
+                                </>
+                            );
+                        })()}
+                    </div>
 
-                        {/* Passengers */}
-                        <div className="flex items-center gap-3 mt-3">
-                            <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Passengers:</span>
-                            {[1, 2, 3, 4].map(n => (
-                                <button
-                                    key={n}
-                                    onClick={() => setPassengers(n)}
-                                    className={`w-8 h-8 rounded-full text-xs font-bold ${passengers === n
-                                        ? 'bg-black dark:bg-white text-white dark:text-black'
-                                        : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300'
-                                        }`}
-                                >
-                                    {n}
-                                </button>
-                            ))}
-                        </div>
+                    {/* Scrollable content area */}
+                    <div className="flex-1 overflow-y-auto hide-scrollbar">
+                        {/* Passengers (Pooled only) */}
+                        {rideMode === 'Pooled' && (
+                            <div className="flex items-center gap-3 px-4 mt-2">
+                                <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Passengers:</span>
+                                {[1, 2, 3, 4].map(n => (
+                                    <button
+                                        key={n}
+                                        onClick={() => setPassengers(n)}
+                                        className={`w-8 h-8 rounded-full text-xs font-bold ${passengers === n
+                                            ? 'bg-black dark:bg-white text-white dark:text-black'
+                                            : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300'
+                                            }`}
+                                    >
+                                        {n}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
 
                         {/* Max Passengers for Pooled Rides (CAR/BIG_CAR only) */}
                         {rideMode === 'Pooled' && (selectedCategory === 'CAR' || selectedCategory === 'BIG_CAR') && (
-                            <div className="flex items-center gap-3 mt-3">
+                            <div className="flex items-center gap-3 px-4 mt-2">
                                 <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Max Pool:</span>
                                 {[2, 3, 4, selectedCategory === 'BIG_CAR' ? 6 : null].filter(Boolean).map(n => (
                                     <button
@@ -1090,20 +1289,58 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             </div>
                         )}
 
-                        {rideMode === 'Pooled' && (selectedCategory === 'BIKE' || selectedCategory === 'AUTO') && (
-                            <div className="mt-3 p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
-                                <p className="text-xs text-yellow-700 dark:text-yellow-400">⚠️ Pooling only available for Car & Big Car</p>
+                        {/* Safety Preferences (Pooled only) */}
+                        {rideMode === 'Pooled' && (
+                            <div className="px-4 mt-3">
+                                <span className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-2 block">Safety Preferences:</span>
+                                <div className="flex flex-col gap-2">
+                                    {[
+                                        { key: 'womenOnly' as const, label: 'Women Only', icon: 'female', desc: 'Match with women riders & drivers only' },
+                                        { key: 'verifiedOnly' as const, label: 'Verified Riders', icon: 'verified_user', desc: 'Only verified profiles' },
+                                        { key: 'noSmoking' as const, label: 'No Smoking', icon: 'smoke_free', desc: 'Smoke-free ride' },
+                                    ].map(pref => (
+                                        <label
+                                            key={pref.key}
+                                            className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition-all ${
+                                                safetyPrefs[pref.key]
+                                                    ? 'border-green-400 bg-green-50 dark:bg-green-900/20 dark:border-green-700'
+                                                    : 'border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50'
+                                            }`}
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                checked={safetyPrefs[pref.key]}
+                                                onChange={() => setSafetyPrefs(prev => ({ ...prev, [pref.key]: !prev[pref.key] }))}
+                                                className="sr-only"
+                                            />
+                                            <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-all ${
+                                                safetyPrefs[pref.key]
+                                                    ? 'bg-green-500 border-green-500'
+                                                    : 'border-gray-300 dark:border-zinc-600'
+                                            }`}>
+                                                {safetyPrefs[pref.key] && (
+                                                    <span className="material-icons-outlined text-white" style={{ fontSize: '14px' }}>check</span>
+                                                )}
+                                            </div>
+                                            <span className="material-icons-outlined text-sm text-gray-500 dark:text-gray-400">{pref.icon}</span>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="text-xs font-bold dark:text-white">{pref.label}</div>
+                                                <div className="text-[10px] text-gray-400 dark:text-gray-500">{pref.desc}</div>
+                                            </div>
+                                        </label>
+                                    ))}
+                                </div>
                             </div>
                         )}
-                    </div>
+
 
                     {/* In-Progress Pooled Rides */}
                     {rideMode === 'Pooled' && inProgressPooledRides.length > 0 && (
-                        <div className="px-4 py-3 border-t border-gray-200 dark:border-zinc-700">
+                        <div className="px-4 py-2">
                             <h3 className="text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">
                                 🚗 Join Ongoing Pool Rides
                             </h3>
-                            <div className="space-y-2 max-h-40 overflow-y-auto">
+                            <div className="space-y-2">
                                 {inProgressPooledRides.map((ride) => (
                                     <div
                                         key={ride._id}
@@ -1116,14 +1353,34 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                         {ride.vehicleCategory === 'BIG_CAR' ? 'airport_shuttle' : 'directions_car'}
                                                     </span>
                                                     <span className="text-sm font-bold text-gray-800 dark:text-gray-200">
-                                                        {ride.vehicleCategory === 'BIG_CAR' ? 'Big Car' : 'Car'}
-                                                    </span>
-                                                    <span className="text-xs text-gray-600 dark:text-gray-400">
-                                                        • {ride.availableSeats} seat{ride.availableSeats > 1 ? 's' : ''} left
+                                                        {ride.vehicleCategory === 'BIG_CAR' ? 'SUV' : 'Car'}
                                                     </span>
                                                 </div>
-                                                <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                                                    {ride.status === 'ACCEPTED' ? '📍 Picking up' : '🚗 In progress'}
+                                                <div className="flex items-center gap-3 mt-1.5">
+                                                    <div className="flex items-center gap-1">
+                                                        <span className="material-icons-outlined text-gray-500 dark:text-gray-400" style={{ fontSize: '14px' }}>group</span>
+                                                        <span className="text-xs font-bold text-gray-700 dark:text-gray-300">
+                                                            {ride.currentPassengers || ride.passengers || 1} in car
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex items-center gap-1">
+                                                        <span className="material-icons-outlined text-green-500" style={{ fontSize: '14px' }}>event_seat</span>
+                                                        <span className="text-xs font-bold text-green-600 dark:text-green-400">
+                                                            {ride.availableSeats} seat{ride.availableSeats > 1 ? 's' : ''} free
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-0.5 mt-1">
+                                                    {Array.from({ length: ride.maxPassengers || 4 }).map((_, i) => (
+                                                        <span
+                                                            key={i}
+                                                            className="material-icons-outlined"
+                                                            style={{ fontSize: '14px', color: i < (ride.currentPassengers || ride.passengers || 1) ? '#16a34a' : '#d1d5db' }}
+                                                        >person</span>
+                                                    ))}
+                                                </div>
+                                                <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
+                                                    {ride.status === 'ACCEPTED' ? '📍 Picking up' : '🚗 En route'}
                                                 </p>
                                             </div>
                                             <button
@@ -1207,10 +1464,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                     )}
 
                     {/* Vehicle Categories */}
-                    <div className="flex-1 overflow-y-auto px-4 py-2 hide-scrollbar">
-                        {VEHICLE_CATEGORIES.map(cat => {
+                    <div className="px-4 py-2">
+                        {VEHICLE_CATEGORIES.filter(cat => !(rideMode === 'Pooled' && cat.id === 'BIKE')).map(cat => {
                             const price = categoryPrices.get(cat.id) || 0;
                             const route = availableRoutes[selectedRouteIndex];
+                            const soloPrice = route ? Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate) : 0;
                             const co2 = route ? calculateCO2(route.distance, cat.id) : 0;
                             const co2Pool = route ? calculateCO2(route.distance, 'pool') : 0;
                             const etaMin = route ? Math.round(route.duration / 60) : 0;
@@ -1244,6 +1502,9 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                     </div>
                                     <div className="text-right">
                                         <div className="font-bold text-lg dark:text-white">₹{price}</div>
+                                        {rideMode === 'Pooled' && soloPrice > price && (
+                                            <div className="text-xs text-gray-400 line-through">₹{soloPrice}</div>
+                                        )}
                                         {selectedCategory === cat.id && (
                                             <div className="text-green-500 text-xs mt-1">✓</div>
                                         )}
@@ -1252,9 +1513,18 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             );
                         })}
                     </div>
+                    </div>{/* end scrollable area */}
 
                     {/* Footer */}
                     <div className="p-4 border-t border-gray-200 dark:border-zinc-800">
+                        {scheduleInfo && (
+                            <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl flex items-center gap-2">
+                                <span className="material-icons-outlined text-blue-500 text-lg">schedule</span>
+                                <span className="text-sm font-bold text-blue-700 dark:text-blue-300">
+                                    Scheduled: {new Date(scheduleInfo.scheduledFor).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                                </span>
+                            </div>
+                        )}
                         <button
                             onClick={() => setShowPaymentModal(true)}
                             className="w-full flex items-center justify-between mb-3 p-3 bg-gray-50 dark:bg-zinc-800 rounded-xl hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors"
@@ -1265,13 +1535,15 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         <button
                             onClick={handleConfirmRide}
                             disabled={isRequesting}
-                            className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-4 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg"
+                            className={`w-full text-white font-bold py-4 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg ${scheduleInfo ? 'bg-blue-500 hover:bg-blue-600' : 'bg-green-500 hover:bg-green-600'}`}
                         >
                             {isRequesting ? (
                                 <span className="flex items-center justify-center gap-2">
                                     <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                                    Booking...
+                                    {scheduleInfo ? 'Scheduling...' : 'Booking...'}
                                 </span>
+                            ) : scheduleInfo ? (
+                                `Schedule ${VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label} - ₹${categoryPrices.get(selectedCategory) || 0}`
                             ) : (
                                 `Book ${VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label} - ₹${categoryPrices.get(selectedCategory) || 0}`
                             )}
@@ -1348,9 +1620,23 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 {rideStatus.replace('_', ' ')}
                             </h3>
                         </div>
-                        {etaToPickup && (rideStatus === 'ACCEPTED' || rideStatus === 'ARRIVED') && (
-                            <div className="bg-black dark:bg-white text-white dark:text-black px-3 py-1.5 rounded-full text-xs font-bold">
-                                ETA {etaToPickup}
+                        {/* Live ETA Badge */}
+                        {(liveEtaText || etaToPickup) && rideStatus !== 'COMPLETED' && (
+                            <div className="flex flex-col items-end gap-1">
+                                <div className="flex items-center gap-1.5 bg-black dark:bg-white text-white dark:text-black px-3 py-1.5 rounded-full text-xs font-bold">
+                                    <span className="relative flex h-2 w-2">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                                    </span>
+                                    {rideStatus === 'IN_PROGRESS'
+                                        ? `ETA ${liveEtaText || 'Computing...'}`
+                                        : `ETA ${liveEtaText || etaToPickup}`
+                                    }
+                                </div>
+                                <span className="text-[9px] text-gray-400 dark:text-zinc-500 font-medium">
+                                    {liveEtaSource === 'ola-traffic' ? 'Live traffic' : 'Estimated'}
+                                    {liveEtaLabel === 'pickup' ? ' to pickup' : liveEtaLabel === 'dropoff' ? ' to drop' : ''}
+                                </span>
                             </div>
                         )}
                     </div>

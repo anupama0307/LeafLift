@@ -483,6 +483,23 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
         </button>
       </div>
 
+      {/* Sign In / Sign Up Toggle */}
+      <div className="flex bg-[#f3f3f3] dark:bg-zinc-800 rounded-xl p-1 mb-6">
+        <button
+          type="button"
+          className="flex-1 py-3 rounded-lg text-sm font-black transition-all bg-white dark:bg-zinc-700 text-black dark:text-white shadow-sm"
+        >
+          Sign In
+        </button>
+        <button
+          type="button"
+          onClick={() => { setMode('SIGNUP_FORM'); setError(null); setSuccessMessage(null); }}
+          className="flex-1 py-3 rounded-lg text-sm font-black transition-all text-gray-400 dark:text-zinc-500"
+        >
+          Sign Up
+        </button>
+      </div>
+
       <StepHeader title="Sign In" subtitle="Welcome back! Sign in to continue." />
 
       <OAuthButtons forMode="signin" />
@@ -552,6 +569,23 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
         </button>
         <button onClick={toggleTheme} className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full">
           <span className="material-icons-outlined text-sm">{isDark ? 'light_mode' : 'dark_mode'}</span>
+        </button>
+      </div>
+
+      {/* Sign In / Sign Up Toggle */}
+      <div className="flex bg-[#f3f3f3] dark:bg-zinc-800 rounded-xl p-1 mb-6">
+        <button
+          type="button"
+          onClick={() => { setMode('SIGNIN'); setError(null); setSuccessMessage(null); }}
+          className="flex-1 py-3 rounded-lg text-sm font-black transition-all text-gray-400 dark:text-zinc-500"
+        >
+          Sign In
+        </button>
+        <button
+          type="button"
+          className="flex-1 py-3 rounded-lg text-sm font-black transition-all bg-white dark:bg-zinc-700 text-black dark:text-white shadow-sm"
+        >
+          Sign Up
         </button>
       </div>
 

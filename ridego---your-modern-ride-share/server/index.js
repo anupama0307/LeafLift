@@ -88,6 +88,10 @@ io.on('connection', (socket) => {
         if (role === 'DRIVER') {
             socket.data.role = 'DRIVER';
             socket.join('drivers:online');
+            // Track this socket in onlineDrivers so location-filtered emits work
+            const entry = onlineDrivers.get(userId) || { socketIds: new Set(), location: null };
+            entry.socketIds.add(socket.id);
+            onlineDrivers.set(userId, entry);
         }
         if (role === 'RIDER') {
             socket.data.role = 'RIDER';
@@ -126,14 +130,23 @@ io.on('connection', (socket) => {
     socket.on('rider:search', ({ rideId, riderId, pickup, dropoff, fare, isPooled }) => {
         if (!rideId || !pickup || !pickup.lat || !pickup.lng) return;
         socket.data.searchRideId = rideId;
-        io.to('drivers:online').emit('nearby:rider:update', {
-            rideId,
-            riderId,
-            pickup,
-            dropoff,
-            fare,
-            isPooled
-        });
+        const NEARBY_RADIUS_KM = 6;
+        const payload = { rideId, riderId, pickup, dropoff, fare, isPooled };
+
+        // Send only to drivers within radius instead of broadcasting to all
+        for (const [driverId, entry] of onlineDrivers.entries()) {
+            if (!entry.location || typeof entry.location.lat !== 'number') {
+                // Driver has no GPS yet, skip
+                continue;
+            }
+            const dist = getDistanceKm(entry.location.lat, entry.location.lng, pickup.lat, pickup.lng);
+            if (dist !== null && dist <= NEARBY_RADIUS_KM) {
+                // Emit to each socket this driver has
+                for (const sid of entry.socketIds) {
+                    io.to(sid).emit('nearby:rider:update', payload);
+                }
+            }
+        }
     });
 
     socket.on('rider:search:stop', ({ rideId }) => {
@@ -513,9 +526,9 @@ app.get('/api/rider/match-driver', async(req, res) => {
 
         res.json(matches.map(d => ({
             id: d._id,
-            name: `${d.firstName} ${d.lastName}`,
+            name: [d.firstName, d.lastName].filter(Boolean).join(' ') || d.email || 'Driver',
             rating: d.rating || 4.8,
-            vehicle: `${d.vehicleMake || ''} ${d.vehicleModel || ''}`,
+            vehicle: [d.vehicleMake || '', d.vehicleModel || ''].filter(Boolean).join(' ') || 'Car',
             vehicleNumber: d.vehicleNumber,
             photoUrl: d.photoUrl,
             phone: maskPhone(d.phone),
@@ -620,7 +633,9 @@ app.post('/api/rides', async(req, res) => {
         const ride = new Ride(payload);
         await ride.save();
 
-        io.to('drivers:online').emit('ride:request', {
+        // Location-filtered broadcast: only send to drivers within 6 km of pickup
+        const RIDE_BROADCAST_RADIUS_KM = 6;
+        const ridePayload = {
             rideId: ride._id,
             pickup: ride.pickup,
             dropoff: ride.dropoff,
@@ -629,7 +644,25 @@ app.post('/api/rides', async(req, res) => {
             isPooled: ride.isPooled,
             routeIndex: ride.routeIndex,
             bookingTime: ride.bookingTime
-        });
+        };
+
+        if (ride.pickup && typeof ride.pickup.lat === 'number' && typeof ride.pickup.lng === 'number') {
+            let sentCount = 0;
+            for (const [driverId, entry] of onlineDrivers.entries()) {
+                if (!entry.location || typeof entry.location.lat !== 'number') continue;
+                const dist = getDistanceKm(entry.location.lat, entry.location.lng, ride.pickup.lat, ride.pickup.lng);
+                if (dist !== null && dist <= RIDE_BROADCAST_RADIUS_KM) {
+                    for (const sid of entry.socketIds) {
+                        io.to(sid).emit('ride:request', ridePayload);
+                    }
+                    sentCount++;
+                }
+            }
+            console.log(`ride:request sent to ${sentCount} nearby drivers (within ${RIDE_BROADCAST_RADIUS_KM}km)`);
+        } else {
+            // Fallback: no pickup coords, broadcast to all
+            io.to('drivers:online').emit('ride:request', ridePayload);
+        }
 
         res.status(201).json(ride);
     } catch (error) {
@@ -660,7 +693,18 @@ app.get('/api/rides/driver/:driverId', async(req, res) => {
 app.get('/api/rides/nearby', async(req, res) => {
     try {
         const { lat, lng, radius = 6 } = req.query;
-        const rides = await Ride.find({ status: 'SEARCHING' }).sort({ bookingTime: -1 });
+        // Only return rides created in the last 15 minutes to avoid stale requests
+        const staleThreshold = new Date(Date.now() - 15 * 60 * 1000);
+        const rides = await Ride.find({
+            status: 'SEARCHING',
+            createdAt: { $gte: staleThreshold }
+        }).sort({ bookingTime: -1 });
+
+        // Auto-cancel old stale SEARCHING rides
+        await Ride.updateMany(
+            { status: 'SEARCHING', createdAt: { $lt: staleThreshold } },
+            { $set: { status: 'CANCELED' } }
+        );
 
         const latNum = lat ? Number(lat) : null;
         const lngNum = lng ? Number(lng) : null;
@@ -848,16 +892,16 @@ app.post('/api/rides/:rideId/accept', async(req, res) => {
             ride,
             driver: driver ? {
                 id: driver._id,
-                name: `${driver.firstName} ${driver.lastName}`,
+                name: [driver.firstName, driver.lastName].filter(Boolean).join(' ') || driver.email || 'Driver',
                 rating: driver.rating || 4.8,
-                vehicle: `${driver.vehicleMake || 'Car'} ${driver.vehicleModel || ''}`.trim(),
+                vehicle: [driver.vehicleMake || 'Car', driver.vehicleModel || ''].filter(Boolean).join(' '),
                 vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                 photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
                 maskedPhone: maskPhone(driver.phone)
             } : null,
             rider: rider ? {
                 id: rider._id,
-                name: `${rider.firstName} ${rider.lastName}`,
+                name: [rider.firstName, rider.lastName].filter(Boolean).join(' ') || rider.email || 'Rider',
                 maskedPhone: maskPhone(rider.phone)
             } : null
         };
@@ -1283,6 +1327,175 @@ app.get('/api/drivers/nearby', async(req, res) => {
     }
 });
 
-httpServer.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
+// ── Live ETA for active rides ──
+app.get('/api/rides/:rideId/live-eta', async(req, res) => {
+    try {
+        const ride = await Ride.findById(req.params.rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        const driverEntry = ride.driverId ? onlineDrivers.get(ride.driverId.toString()) : null;
+        const driverLoc = driverEntry?.location || ride.driverLocation;
+
+        if (!driverLoc || typeof driverLoc.lat !== 'number') {
+            return res.json({ etaMinutes: null, etaText: 'N/A', source: 'unavailable' });
+        }
+
+        let destinationLat, destinationLng;
+        if (ride.status === 'ACCEPTED' || ride.status === 'ARRIVED') {
+            // ETA to pickup
+            if (!ride.pickup || typeof ride.pickup.lat !== 'number') {
+                return res.json({ etaMinutes: null, etaText: 'N/A', source: 'no-pickup' });
+            }
+            destinationLat = ride.pickup.lat;
+            destinationLng = ride.pickup.lng;
+        } else if (ride.status === 'IN_PROGRESS') {
+            // ETA to dropoff
+            if (!ride.dropoff || typeof ride.dropoff.lat !== 'number') {
+                return res.json({ etaMinutes: null, etaText: 'N/A', source: 'no-dropoff' });
+            }
+            destinationLat = ride.dropoff.lat;
+            destinationLng = ride.dropoff.lng;
+        } else {
+            return res.json({ etaMinutes: null, etaText: 'N/A', source: 'inactive' });
+        }
+
+        // Try OLA Directions API for traffic-aware ETA
+        let etaMinutes = null;
+        let etaText = 'N/A';
+        let source = 'haversine';
+
+        if (OLA_API_KEY) {
+            try {
+                const origin = `${driverLoc.lat},${driverLoc.lng}`;
+                const destination = `${destinationLat},${destinationLng}`;
+                const url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&alternatives=false&steps=false&overview=none&language=en&traffic_metadata=true&api_key=${OLA_API_KEY}`;
+                const response = await axios.post(url);
+                const routes = response.data?.routes;
+                if (routes && routes.length > 0) {
+                    const durationSec = routes[0].legs?.[0]?.duration || routes[0].duration;
+                    if (typeof durationSec === 'number') {
+                        etaMinutes = Math.max(1, Math.round(durationSec / 60));
+                        etaText = `${etaMinutes} min`;
+                        source = 'ola-traffic';
+                    }
+                }
+            } catch (e) {
+                console.error('Live ETA OLA API error:', e.message);
+            }
+        }
+
+        // Fallback to Haversine estimate
+        if (etaMinutes === null) {
+            const distKm = getDistanceKm(driverLoc.lat, driverLoc.lng, destinationLat, destinationLng);
+            etaText = estimateEtaMinutes(distKm);
+            etaMinutes = distKm ? Math.max(1, Math.round((distKm / 28) * 60)) : null;
+        }
+
+        res.json({ etaMinutes, etaText, source, rideStatus: ride.status });
+    } catch (error) {
+        console.error('Live ETA error:', error);
+        res.status(500).json({ message: 'Error computing live ETA' });
+    }
 });
+
+// ── Periodic live ETA broadcast (every 60 seconds) ──
+const LIVE_ETA_INTERVAL_MS = 60 * 1000;
+let liveEtaTimer = null;
+
+const broadcastLiveEta = async () => {
+    try {
+        const activeRides = await Ride.find({
+            status: { $in: ['ACCEPTED', 'ARRIVED', 'IN_PROGRESS'] },
+            driverId: { $ne: null }
+        });
+
+        for (const ride of activeRides) {
+            const driverEntry = onlineDrivers.get(ride.driverId.toString());
+            const driverLoc = driverEntry?.location || ride.driverLocation;
+
+            if (!driverLoc || typeof driverLoc.lat !== 'number') continue;
+
+            let destinationLat, destinationLng, etaLabel;
+            if (ride.status === 'ACCEPTED' || ride.status === 'ARRIVED') {
+                if (!ride.pickup || typeof ride.pickup.lat !== 'number') continue;
+                destinationLat = ride.pickup.lat;
+                destinationLng = ride.pickup.lng;
+                etaLabel = 'pickup';
+            } else {
+                if (!ride.dropoff || typeof ride.dropoff.lat !== 'number') continue;
+                destinationLat = ride.dropoff.lat;
+                destinationLng = ride.dropoff.lng;
+                etaLabel = 'dropoff';
+            }
+
+            let etaMinutes = null;
+            let etaText = 'N/A';
+            let source = 'haversine';
+
+            if (OLA_API_KEY) {
+                try {
+                    const origin = `${driverLoc.lat},${driverLoc.lng}`;
+                    const dest = `${destinationLat},${destinationLng}`;
+                    const url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${dest}&alternatives=false&steps=false&overview=none&language=en&traffic_metadata=true&api_key=${OLA_API_KEY}`;
+                    const resp = await axios.post(url);
+                    const routes = resp.data?.routes;
+                    if (routes && routes.length > 0) {
+                        const durationSec = routes[0].legs?.[0]?.duration || routes[0].duration;
+                        if (typeof durationSec === 'number') {
+                            etaMinutes = Math.max(1, Math.round(durationSec / 60));
+                            etaText = `${etaMinutes} min`;
+                            source = 'ola-traffic';
+                        }
+                    }
+                } catch (e) {
+                    // Silently fall back to haversine
+                }
+            }
+
+            if (etaMinutes === null) {
+                const distKm = getDistanceKm(driverLoc.lat, driverLoc.lng, destinationLat, destinationLng);
+                etaText = estimateEtaMinutes(distKm);
+                etaMinutes = distKm ? Math.max(1, Math.round((distKm / 28) * 60)) : null;
+            }
+
+            const payload = {
+                rideId: ride._id,
+                etaMinutes,
+                etaText,
+                etaLabel,
+                source,
+                updatedAt: new Date().toISOString()
+            };
+
+            // Update the ride document with latest ETA
+            if (etaLabel === 'pickup') {
+                ride.etaToPickup = etaText;
+            } else {
+                ride.etaToDropoff = etaText;
+            }
+            await ride.save();
+
+            // Emit to rider and driver
+            io.to(`ride:${ride._id}`).emit('ride:eta-update', payload);
+            io.to(`user:${ride.userId}`).emit('ride:eta-update', payload);
+            if (ride.driverId) io.to(`user:${ride.driverId}`).emit('ride:eta-update', payload);
+        }
+    } catch (error) {
+        console.error('Live ETA broadcast error:', error);
+    }
+};
+
+// Start ETA broadcast when DB is connected
+mongoose.connection.once('open', () => {
+    liveEtaTimer = setInterval(broadcastLiveEta, LIVE_ETA_INTERVAL_MS);
+    console.log('⏱️  Live ETA broadcast started (every 60s)');
+});
+
+// Only start listening when run directly (not when imported for testing)
+if (require.main === module) {
+    httpServer.listen(PORT, () => {
+        console.log(`🚀 Server running on http://localhost:${PORT}`);
+    });
+}
+
+module.exports = { app, httpServer, io, onlineDrivers, otpStore, liveEtaTimer };
