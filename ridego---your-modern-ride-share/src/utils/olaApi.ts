@@ -1,6 +1,6 @@
 import { OlaPlace, OlaRoute, RouteInfo } from '../../types';
 
-const OLA_API_KEY = 'rFyGaGJyBi01CoHCBwHolFwt9XzPRG6DpoqsytwU';
+// Note: OLA API key is handled by the backend proxy (/api/ola/*) - not needed here
 
 // ✅ Autocomplete Search
 export async function searchPlaces(query: string, location?: string): Promise<OlaPlace[]> {
@@ -48,16 +48,24 @@ export async function getRoute(
     originLat: number,
     originLng: number,
     destLat: number,
-    destLng: number
+    destLng: number,
+    waypoints?: Array<{ lat: number; lng: number }>
 ): Promise<OlaRoute[]> {
     try {
         const origin = `${originLat},${originLng}`;
         const destination = `${destLat},${destLng}`;
 
+        const body: any = { origin, destination, alternatives: !waypoints || waypoints.length === 0 };
+
+        // Add waypoints for multi-stop rides
+        if (waypoints && waypoints.length > 0) {
+            body.waypoints = waypoints.map(wp => `${wp.lat},${wp.lng}`);
+        }
+
         const response = await fetch('/api/ola/directions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ origin, destination, alternatives: true })
+            body: JSON.stringify(body)
         });
 
         if (!response.ok) {
@@ -69,13 +77,18 @@ export async function getRoute(
 
         // OLA Maps response format: { routes: [...] }
         if (data.routes && Array.isArray(data.routes)) {
-            return data.routes.map((route: any) => ({
-                summary: route.summary || '',
-                distance: route.legs?.[0]?.distance || 0,
-                duration: route.legs?.[0]?.duration || 0,
-                geometry: route.overview_polyline || '',
-                legs: route.legs || []
-            }));
+            return data.routes.map((route: any) => {
+                // For multi-stop routes, sum up all legs
+                const totalDistance = route.legs?.reduce((sum: number, leg: any) => sum + (leg.distance || 0), 0) || route.legs?.[0]?.distance || 0;
+                const totalDuration = route.legs?.reduce((sum: number, leg: any) => sum + (leg.duration || 0), 0) || route.legs?.[0]?.duration || 0;
+                return {
+                    summary: route.summary || '',
+                    distance: totalDistance,
+                    duration: totalDuration,
+                    geometry: route.overview_polyline || '',
+                    legs: route.legs || []
+                };
+            });
         }
 
         return [];

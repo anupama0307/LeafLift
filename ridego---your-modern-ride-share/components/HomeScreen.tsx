@@ -20,6 +20,7 @@ interface ScheduledRide {
 
 const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenPlan }) => {
   const [walletBalance, setWalletBalance] = useState<number>(0);
+  const [carbonSaved, setCarbonSaved] = useState<number>(0);
   const [scheduledRides, setScheduledRides] = useState<ScheduledRide[]>([]);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [scheduleDate, setScheduleDate] = useState('');
@@ -35,6 +36,11 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenPlan }) => {
     fetch(`${API_BASE_URL}/api/users/${user._id}/wallet`)
       .then(r => r.ok ? r.json() : { balance: 0 })
       .then(d => setWalletBalance(d.balance || 0))
+      .catch(() => { });
+
+    fetch(`${API_BASE_URL}/api/users/${user._id}/stats`)
+      .then(r => r.ok ? r.json() : { totalCO2Saved: 0 })
+      .then(d => setCarbonSaved(d.totalCO2Saved || 0))
       .catch(() => { });
 
     fetch(`${API_BASE_URL}/api/rides/scheduled/${user._id}`)
@@ -105,7 +111,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenPlan }) => {
             <span className="material-icons-outlined text-leaf-500 text-3xl">leaf</span>
             <div>
               <p className="text-[10px] font-black uppercase tracking-widest text-white/40 mb-1">Carbon Saved</p>
-              <h3 className="text-3xl font-black text-white">12.4<span className="text-xs ml-1 opacity-50">kg</span></h3>
+              <h3 className="text-3xl font-black text-white">{carbonSaved.toFixed(1)}<span className="text-xs ml-1 opacity-50">kg</span></h3>
             </div>
           </div>
         </div>

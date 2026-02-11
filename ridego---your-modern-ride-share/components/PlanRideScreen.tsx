@@ -68,6 +68,36 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [matchedDrivers, setMatchedDrivers] = useState<DriverDetails[]>([]);
     const [isNoDriversFound, setIsNoDriversFound] = useState(false);
 
+    // ─── Live ETA State ───
+    const [liveEtaText, setLiveEtaText] = useState<string | null>(null);
+    const [liveEtaLabel, setLiveEtaLabel] = useState<'pickup' | 'dropoff' | null>(null);
+    const [liveEtaSource, setLiveEtaSource] = useState<string | null>(null);
+    const [liveEtaUpdatedAt, setLiveEtaUpdatedAt] = useState<string | null>(null);
+
+    // ─── Delay Alert State ───
+    const [delayAlert, setDelayAlert] = useState<{ delayMinutes: number; message: string; etaText: string; etaLabel: string } | null>(null);
+    const delayAlertTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+    // ─── Multi-Stop State ───
+    const [stops, setStops] = useState<Array<{ address: string; lat: number; lng: number }>>([]);
+    const [showStopSearch, setShowStopSearch] = useState(false);
+    const [stopSearchQuery, setStopSearchQuery] = useState('');
+    const [stopSuggestions, setStopSuggestions] = useState<OlaPlace[]>([]);
+    const [isStopSearching, setIsStopSearching] = useState(false);
+    const [activeRideStops, setActiveRideStops] = useState<Array<{ address: string; lat: number; lng: number; order: number; status: string; reachedAt?: string }>>([]);
+    const [currentStopIndex, setCurrentStopIndex] = useState(0);
+    const stopMarkerRefs = useRef<any[]>([]);
+
+    // ─── Cancellation State ───
+    const [showCancelModal, setShowCancelModal] = useState(false);
+    const [riderCancelReason, setRiderCancelReason] = useState('');
+    const [isCanceling, setIsCanceling] = useState(false);
+    const [canceledByDriver, setCanceledByDriver] = useState(false);
+    const [driverCancelInfo, setDriverCancelInfo] = useState<{ cancelReason: string; cancellationFee: number } | null>(null);
+    const [isAutoReSearching, setIsAutoReSearching] = useState(false);
+    const [reSearchDriversNotified, setReSearchDriversNotified] = useState(0);
+    const reSearchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
     const mapRef = useRef<any>(null);
     const mapContainerRef = useRef<HTMLDivElement>(null);
     const [mapLoaded, setMapLoaded] = useState(false);
@@ -135,6 +165,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             setEtaToPickup(payload.ride.etaToPickup || null);
             setMaskedDriverPhone(payload.driver?.maskedPhone || null);
             setCurrentFare(payload.ride.currentFare || payload.ride.fare || null);
+            // Clear re-search / cancel state
+            setIsAutoReSearching(false);
+            setCanceledByDriver(false);
+            setDriverCancelInfo(null);
+            if (reSearchTimeoutRef.current) clearTimeout(reSearchTimeoutRef.current);
         });
 
         socket.on('ride:otp', (payload: any) => {
@@ -167,6 +202,84 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                     .setLngLat([lng, lat]).addTo(mapRef.current);
             } else {
                 driverMarkerRef.current.setLngLat([lng, lat]);
+            }
+        });
+
+        socket.on('ride:eta-update', (payload: any) => {
+            if (!payload?.etaText) return;
+            setLiveEtaText(payload.etaText);
+            setLiveEtaLabel(payload.etaLabel || null);
+            setLiveEtaSource(payload.source || null);
+            setLiveEtaUpdatedAt(payload.updatedAt || new Date().toISOString());
+            // Also update the static etaToPickup if this is a pickup ETA
+            if (payload.etaLabel === 'pickup') {
+                setEtaToPickup(payload.etaText);
+            }
+        });
+
+        // ─── Delay Alert Handler (User Story 2.6) ───
+        socket.on('ride:delay-alert', (payload: any) => {
+            if (!payload?.delayMinutes) return;
+            setDelayAlert({
+                delayMinutes: payload.delayMinutes,
+                message: payload.message || `Delayed ~${payload.delayMinutes} min due to traffic`,
+                etaText: payload.etaText || '',
+                etaLabel: payload.etaLabel || 'dropoff'
+            });
+            // Auto-dismiss after 10 seconds
+            if (delayAlertTimerRef.current) clearTimeout(delayAlertTimerRef.current);
+            delayAlertTimerRef.current = setTimeout(() => setDelayAlert(null), 10000);
+        });
+
+        // ─── Multi-Stop Handlers ───
+        socket.on('ride:stop-reached', (payload: any) => {
+            if (payload?.stopIndex !== undefined) {
+                setCurrentStopIndex(payload.stopIndex + 1);
+                setActiveRideStops(prev => prev.map((s, i) =>
+                    i === payload.stopIndex ? { ...s, status: 'REACHED', reachedAt: new Date().toISOString() } : s
+                ));
+            }
+        });
+
+        socket.on('ride:stop-skipped', (payload: any) => {
+            if (payload?.stopIndex !== undefined) {
+                setCurrentStopIndex(payload.stopIndex + 1);
+                setActiveRideStops(prev => prev.map((s, i) =>
+                    i === payload.stopIndex ? { ...s, status: 'SKIPPED' } : s
+                ));
+            }
+        });
+
+        // ─── Ride Canceled Handler ───
+        socket.on('ride:canceled', (payload: any) => {
+            if (payload?.canceledBy === 'DRIVER') {
+                setCanceledByDriver(true);
+                setDriverCancelInfo({
+                    cancelReason: payload.cancelReason || '',
+                    cancellationFee: payload.cancellationFee || 0
+                });
+                setRideStatus('CANCELED');
+                setDriverDetails(null);
+                setEtaToPickup(null);
+                setOtpCode(null);
+                setLiveEtaText(null);
+            }
+        });
+
+        // ─── Auto Re-Search Handler ───
+        socket.on('ride:re-search', (payload: any) => {
+            if (payload?.newRideId) {
+                setIsAutoReSearching(true);
+                setActiveRideId(payload.newRideId);
+                setReSearchDriversNotified(payload.driversNotified || 0);
+                setRideStatus('SEARCHING');
+                setCanceledByDriver(false);
+                setDriverCancelInfo(null);
+                // Auto-timeout after 60s if no driver accepts
+                if (reSearchTimeoutRef.current) clearTimeout(reSearchTimeoutRef.current);
+                reSearchTimeoutRef.current = setTimeout(() => {
+                    setIsAutoReSearching(false);
+                }, 60000);
             }
         });
 
@@ -230,6 +343,39 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             .catch(() => { });
         return () => { leaveRideRoom(activeRideId); };
     }, [activeRideId]);
+
+    // ─── Live ETA polling fallback (every 60s) ───
+    useEffect(() => {
+        if (!activeRideId || rideStatus === 'IDLE' || rideStatus === 'SEARCHING' || rideStatus === 'COMPLETED' || rideStatus === 'CANCELED') {
+            setLiveEtaText(null);
+            setLiveEtaLabel(null);
+            setLiveEtaSource(null);
+            setLiveEtaUpdatedAt(null);
+            return;
+        }
+
+        const fetchLiveEta = async () => {
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/rides/${activeRideId}/live-eta`);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.etaText && data.etaText !== 'N/A') {
+                    setLiveEtaText(data.etaText);
+                    setLiveEtaLabel(data.rideStatus === 'IN_PROGRESS' ? 'dropoff' : 'pickup');
+                    setLiveEtaSource(data.source || null);
+                    setLiveEtaUpdatedAt(new Date().toISOString());
+                    if (data.rideStatus !== 'IN_PROGRESS') {
+                        setEtaToPickup(data.etaText);
+                    }
+                }
+            } catch { }
+        };
+
+        // Fetch immediately on ride status change
+        fetchLiveEta();
+        const interval = setInterval(fetchLiveEta, 60000);
+        return () => clearInterval(interval);
+    }, [activeRideId, rideStatus]);
 
     // ─── Filter nearby drivers ───
     useEffect(() => {
@@ -550,6 +696,73 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         finally { setIsSearching(false); }
     };
 
+    // ─── Multi-Stop search & management ───
+    const fetchStopSuggestions = async (query: string) => {
+        if (query.length < 3) { setStopSuggestions([]); return; }
+        setIsStopSearching(true);
+        try {
+            const bias = pickupCoords ? `${pickupCoords.lat},${pickupCoords.lng}` : undefined;
+            setStopSuggestions(await searchPlaces(query, bias));
+        } catch { setStopSuggestions([]); }
+        finally { setIsStopSearching(false); }
+    };
+
+    useEffect(() => {
+        if (!showStopSearch) return;
+        const timer = setTimeout(() => {
+            if (stopSearchQuery.length > 2) fetchStopSuggestions(stopSearchQuery);
+        }, 500);
+        return () => clearTimeout(timer);
+    }, [stopSearchQuery, showStopSearch]);
+
+    const handleAddStop = async (place: OlaPlace) => {
+        const lat = place.latitude;
+        const lng = place.longitude;
+        if (!lat || !lng) { alert('Unable to get coordinates for this stop.'); return; }
+        const newStop = { address: place.structuredFormatting.mainText, lat, lng };
+        const updatedStops = [...stops, newStop];
+        setStops(updatedStops);
+        setShowStopSearch(false);
+        setStopSearchQuery('');
+        setStopSuggestions([]);
+
+        // Add stop marker on map
+        if (mapRef.current && window.maplibregl) {
+            const el = document.createElement('div');
+            el.style.cssText = 'width:26px;height:26px;border-radius:50%;background:#F59E0B;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:white';
+            el.innerText = `${updatedStops.length}`;
+            const marker = new window.maplibregl.Marker({ element: el })
+                .setLngLat([lng, lat]).addTo(mapRef.current);
+            stopMarkerRefs.current.push(marker);
+        }
+
+        // Recalculate route with waypoints
+        if (pickupCoords && dropoffCoords) {
+            await calculateRoute(pickupCoords, dropoffCoords, updatedStops);
+        }
+    };
+
+    const handleRemoveStop = async (index: number) => {
+        const updatedStops = stops.filter((_, i) => i !== index);
+        setStops(updatedStops);
+
+        // Remove marker
+        if (stopMarkerRefs.current[index]) {
+            stopMarkerRefs.current[index].remove();
+            stopMarkerRefs.current.splice(index, 1);
+        }
+        // Re-number remaining markers
+        stopMarkerRefs.current.forEach((marker, i) => {
+            const el = marker.getElement();
+            if (el) el.innerText = `${i + 1}`;
+        });
+
+        // Recalculate route
+        if (pickupCoords && dropoffCoords) {
+            await calculateRoute(pickupCoords, dropoffCoords, updatedStops);
+        }
+    };
+
     useEffect(() => {
         const timer = setTimeout(() => {
             const q = focusedInput === 'pickup' ? pickup : destination;
@@ -687,10 +900,12 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     // ─── Calculate route ───
     const calculateRoute = async (
         start: { lat: number; lng: number },
-        end: { lat: number; lng: number }
+        end: { lat: number; lng: number },
+        waypoints?: Array<{ lat: number; lng: number }>
     ) => {
         try {
-            const routes = await getRoute(start.lat, start.lng, end.lat, end.lng);
+            const wp = waypoints || (stops.length > 0 ? stops.map(s => ({ lat: s.lat, lng: s.lng })) : undefined);
+            const routes = await getRoute(start.lat, start.lng, end.lat, end.lng, wp);
             if (routes && routes.length > 0 && mapRef.current) {
                 fetchMatchingDrivers(start, end);
                 setAvailableRoutes(routes);
@@ -889,6 +1104,9 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             maxPassengers: rideMode === 'Pooled' ? maxPassengers : passengers,
             ...(rideMode === 'Pooled' ? { safetyPreferences: safetyPrefs } : {}),
             bookingTime: new Date().toISOString(),
+            ...(stops.length > 0 ? {
+                stops: stops.map((s, i) => ({ address: s.address, lat: s.lat, lng: s.lng, order: i }))
+            } : {}),
             ...(scheduleInfo ? {
                 isScheduled: true,
                 scheduledFor: scheduleInfo.scheduledFor,
@@ -916,6 +1134,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                     setRideStatus('SEARCHING');
                     setCurrentFare(data.currentFare || data.fare || price);
                     setShowOptions(false);
+                    // Populate multi-stop tracking state
+                    if (stops.length > 0) {
+                        setActiveRideStops(stops.map((s, i) => ({ ...s, order: i, status: 'PENDING' })));
+                        setCurrentStopIndex(0);
+                    }
                 }
             } else {
                 alert('Failed to book ride.');
@@ -924,6 +1147,44 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             alert('Network error.');
         } finally {
             setIsRequesting(false);
+        }
+    };
+
+    // ─── Cancel Ride (Rider) ───
+    const handleRiderCancelRide = async () => {
+        if (!activeRideId) return;
+        setIsCanceling(true);
+        try {
+            const resp = await fetch(`${API_BASE_URL}/api/rides/${activeRideId}/cancel`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    canceledBy: 'RIDER',
+                    cancelReason: riderCancelReason || 'Rider canceled'
+                })
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                setShowCancelModal(false);
+                setRiderCancelReason('');
+                setRideStatus('IDLE');
+                setActiveRideId(null);
+                setDriverDetails(null);
+                setEtaToPickup(null);
+                setOtpCode(null);
+                setCurrentFare(null);
+                setShowOptions(false);
+                if (data.cancellationFee > 0) {
+                    alert(`Ride canceled. A ₹${data.cancellationFee} fee has been charged.`);
+                }
+            } else {
+                const err = await resp.json();
+                alert(err.message || 'Failed to cancel ride');
+            }
+        } catch {
+            alert('Network error while canceling');
+        } finally {
+            setIsCanceling(false);
         }
     };
 
@@ -973,6 +1234,12 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         setActiveRideId(null);
         setDriverDetails(null);
         setEtaToPickup(null);
+        setLiveEtaText(null);
+        setLiveEtaLabel(null);
+        setLiveEtaSource(null);
+        setLiveEtaUpdatedAt(null);
+        setDelayAlert(null);
+        if (delayAlertTimerRef.current) clearTimeout(delayAlertTimerRef.current);
         setOtpCode(null);
         setCurrentFare(null);
         setChatMessages([]);
@@ -987,6 +1254,18 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         nearbyDriverMarkersRef.current.forEach(m => m.remove());
         nearbyDriverMarkersRef.current.clear();
         nearbyDriverPositionsRef.current.clear();
+        // Clear multi-stop state
+        setStops([]);
+        setActiveRideStops([]);
+        setCurrentStopIndex(0);
+        stopMarkerRefs.current.forEach(m => m.remove());
+        stopMarkerRefs.current = [];
+        // Clear cancellation state
+        setCanceledByDriver(false);
+        setDriverCancelInfo(null);
+        setIsAutoReSearching(false);
+        setReSearchDriversNotified(0);
+        if (reSearchTimeoutRef.current) clearTimeout(reSearchTimeoutRef.current);
         // Navigate back to home screen
         onBack();
     };
@@ -994,6 +1273,39 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     // ─── RENDER ───
     return (
         <div className="relative w-full h-screen overflow-hidden bg-white dark:bg-zinc-950">
+            {/* ── Congestion Delay Alert Toast (User Story 2.6) ── */}
+            {delayAlert && (
+                <div className="absolute top-16 left-4 right-4 z-[90] animate-in slide-in-from-top duration-500">
+                    <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded-2xl p-4 shadow-xl backdrop-blur-sm">
+                        <div className="flex items-start gap-3">
+                            <div className="size-10 bg-amber-100 dark:bg-amber-800/50 rounded-xl flex items-center justify-center shrink-0">
+                                <span className="material-icons-outlined text-amber-600 dark:text-amber-400">traffic</span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-0.5">
+                                    <h4 className="text-sm font-black text-amber-800 dark:text-amber-300">Traffic Delay Detected</h4>
+                                    <span className="bg-amber-200 dark:bg-amber-700 text-amber-800 dark:text-amber-200 text-[10px] font-bold px-2 py-0.5 rounded-full">+{delayAlert.delayMinutes} min</span>
+                                </div>
+                                <p className="text-xs text-amber-700 dark:text-amber-400">
+                                    {delayAlert.message}. New ETA: <span className="font-bold">{delayAlert.etaText}</span>
+                                    {delayAlert.etaLabel === 'pickup' ? ' to pickup' : ' to destination'}
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setDelayAlert(null)}
+                                className="p-1 rounded-lg hover:bg-amber-200 dark:hover:bg-amber-800 transition-colors shrink-0"
+                            >
+                                <span className="material-icons-outlined text-amber-500 text-sm">close</span>
+                            </button>
+                        </div>
+                        {/* Progress bar for auto-dismiss */}
+                        <div className="mt-3 h-1 bg-amber-200 dark:bg-amber-800 rounded-full overflow-hidden">
+                            <div className="h-full bg-amber-500 dark:bg-amber-400 rounded-full animate-[shrink_10s_linear_forwards]" style={{ animation: 'shrink 10s linear forwards' }} />
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Map */}
             <div
                 ref={mapContainerRef}
@@ -1145,6 +1457,49 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 </div>
                             </div>
                         )}
+
+                        {/* ── Multi-Stop Management ── */}
+                        <div className="mt-3 mb-2">
+                            {stops.length > 0 && (
+                                <div className="mb-2">
+                                    <p className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 flex items-center gap-1">
+                                        <span className="material-icons-outlined text-amber-500" style={{ fontSize: '14px' }}>pin_drop</span>
+                                        {stops.length} Stop{stops.length > 1 ? 's' : ''}
+                                    </p>
+                                    <div className="space-y-1.5">
+                                        {stops.map((stop, idx) => (
+                                            <div
+                                                key={idx}
+                                                className="flex items-center gap-2 bg-amber-50 dark:bg-amber-900/15 border border-amber-200 dark:border-amber-800 rounded-xl px-3 py-2"
+                                            >
+                                                <div className="w-5 h-5 rounded-full bg-amber-500 text-white flex items-center justify-center text-[10px] font-black shrink-0">
+                                                    {idx + 1}
+                                                </div>
+                                                <span className="flex-1 text-xs font-semibold text-gray-700 dark:text-gray-300 truncate">
+                                                    {stop.address}
+                                                </span>
+                                                <button
+                                                    onClick={() => handleRemoveStop(idx)}
+                                                    className="p-1 rounded-lg hover:bg-amber-200 dark:hover:bg-amber-800 transition-colors shrink-0"
+                                                >
+                                                    <span className="material-icons-outlined text-amber-500" style={{ fontSize: '16px' }}>close</span>
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            {stops.length < 3 && (
+                                <button
+                                    onClick={() => setShowStopSearch(true)}
+                                    className="w-full flex items-center gap-2 py-2.5 px-3 rounded-xl border-2 border-dashed border-gray-300 dark:border-zinc-600 hover:border-amber-400 dark:hover:border-amber-500 text-gray-500 dark:text-gray-400 hover:text-amber-600 dark:hover:text-amber-400 transition-all"
+                                >
+                                    <span className="material-icons-outlined" style={{ fontSize: '18px' }}>add_location</span>
+                                    <span className="text-xs font-bold">Add a Stop</span>
+                                    <span className="text-[10px] text-gray-400 dark:text-gray-500 ml-auto">{3 - stops.length} remaining</span>
+                                </button>
+                            )}
+                        </div>
 
                         {/* Mode Toggle with Savings */}
                         {(() => {
@@ -1519,6 +1874,12 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                         Estimate ₹{currentFare}
                                     </div>
                                 )}
+                                <button
+                                    onClick={handleResetRide}
+                                    className="mt-6 py-3 px-8 border-2 border-gray-200 dark:border-zinc-700 text-gray-500 dark:text-zinc-400 rounded-2xl font-bold text-sm hover:bg-gray-50 dark:hover:bg-zinc-800 transition-colors"
+                                >
+                                    Cancel Search
+                                </button>
                             </div>
                         ) : (
                             <div className="flex flex-col items-center text-center pb-8">
@@ -1555,8 +1916,73 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                 </div>
             )}
 
+            {/* ── Driver Canceled + Auto Re-Search Overlay ── */}
+            {canceledByDriver && rideStatus === 'CANCELED' && (
+                <div className="absolute inset-0 z-[55] flex items-end">
+                    <div className="w-full bg-white dark:bg-zinc-900 rounded-t-[40px] shadow-2xl p-8 animate-in slide-in-from-bottom duration-500">
+                        <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-6"></div>
+                        <div className="flex flex-col items-center text-center pb-6">
+                            <div className="relative mb-6">
+                                <div className="size-20 bg-red-50 dark:bg-red-900/10 rounded-full flex items-center justify-center">
+                                    <span className="material-icons-outlined text-4xl text-red-500">cancel</span>
+                                </div>
+                            </div>
+                            <h3 className="text-2xl font-black mb-2 dark:text-white">Driver Canceled</h3>
+                            {driverCancelInfo?.cancelReason && (
+                                <p className="text-sm text-gray-500 dark:text-gray-400 font-medium mb-1">
+                                    Reason: {driverCancelInfo.cancelReason}
+                                </p>
+                            )}
+                            <p className="text-sm text-gray-400 dark:text-gray-500 mb-4">
+                                Don't worry — we're automatically searching for another driver nearby.
+                            </p>
+
+                            {/* Auto-searching animation */}
+                            <div className="w-full p-4 bg-green-50 dark:bg-green-900/10 rounded-2xl border border-green-100 dark:border-green-800 mb-4">
+                                <div className="flex items-center gap-3">
+                                    <div className="relative">
+                                        <div className="size-10 bg-green-100 dark:bg-green-800/30 rounded-full flex items-center justify-center">
+                                            <span className="material-icons-outlined text-green-500">radar</span>
+                                        </div>
+                                        <div className="absolute inset-0 border-2 border-green-500/30 rounded-full animate-ping"></div>
+                                    </div>
+                                    <div className="text-left">
+                                        <p className="text-sm font-bold text-green-700 dark:text-green-400">
+                                            Searching within 5 km...
+                                        </p>
+                                        <p className="text-xs text-green-600 dark:text-green-500">
+                                            Looking for drivers on your route
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex gap-3 w-full mt-2">
+                                <button
+                                    onClick={handleResetRide}
+                                    className="flex-1 py-4 bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-400 rounded-2xl font-black text-sm uppercase tracking-widest"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setCanceledByDriver(false);
+                                        setDriverCancelInfo(null);
+                                        setRideStatus('IDLE');
+                                        setShowOptions(true);
+                                    }}
+                                    className="flex-[2] py-4 bg-black dark:bg-white text-white dark:text-black rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl"
+                                >
+                                    Rebook Manually
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* ── Active Ride Panel ── */}
-            {rideStatus !== 'IDLE' && rideStatus !== 'SEARCHING' && (
+            {rideStatus !== 'IDLE' && rideStatus !== 'SEARCHING' && rideStatus !== 'CANCELED' && (
                 <div className="absolute bottom-0 left-0 right-0 z-50 bg-white dark:bg-zinc-900 rounded-t-3xl shadow-2xl p-6">
                     <div className="flex items-center justify-between mb-4">
                         <div>
@@ -1565,9 +1991,23 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 {rideStatus.replace('_', ' ')}
                             </h3>
                         </div>
-                        {etaToPickup && (rideStatus === 'ACCEPTED' || rideStatus === 'ARRIVED') && (
-                            <div className="bg-black dark:bg-white text-white dark:text-black px-3 py-1.5 rounded-full text-xs font-bold">
-                                ETA {etaToPickup}
+                        {/* Live ETA Badge */}
+                        {(liveEtaText || etaToPickup) && rideStatus !== 'COMPLETED' && (
+                            <div className="flex flex-col items-end gap-1">
+                                <div className="flex items-center gap-1.5 bg-black dark:bg-white text-white dark:text-black px-3 py-1.5 rounded-full text-xs font-bold">
+                                    <span className="relative flex h-2 w-2">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                                    </span>
+                                    {rideStatus === 'IN_PROGRESS'
+                                        ? `ETA ${liveEtaText || 'Computing...'}`
+                                        : `ETA ${liveEtaText || etaToPickup}`
+                                    }
+                                </div>
+                                <span className="text-[9px] text-gray-400 dark:text-zinc-500 font-medium">
+                                    {liveEtaSource === 'ola-traffic' ? 'Live traffic' : 'Estimated'}
+                                    {liveEtaLabel === 'pickup' ? ' to pickup' : liveEtaLabel === 'dropoff' ? ' to drop' : ''}
+                                </span>
                             </div>
                         )}
                     </div>
@@ -1605,6 +2045,53 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         </div>
                     )}
 
+                    {/* ── Multi-Stop Progress Tracker ── */}
+                    {activeRideStops.length > 0 && rideStatus === 'IN_PROGRESS' && (
+                        <div className="mb-4 p-3 bg-gray-50 dark:bg-zinc-800/50 rounded-2xl">
+                            <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                                <span className="material-icons-outlined text-amber-500" style={{ fontSize: '14px' }}>pin_drop</span>
+                                Stops Progress
+                            </p>
+                            <div className="space-y-2">
+                                {activeRideStops.map((stop, idx) => (
+                                    <div key={idx} className="flex items-center gap-2.5">
+                                        <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black shrink-0 ${
+                                            stop.status === 'REACHED' ? 'bg-green-500 text-white' :
+                                            stop.status === 'SKIPPED' ? 'bg-gray-300 dark:bg-zinc-600 text-gray-500 dark:text-zinc-400 line-through' :
+                                            idx === currentStopIndex ? 'bg-amber-500 text-white animate-pulse' :
+                                            'bg-gray-200 dark:bg-zinc-700 text-gray-500 dark:text-zinc-400'
+                                        }`}>
+                                            {stop.status === 'REACHED' ? '✓' : stop.status === 'SKIPPED' ? '—' : idx + 1}
+                                        </div>
+                                        <span className={`text-xs font-semibold flex-1 truncate ${
+                                            stop.status === 'REACHED' ? 'text-green-600 dark:text-green-400' :
+                                            stop.status === 'SKIPPED' ? 'text-gray-400 dark:text-zinc-500 line-through' :
+                                            idx === currentStopIndex ? 'text-amber-600 dark:text-amber-400' :
+                                            'text-gray-500 dark:text-gray-400'
+                                        }`}>
+                                            {stop.address}
+                                        </span>
+                                        {stop.status === 'REACHED' && (
+                                            <span className="text-[10px] text-green-500 font-bold">Done</span>
+                                        )}
+                                        {stop.status === 'SKIPPED' && (
+                                            <span className="text-[10px] text-gray-400 font-bold">Skipped</span>
+                                        )}
+                                        {idx === currentStopIndex && stop.status === 'PENDING' && (
+                                            <span className="text-[10px] text-amber-500 font-bold">Next</span>
+                                        )}
+                                    </div>
+                                ))}
+                                <div className="flex items-center gap-2.5 mt-1 pt-1.5 border-t border-gray-200 dark:border-zinc-700">
+                                    <div className="w-6 h-6 rounded-full bg-red-500 flex items-center justify-center shrink-0">
+                                        <span className="material-icons-outlined text-white" style={{ fontSize: '12px' }}>flag</span>
+                                    </div>
+                                    <span className="text-xs font-bold text-gray-700 dark:text-gray-300 truncate">{destination || 'Final Destination'}</span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {rideStatus === 'ARRIVED' && otpCode && (
                         <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-2xl mb-4">
                             <p className="text-xs font-bold text-green-600 dark:text-green-400 uppercase tracking-widest">
@@ -1621,6 +2108,17 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             <span className="text-sm text-gray-500 dark:text-gray-400">Current Fare</span>
                             <span className="font-bold text-lg dark:text-white">₹{currentFare}</span>
                         </div>
+                    )}
+
+                    {/* ── Rider Cancel Button (ACCEPTED / ARRIVED) ── */}
+                    {(rideStatus === 'ACCEPTED' || rideStatus === 'ARRIVED') && (
+                        <button
+                            onClick={() => setShowCancelModal(true)}
+                            className="w-full py-3 border-2 border-red-200 dark:border-red-800 text-red-500 font-bold rounded-xl mb-3 flex items-center justify-center gap-2 hover:bg-red-50 dark:hover:bg-red-900/10 transition-colors"
+                        >
+                            <span className="material-icons-outlined" style={{ fontSize: '18px' }}>close</span>
+                            Cancel Ride
+                        </button>
                     )}
 
                     {rideStatus === 'COMPLETED' && (
@@ -1729,6 +2227,152 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 Send
                             </button>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Stop Search Modal ── */}
+            {showStopSearch && (
+                <div
+                    className="fixed inset-0 z-[65] bg-black/60 flex items-end justify-center"
+                    onClick={() => { setShowStopSearch(false); setStopSearchQuery(''); setStopSuggestions([]); }}
+                >
+                    <div
+                        className="w-full max-w-md bg-white dark:bg-zinc-900 rounded-t-3xl p-5 max-h-[70vh] flex flex-col"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-bold dark:text-white">Add a Stop</h3>
+                            <button
+                                onClick={() => { setShowStopSearch(false); setStopSearchQuery(''); setStopSuggestions([]); }}
+                                className="p-2 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-full transition-colors"
+                            >
+                                <span className="material-icons-outlined text-gray-500">close</span>
+                            </button>
+                        </div>
+                        <div className="flex items-center gap-2 bg-gray-100 dark:bg-zinc-800 rounded-xl px-3 mb-3">
+                            <span className="material-icons-outlined text-amber-500">add_location</span>
+                            <input
+                                type="text"
+                                value={stopSearchQuery}
+                                onChange={(e) => setStopSearchQuery(e.target.value)}
+                                autoFocus
+                                className="flex-1 bg-transparent border-none p-3 text-sm font-bold focus:ring-0 focus:outline-none dark:text-white"
+                                placeholder="Search for a stop location..."
+                            />
+                        </div>
+                        <div className="flex-1 overflow-y-auto">
+                            {isStopSearching && (
+                                <div className="text-center py-4">
+                                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-amber-500 mx-auto"></div>
+                                </div>
+                            )}
+                            {stopSuggestions.map((place, idx) => (
+                                <button
+                                    key={`${place.placeId}-${idx}`}
+                                    onClick={() => handleAddStop(place)}
+                                    className="w-full flex items-center gap-4 py-3 hover:bg-gray-50 dark:hover:bg-zinc-800 rounded-lg px-2 transition-colors"
+                                >
+                                    <div className="w-8 h-8 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center shrink-0">
+                                        <span className="material-icons-outlined text-amber-500" style={{ fontSize: '16px' }}>location_on</span>
+                                    </div>
+                                    <div className="flex-1 text-left min-w-0">
+                                        <div className="font-semibold text-sm dark:text-white truncate">{place.structuredFormatting.mainText}</div>
+                                        <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{place.structuredFormatting.secondaryText}</div>
+                                    </div>
+                                </button>
+                            ))}
+                            {!isStopSearching && stopSearchQuery.length > 2 && stopSuggestions.length === 0 && (
+                                <p className="text-sm text-gray-400 text-center py-4">No results found</p>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Rider Cancel Reason Modal ── */}
+            {showCancelModal && (
+                <div className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4">
+                    <div className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-3xl p-6 shadow-2xl">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-bold dark:text-white flex items-center gap-2">
+                                <span className="material-icons-outlined text-red-500">warning</span>
+                                Cancel Ride
+                            </h3>
+                            <button
+                                onClick={() => { setShowCancelModal(false); setRiderCancelReason(''); }}
+                                className="p-2 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-full transition-colors"
+                            >
+                                <span className="material-icons-outlined text-gray-500">close</span>
+                            </button>
+                        </div>
+
+                        {rideStatus === 'ACCEPTED' || rideStatus === 'ARRIVED' ? (
+                            <div className="bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800 p-3 rounded-xl mb-4">
+                                <p className="text-xs text-amber-700 dark:text-amber-400 font-semibold flex items-center gap-1">
+                                    <span className="material-icons-outlined" style={{ fontSize: '14px' }}>info</span>
+                                    A cancellation fee of ₹25 will be charged as the driver has already accepted.
+                                </p>
+                            </div>
+                        ) : null}
+
+                        <p className="text-sm text-gray-500 dark:text-gray-400 mb-3 font-medium">
+                            Why are you canceling?
+                        </p>
+                        <div className="space-y-2 mb-4">
+                            {[
+                                'Changed plans',
+                                'Found alternative transport',
+                                'Wrong pickup/destination',
+                                'Taking too long',
+                                'Price too high',
+                            ].map((reason) => (
+                                <button
+                                    key={reason}
+                                    onClick={() => setRiderCancelReason(reason)}
+                                    className={`w-full text-left px-4 py-3 rounded-xl border-2 text-sm font-semibold transition-all ${
+                                        riderCancelReason === reason
+                                            ? 'border-red-500 bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400'
+                                            : 'border-gray-100 dark:border-zinc-700 text-gray-600 dark:text-zinc-400 hover:bg-gray-50 dark:hover:bg-zinc-800'
+                                    }`}
+                                >
+                                    {reason}
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => { setShowCancelModal(false); setRiderCancelReason(''); }}
+                                className="flex-1 py-3 bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-400 rounded-xl font-bold"
+                            >
+                                Go Back
+                            </button>
+                            <button
+                                onClick={() => {
+                                    if (!riderCancelReason) return;
+                                    handleRiderCancelRide();
+                                }}
+                                disabled={!riderCancelReason || isCanceling}
+                                className={`flex-1 py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${
+                                    riderCancelReason && !isCanceling
+                                        ? 'bg-red-500 text-white shadow-lg'
+                                        : 'bg-gray-200 dark:bg-zinc-700 text-gray-400 dark:text-zinc-500 cursor-not-allowed'
+                                }`}
+                            >
+                                {isCanceling ? (
+                                    <>
+                                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                                        </svg>
+                                        Canceling...
+                                    </>
+                                ) : (
+                                    'Cancel Ride'
+                                )}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
