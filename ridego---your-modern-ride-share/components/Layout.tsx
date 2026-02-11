@@ -39,14 +39,14 @@ const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScre
       {!isSpecialScreen && (
         <div className="flex justify-between items-center px-8 pt-4 pb-2">
           <span className="text-sm font-semibold">9:41</span>
-          <div className="flex gap-1.5 items-center">
-            <button onClick={toggleDarkMode} className="material-icons-outlined text-sm text-leaf-600 dark:text-leaf-400 hover:opacity-60 transition-opacity">
+          <button onClick={toggleDarkMode} className="flex items-center gap-1.5 bg-gray-100 dark:bg-zinc-800 px-3 py-1.5 rounded-full hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors">
+            <span className="material-icons-outlined text-base text-leaf-600 dark:text-leaf-400">
               {document.documentElement.classList.contains('dark') ? 'light_mode' : 'dark_mode'}
-            </button>
-            <span className="material-icons-outlined text-sm opacity-50">signal_cellular_alt</span>
-            <span className="material-icons-outlined text-sm opacity-50">wifi</span>
-            <span className="material-icons-outlined text-sm rotate-90 opacity-50">battery_full</span>
-          </div>
+            </span>
+            <span className="text-xs font-bold text-gray-600 dark:text-zinc-400">
+              {document.documentElement.classList.contains('dark') ? 'Light' : 'Dark'}
+            </span>
+          </button>
         </div>
       )}
 
@@ -79,23 +79,6 @@ const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScre
         </div>
       )}
 
-      {/* Special Floating Navigation for Driver Dashboard Mode */}
-      {currentScreen === AppScreen.DRIVER_DASHBOARD && (
-        <div className="absolute bottom-8 left-0 right-0 z-50 px-8 flex justify-between pointer-events-none">
-          <button
-            onClick={() => setCurrentScreen(AppScreen.ACCOUNT)}
-            className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
-          >
-            <span className="material-icons-outlined">person</span>
-          </button>
-          <button
-            onClick={() => setCurrentScreen(AppScreen.INBOX)}
-            className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
-          >
-            <span className="material-icons-outlined">chat_bubble</span>
-          </button>
-        </div>
-      )}
     </div>
   );
 };

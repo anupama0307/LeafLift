@@ -28,3 +28,10 @@ export const leaveRideRoom = (rideId: string) => {
   const active = getSocket();
   active.emit('leave:ride', { rideId });
 };
+
+export const disconnectSocket = () => {
+  if (socket) {
+    socket.disconnect();
+    socket = null;
+  }
+};
