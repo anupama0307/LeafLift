@@ -78,6 +78,16 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [delayAlert, setDelayAlert] = useState<{ delayMinutes: number; message: string; etaText: string; etaLabel: string } | null>(null);
     const delayAlertTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+    // ─── Multi-Stop State ───
+    const [stops, setStops] = useState<Array<{ address: string; lat: number; lng: number }>>([]);
+    const [showStopSearch, setShowStopSearch] = useState(false);
+    const [stopSearchQuery, setStopSearchQuery] = useState('');
+    const [stopSuggestions, setStopSuggestions] = useState<OlaPlace[]>([]);
+    const [isStopSearching, setIsStopSearching] = useState(false);
+    const [activeRideStops, setActiveRideStops] = useState<Array<{ address: string; lat: number; lng: number; order: number; status: string; reachedAt?: string }>>([]);
+    const [currentStopIndex, setCurrentStopIndex] = useState(0);
+    const stopMarkerRefs = useRef<any[]>([]);
+
     const mapRef = useRef<any>(null);
     const mapContainerRef = useRef<HTMLDivElement>(null);
     const [mapLoaded, setMapLoaded] = useState(false);
@@ -204,6 +214,25 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             // Auto-dismiss after 10 seconds
             if (delayAlertTimerRef.current) clearTimeout(delayAlertTimerRef.current);
             delayAlertTimerRef.current = setTimeout(() => setDelayAlert(null), 10000);
+        });
+
+        // ─── Multi-Stop Handlers ───
+        socket.on('ride:stop-reached', (payload: any) => {
+            if (payload?.stopIndex !== undefined) {
+                setCurrentStopIndex(payload.stopIndex + 1);
+                setActiveRideStops(prev => prev.map((s, i) =>
+                    i === payload.stopIndex ? { ...s, status: 'REACHED', reachedAt: new Date().toISOString() } : s
+                ));
+            }
+        });
+
+        socket.on('ride:stop-skipped', (payload: any) => {
+            if (payload?.stopIndex !== undefined) {
+                setCurrentStopIndex(payload.stopIndex + 1);
+                setActiveRideStops(prev => prev.map((s, i) =>
+                    i === payload.stopIndex ? { ...s, status: 'SKIPPED' } : s
+                ));
+            }
         });
 
         socket.on('ride:fare-update', (payload: any) => {
@@ -619,6 +648,73 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         finally { setIsSearching(false); }
     };
 
+    // ─── Multi-Stop search & management ───
+    const fetchStopSuggestions = async (query: string) => {
+        if (query.length < 3) { setStopSuggestions([]); return; }
+        setIsStopSearching(true);
+        try {
+            const bias = pickupCoords ? `${pickupCoords.lat},${pickupCoords.lng}` : undefined;
+            setStopSuggestions(await searchPlaces(query, bias));
+        } catch { setStopSuggestions([]); }
+        finally { setIsStopSearching(false); }
+    };
+
+    useEffect(() => {
+        if (!showStopSearch) return;
+        const timer = setTimeout(() => {
+            if (stopSearchQuery.length > 2) fetchStopSuggestions(stopSearchQuery);
+        }, 500);
+        return () => clearTimeout(timer);
+    }, [stopSearchQuery, showStopSearch]);
+
+    const handleAddStop = async (place: OlaPlace) => {
+        const lat = place.latitude;
+        const lng = place.longitude;
+        if (!lat || !lng) { alert('Unable to get coordinates for this stop.'); return; }
+        const newStop = { address: place.structuredFormatting.mainText, lat, lng };
+        const updatedStops = [...stops, newStop];
+        setStops(updatedStops);
+        setShowStopSearch(false);
+        setStopSearchQuery('');
+        setStopSuggestions([]);
+
+        // Add stop marker on map
+        if (mapRef.current && window.maplibregl) {
+            const el = document.createElement('div');
+            el.style.cssText = 'width:26px;height:26px;border-radius:50%;background:#F59E0B;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:white';
+            el.innerText = `${updatedStops.length}`;
+            const marker = new window.maplibregl.Marker({ element: el })
+                .setLngLat([lng, lat]).addTo(mapRef.current);
+            stopMarkerRefs.current.push(marker);
+        }
+
+        // Recalculate route with waypoints
+        if (pickupCoords && dropoffCoords) {
+            await calculateRoute(pickupCoords, dropoffCoords, updatedStops);
+        }
+    };
+
+    const handleRemoveStop = async (index: number) => {
+        const updatedStops = stops.filter((_, i) => i !== index);
+        setStops(updatedStops);
+
+        // Remove marker
+        if (stopMarkerRefs.current[index]) {
+            stopMarkerRefs.current[index].remove();
+            stopMarkerRefs.current.splice(index, 1);
+        }
+        // Re-number remaining markers
+        stopMarkerRefs.current.forEach((marker, i) => {
+            const el = marker.getElement();
+            if (el) el.innerText = `${i + 1}`;
+        });
+
+        // Recalculate route
+        if (pickupCoords && dropoffCoords) {
+            await calculateRoute(pickupCoords, dropoffCoords, updatedStops);
+        }
+    };
+
     useEffect(() => {
         const timer = setTimeout(() => {
             const q = focusedInput === 'pickup' ? pickup : destination;
@@ -756,10 +852,12 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     // ─── Calculate route ───
     const calculateRoute = async (
         start: { lat: number; lng: number },
-        end: { lat: number; lng: number }
+        end: { lat: number; lng: number },
+        waypoints?: Array<{ lat: number; lng: number }>
     ) => {
         try {
-            const routes = await getRoute(start.lat, start.lng, end.lat, end.lng);
+            const wp = waypoints || (stops.length > 0 ? stops.map(s => ({ lat: s.lat, lng: s.lng })) : undefined);
+            const routes = await getRoute(start.lat, start.lng, end.lat, end.lng, wp);
             if (routes && routes.length > 0 && mapRef.current) {
                 fetchMatchingDrivers(start, end);
                 setAvailableRoutes(routes);
@@ -958,6 +1056,9 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             maxPassengers: rideMode === 'Pooled' ? maxPassengers : passengers,
             ...(rideMode === 'Pooled' ? { safetyPreferences: safetyPrefs } : {}),
             bookingTime: new Date().toISOString(),
+            ...(stops.length > 0 ? {
+                stops: stops.map((s, i) => ({ address: s.address, lat: s.lat, lng: s.lng, order: i }))
+            } : {}),
             ...(scheduleInfo ? {
                 isScheduled: true,
                 scheduledFor: scheduleInfo.scheduledFor,
@@ -985,6 +1086,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                     setRideStatus('SEARCHING');
                     setCurrentFare(data.currentFare || data.fare || price);
                     setShowOptions(false);
+                    // Populate multi-stop tracking state
+                    if (stops.length > 0) {
+                        setActiveRideStops(stops.map((s, i) => ({ ...s, order: i, status: 'PENDING' })));
+                        setCurrentStopIndex(0);
+                    }
                 }
             } else {
                 alert('Failed to book ride.');
@@ -1062,6 +1168,12 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         nearbyDriverMarkersRef.current.forEach(m => m.remove());
         nearbyDriverMarkersRef.current.clear();
         nearbyDriverPositionsRef.current.clear();
+        // Clear multi-stop state
+        setStops([]);
+        setActiveRideStops([]);
+        setCurrentStopIndex(0);
+        stopMarkerRefs.current.forEach(m => m.remove());
+        stopMarkerRefs.current = [];
         // Navigate back to home screen
         onBack();
     };
@@ -1253,6 +1365,49 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 </div>
                             </div>
                         )}
+
+                        {/* ── Multi-Stop Management ── */}
+                        <div className="mt-3 mb-2">
+                            {stops.length > 0 && (
+                                <div className="mb-2">
+                                    <p className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 flex items-center gap-1">
+                                        <span className="material-icons-outlined text-amber-500" style={{ fontSize: '14px' }}>pin_drop</span>
+                                        {stops.length} Stop{stops.length > 1 ? 's' : ''}
+                                    </p>
+                                    <div className="space-y-1.5">
+                                        {stops.map((stop, idx) => (
+                                            <div
+                                                key={idx}
+                                                className="flex items-center gap-2 bg-amber-50 dark:bg-amber-900/15 border border-amber-200 dark:border-amber-800 rounded-xl px-3 py-2"
+                                            >
+                                                <div className="w-5 h-5 rounded-full bg-amber-500 text-white flex items-center justify-center text-[10px] font-black shrink-0">
+                                                    {idx + 1}
+                                                </div>
+                                                <span className="flex-1 text-xs font-semibold text-gray-700 dark:text-gray-300 truncate">
+                                                    {stop.address}
+                                                </span>
+                                                <button
+                                                    onClick={() => handleRemoveStop(idx)}
+                                                    className="p-1 rounded-lg hover:bg-amber-200 dark:hover:bg-amber-800 transition-colors shrink-0"
+                                                >
+                                                    <span className="material-icons-outlined text-amber-500" style={{ fontSize: '16px' }}>close</span>
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            {stops.length < 3 && (
+                                <button
+                                    onClick={() => setShowStopSearch(true)}
+                                    className="w-full flex items-center gap-2 py-2.5 px-3 rounded-xl border-2 border-dashed border-gray-300 dark:border-zinc-600 hover:border-amber-400 dark:hover:border-amber-500 text-gray-500 dark:text-gray-400 hover:text-amber-600 dark:hover:text-amber-400 transition-all"
+                                >
+                                    <span className="material-icons-outlined" style={{ fontSize: '18px' }}>add_location</span>
+                                    <span className="text-xs font-bold">Add a Stop</span>
+                                    <span className="text-[10px] text-gray-400 dark:text-gray-500 ml-auto">{3 - stops.length} remaining</span>
+                                </button>
+                            )}
+                        </div>
 
                         {/* Mode Toggle with Savings */}
                         {(() => {
@@ -1727,6 +1882,86 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         </div>
                     )}
 
+                    {driverDetails && (
+                        <div className="flex items-center gap-3 mb-4">
+                            <img
+                                src={driverDetails.photoUrl}
+                                className="w-12 h-12 rounded-full object-cover"
+                                alt=""
+                            />
+                            <div className="flex-1">
+                                <div className="font-bold dark:text-white">{driverDetails.name}</div>
+                                <div className="text-xs text-gray-500 dark:text-gray-400">
+                                    {driverDetails.vehicle} • {driverDetails.vehicleNumber}
+                                </div>
+                                <div className="text-xs text-gray-500 dark:text-gray-400">
+                                    ⭐ {driverDetails.rating?.toFixed(1)}
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => maskedDriverPhone && alert(`Call: ${maskedDriverPhone}`)}
+                                className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
+                                title="Call driver"
+                            >
+                                <span className="material-icons-outlined">phone</span>
+                            </button>
+                            <button
+                                onClick={() => setChatOpen(true)}
+                                className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
+                                title="Chat"
+                            >
+                                <span className="material-icons-outlined">chat</span>
+                            </button>
+                        </div>
+                    )}
+
+                    {/* ── Multi-Stop Progress Tracker ── */}
+                    {activeRideStops.length > 0 && rideStatus === 'IN_PROGRESS' && (
+                        <div className="mb-4 p-3 bg-gray-50 dark:bg-zinc-800/50 rounded-2xl">
+                            <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                                <span className="material-icons-outlined text-amber-500" style={{ fontSize: '14px' }}>pin_drop</span>
+                                Stops Progress
+                            </p>
+                            <div className="space-y-2">
+                                {activeRideStops.map((stop, idx) => (
+                                    <div key={idx} className="flex items-center gap-2.5">
+                                        <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black shrink-0 ${
+                                            stop.status === 'REACHED' ? 'bg-green-500 text-white' :
+                                            stop.status === 'SKIPPED' ? 'bg-gray-300 dark:bg-zinc-600 text-gray-500 dark:text-zinc-400 line-through' :
+                                            idx === currentStopIndex ? 'bg-amber-500 text-white animate-pulse' :
+                                            'bg-gray-200 dark:bg-zinc-700 text-gray-500 dark:text-zinc-400'
+                                        }`}>
+                                            {stop.status === 'REACHED' ? '✓' : stop.status === 'SKIPPED' ? '—' : idx + 1}
+                                        </div>
+                                        <span className={`text-xs font-semibold flex-1 truncate ${
+                                            stop.status === 'REACHED' ? 'text-green-600 dark:text-green-400' :
+                                            stop.status === 'SKIPPED' ? 'text-gray-400 dark:text-zinc-500 line-through' :
+                                            idx === currentStopIndex ? 'text-amber-600 dark:text-amber-400' :
+                                            'text-gray-500 dark:text-gray-400'
+                                        }`}>
+                                            {stop.address}
+                                        </span>
+                                        {stop.status === 'REACHED' && (
+                                            <span className="text-[10px] text-green-500 font-bold">Done</span>
+                                        )}
+                                        {stop.status === 'SKIPPED' && (
+                                            <span className="text-[10px] text-gray-400 font-bold">Skipped</span>
+                                        )}
+                                        {idx === currentStopIndex && stop.status === 'PENDING' && (
+                                            <span className="text-[10px] text-amber-500 font-bold">Next</span>
+                                        )}
+                                    </div>
+                                ))}
+                                <div className="flex items-center gap-2.5 mt-1 pt-1.5 border-t border-gray-200 dark:border-zinc-700">
+                                    <div className="w-6 h-6 rounded-full bg-red-500 flex items-center justify-center shrink-0">
+                                        <span className="material-icons-outlined text-white" style={{ fontSize: '12px' }}>flag</span>
+                                    </div>
+                                    <span className="text-xs font-bold text-gray-700 dark:text-gray-300 truncate">{destination || 'Final Destination'}</span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {rideStatus === 'ARRIVED' && otpCode && (
                         <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-2xl mb-4">
                             <p className="text-xs font-bold text-green-600 dark:text-green-400 uppercase tracking-widest">
@@ -1851,6 +2086,65 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 Send
                             </button>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Stop Search Modal ── */}
+            {showStopSearch && (
+                <div
+                    className="fixed inset-0 z-[65] bg-black/60 flex items-end justify-center"
+                    onClick={() => { setShowStopSearch(false); setStopSearchQuery(''); setStopSuggestions([]); }}
+                >
+                    <div
+                        className="w-full max-w-md bg-white dark:bg-zinc-900 rounded-t-3xl p-5 max-h-[70vh] flex flex-col"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-bold dark:text-white">Add a Stop</h3>
+                            <button
+                                onClick={() => { setShowStopSearch(false); setStopSearchQuery(''); setStopSuggestions([]); }}
+                                className="p-2 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-full transition-colors"
+                            >
+                                <span className="material-icons-outlined text-gray-500">close</span>
+                            </button>
+                        </div>
+                        <div className="flex items-center gap-2 bg-gray-100 dark:bg-zinc-800 rounded-xl px-3 mb-3">
+                            <span className="material-icons-outlined text-amber-500">add_location</span>
+                            <input
+                                type="text"
+                                value={stopSearchQuery}
+                                onChange={(e) => setStopSearchQuery(e.target.value)}
+                                autoFocus
+                                className="flex-1 bg-transparent border-none p-3 text-sm font-bold focus:ring-0 focus:outline-none dark:text-white"
+                                placeholder="Search for a stop location..."
+                            />
+                        </div>
+                        <div className="flex-1 overflow-y-auto">
+                            {isStopSearching && (
+                                <div className="text-center py-4">
+                                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-amber-500 mx-auto"></div>
+                                </div>
+                            )}
+                            {stopSuggestions.map((place, idx) => (
+                                <button
+                                    key={`${place.placeId}-${idx}`}
+                                    onClick={() => handleAddStop(place)}
+                                    className="w-full flex items-center gap-4 py-3 hover:bg-gray-50 dark:hover:bg-zinc-800 rounded-lg px-2 transition-colors"
+                                >
+                                    <div className="w-8 h-8 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center shrink-0">
+                                        <span className="material-icons-outlined text-amber-500" style={{ fontSize: '16px' }}>location_on</span>
+                                    </div>
+                                    <div className="flex-1 text-left min-w-0">
+                                        <div className="font-semibold text-sm dark:text-white truncate">{place.structuredFormatting.mainText}</div>
+                                        <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{place.structuredFormatting.secondaryText}</div>
+                                    </div>
+                                </button>
+                            ))}
+                            {!isStopSearching && stopSearchQuery.length > 2 && stopSuggestions.length === 0 && (
+                                <p className="text-sm text-gray-400 text-center py-4">No results found</p>
+                            )}
+                        </div>
                     </div>
                 </div>
             )}

@@ -59,6 +59,11 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
   const [routeSearchType, setRouteSearchType] = useState<'source' | 'dest'>('source');
   const [routeSuggestions, setRouteSuggestions] = useState<OlaPlace[]>([]);
 
+  // ─── Multi-Stop State ───
+  const [rideStops, setRideStops] = useState<Array<{ address: string; lat: number; lng: number; order: number; status: string; reachedAt?: string }>>([]);
+  const [currentStopIdx, setCurrentStopIdx] = useState(0);
+  const [stopActionLoading, setStopActionLoading] = useState(false);
+
   const mapRef = useRef<any>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const driverMarkerRef = useRef<any>(null);
@@ -232,6 +237,24 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
       setNotifications(prev => [notification, ...prev]);
     };
 
+    const handleStopReached = (payload: any) => {
+      if (payload?.stopIndex !== undefined) {
+        setCurrentStopIdx(payload.stopIndex + 1);
+        setRideStops(prev => prev.map((s, i) =>
+          i === payload.stopIndex ? { ...s, status: 'REACHED', reachedAt: new Date().toISOString() } : s
+        ));
+      }
+    };
+
+    const handleStopSkipped = (payload: any) => {
+      if (payload?.stopIndex !== undefined) {
+        setCurrentStopIdx(payload.stopIndex + 1);
+        setRideStops(prev => prev.map((s, i) =>
+          i === payload.stopIndex ? { ...s, status: 'SKIPPED' } : s
+        ));
+      }
+    };
+
     socket.on('ride:request', handleRequest);
     socket.on('ride:status', handleStatus);
     socket.on('ride:otp', handleOtp);
@@ -242,6 +265,8 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
     socket.on('nearby:rider:update', handleNearbyRiderUpdate);
     socket.on('nearby:rider:remove', handleNearbyRiderRemove);
     socket.on('pool:join-request', handlePoolJoinRequest);
+    socket.on('ride:stop-reached', handleStopReached);
+    socket.on('ride:stop-skipped', handleStopSkipped);
 
     return () => {
       socket.off('ride:request', handleRequest);
@@ -254,6 +279,8 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
       socket.off('nearby:rider:update', handleNearbyRiderUpdate);
       socket.off('nearby:rider:remove', handleNearbyRiderRemove);
       socket.off('pool:join-request', handlePoolJoinRequest);
+      socket.off('ride:stop-reached', handleStopReached);
+      socket.off('ride:stop-skipped', handleStopSkipped);
     };
   }, [user?._id, user?.id]);
 
@@ -617,6 +644,16 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
           .then(r => r.ok ? r.json() : [])
           .then(d => setChatMessages(d || []))
           .catch(() => {});
+        // Fetch multi-stop data if any
+        fetch(`${API_BASE_URL}/api/rides/${rideId}/stops`)
+          .then(r => r.ok ? r.json() : { stops: [], currentStopIndex: 0 })
+          .then(d => {
+            if (d.stops && d.stops.length > 0) {
+              setRideStops(d.stops);
+              setCurrentStopIdx(d.currentStopIndex || 0);
+            }
+          })
+          .catch(() => {});
       }
     } catch (e) {
       console.error(e);
@@ -627,6 +664,36 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
     if (!activeRide?._id) return;
     await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/reached`, { method: 'POST' });
     setRideStatus('ARRIVED');
+  };
+
+  const handleStopReached = async (stopIndex: number) => {
+    if (!activeRide?._id) return;
+    setStopActionLoading(true);
+    try {
+      const resp = await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/stops/${stopIndex}/reached`, { method: 'POST' });
+      if (resp.ok) {
+        setRideStops(prev => prev.map((s, i) =>
+          i === stopIndex ? { ...s, status: 'REACHED', reachedAt: new Date().toISOString() } : s
+        ));
+        setCurrentStopIdx(stopIndex + 1);
+      }
+    } catch (e) { console.error('Stop reached error:', e); }
+    finally { setStopActionLoading(false); }
+  };
+
+  const handleStopSkip = async (stopIndex: number) => {
+    if (!activeRide?._id) return;
+    setStopActionLoading(true);
+    try {
+      const resp = await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/stops/${stopIndex}/skip`, { method: 'POST' });
+      if (resp.ok) {
+        setRideStops(prev => prev.map((s, i) =>
+          i === stopIndex ? { ...s, status: 'SKIPPED' } : s
+        ));
+        setCurrentStopIdx(stopIndex + 1);
+      }
+    } catch (e) { console.error('Stop skip error:', e); }
+    finally { setStopActionLoading(false); }
   };
 
   const handleRequestEarlyComplete = async () => {
@@ -712,6 +779,8 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
     setOtpInput('');
     setRiderLocation(null);
     setCurrentFare(null);
+    setRideStops([]);
+    setCurrentStopIdx(0);
     clearRoutePreview();
   };
 
@@ -1022,6 +1091,73 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
                 <p className="text-xs font-bold text-green-700 dark:text-green-400 mb-1">On the way to destination</p>
                 <p className="text-[10px] text-green-600 dark:text-green-500 font-medium">Please drive safely and follow the route.</p>
               </div>
+
+              {/* ── Multi-Stop Progress for Driver ── */}
+              {rideStops.length > 0 && (
+                <div className="p-4 bg-gray-50 dark:bg-zinc-800/50 rounded-2xl">
+                  <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+                    <span className="material-icons-outlined text-amber-500" style={{ fontSize: '14px' }}>pin_drop</span>
+                    Stops ({rideStops.filter(s => s.status === 'REACHED').length}/{rideStops.length} done)
+                  </p>
+                  <div className="space-y-2.5">
+                    {rideStops.map((stop, idx) => (
+                      <div key={idx} className={`flex items-center gap-2.5 p-2 rounded-xl transition-all ${
+                        idx === currentStopIdx && stop.status === 'PENDING' ? 'bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800' : ''
+                      }`}>
+                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-black shrink-0 ${
+                          stop.status === 'REACHED' ? 'bg-green-500 text-white' :
+                          stop.status === 'SKIPPED' ? 'bg-gray-300 dark:bg-zinc-600 text-gray-500' :
+                          idx === currentStopIdx ? 'bg-amber-500 text-white animate-pulse' :
+                          'bg-gray-200 dark:bg-zinc-700 text-gray-500'
+                        }`}>
+                          {stop.status === 'REACHED' ? '✓' : stop.status === 'SKIPPED' ? '—' : idx + 1}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <span className={`text-xs font-semibold truncate block ${
+                            stop.status === 'REACHED' ? 'text-green-600 dark:text-green-400' :
+                            stop.status === 'SKIPPED' ? 'text-gray-400 line-through' :
+                            idx === currentStopIdx ? 'text-amber-600 dark:text-amber-400' :
+                            'text-gray-500'
+                          }`}>{stop.address}</span>
+                        </div>
+                        {idx === currentStopIdx && stop.status === 'PENDING' && (
+                          <div className="flex gap-1.5 shrink-0">
+                            <button
+                              onClick={() => handleStopReached(idx)}
+                              disabled={stopActionLoading}
+                              className="px-2.5 py-1 bg-green-500 text-white text-[10px] font-bold rounded-lg hover:bg-green-600 disabled:opacity-50 active:scale-95 transition-all"
+                            >
+                              Reached
+                            </button>
+                            <button
+                              onClick={() => handleStopSkip(idx)}
+                              disabled={stopActionLoading}
+                              className="px-2.5 py-1 bg-gray-200 dark:bg-zinc-700 text-gray-600 dark:text-gray-300 text-[10px] font-bold rounded-lg hover:bg-gray-300 disabled:opacity-50 active:scale-95 transition-all"
+                            >
+                              Skip
+                            </button>
+                          </div>
+                        )}
+                        {stop.status === 'REACHED' && (
+                          <span className="text-[10px] text-green-500 font-bold">Done</span>
+                        )}
+                        {stop.status === 'SKIPPED' && (
+                          <span className="text-[10px] text-gray-400 font-bold">Skipped</span>
+                        )}
+                      </div>
+                    ))}
+                    <div className="flex items-center gap-2.5 mt-1 pt-2 border-t border-gray-200 dark:border-zinc-700">
+                      <div className="w-7 h-7 rounded-full bg-red-500 flex items-center justify-center shrink-0">
+                        <span className="material-icons-outlined text-white" style={{ fontSize: '13px' }}>flag</span>
+                      </div>
+                      <span className="text-xs font-bold text-gray-700 dark:text-gray-300 truncate">
+                        {activeRide?.dropoff?.address || 'Final Destination'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="flex gap-3">
                 <button
                   onClick={handleCompleteRide}
