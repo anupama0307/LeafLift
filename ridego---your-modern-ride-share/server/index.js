@@ -878,6 +878,15 @@ app.post('/api/rides/:rideId/accept', async(req, res) => {
         ride.driverId = driverId;
         ride.status = 'ACCEPTED';
         ride.etaToPickup = etaToPickup;
+
+        // Store original ETA as baseline for delay detection
+        const etaMatch = etaToPickup && etaToPickup.match(/(\d+)/);
+        if (etaMatch) {
+            ride.originalEtaMinutes = parseInt(etaMatch[1], 10);
+        } else if (distanceKm) {
+            ride.originalEtaMinutes = Math.max(1, Math.round((distanceKm / 28) * 60));
+        }
+
         if (hasDriverLocation) {
             ride.driverLocation = { lat: driverLocation.lat, lng: driverLocation.lng, updatedAt: new Date() };
         }
@@ -1473,6 +1482,53 @@ const broadcastLiveEta = async () => {
             } else {
                 ride.etaToDropoff = etaText;
             }
+
+            // ── Delay Detection (User Story 2.6) ──
+            const DELAY_THRESHOLD_MIN = 5;
+            const DELAY_ALERT_COOLDOWN_MS = 5 * 60 * 1000; // 5 min cooldown between alerts
+
+            if (etaMinutes !== null && ride.originalEtaMinutes) {
+                const delayMinutes = etaMinutes - ride.originalEtaMinutes;
+                const now = Date.now();
+                const lastAlert = ride.lastDelayAlertAt ? new Date(ride.lastDelayAlertAt).getTime() : 0;
+                const cooldownPassed = (now - lastAlert) > DELAY_ALERT_COOLDOWN_MS;
+
+                if (delayMinutes >= DELAY_THRESHOLD_MIN && cooldownPassed) {
+                    ride.lastDelayAlertAt = new Date();
+
+                    // Create persistent notification
+                    const notification = new Notification({
+                        userId: ride.userId,
+                        title: 'Traffic Delay Detected',
+                        message: `Your ride is delayed by ~${delayMinutes} min due to traffic congestion. Updated ETA: ${etaText}.`,
+                        type: 'DELAY_ALERT',
+                        data: {
+                            rideId: ride._id,
+                            delayMinutes,
+                            originalEtaMinutes: ride.originalEtaMinutes,
+                            currentEtaMinutes: etaMinutes,
+                            etaLabel
+                        }
+                    });
+                    await notification.save();
+
+                    // Push real-time delay alert to rider
+                    const delayPayload = {
+                        rideId: ride._id,
+                        delayMinutes,
+                        originalEtaMinutes: ride.originalEtaMinutes,
+                        currentEtaMinutes: etaMinutes,
+                        etaText,
+                        etaLabel,
+                        message: `Delayed ~${delayMinutes} min due to traffic`,
+                        notificationId: notification._id
+                    };
+                    io.to(`ride:${ride._id}`).emit('ride:delay-alert', delayPayload);
+                    io.to(`user:${ride.userId}`).emit('ride:delay-alert', delayPayload);
+                    console.log(`⚠️  Delay alert: ride ${ride._id} delayed ${delayMinutes}min`);
+                }
+            }
+
             await ride.save();
 
             // Emit to rider and driver
