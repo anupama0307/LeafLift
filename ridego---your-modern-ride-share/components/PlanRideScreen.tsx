@@ -74,6 +74,10 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [liveEtaSource, setLiveEtaSource] = useState<string | null>(null);
     const [liveEtaUpdatedAt, setLiveEtaUpdatedAt] = useState<string | null>(null);
 
+    // ─── Delay Alert State ───
+    const [delayAlert, setDelayAlert] = useState<{ delayMinutes: number; message: string; etaText: string; etaLabel: string } | null>(null);
+    const delayAlertTimerRef = useRef<NodeJS.Timeout | null>(null);
+
     const mapRef = useRef<any>(null);
     const mapContainerRef = useRef<HTMLDivElement>(null);
     const [mapLoaded, setMapLoaded] = useState(false);
@@ -186,6 +190,20 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             if (payload.etaLabel === 'pickup') {
                 setEtaToPickup(payload.etaText);
             }
+        });
+
+        // ─── Delay Alert Handler (User Story 2.6) ───
+        socket.on('ride:delay-alert', (payload: any) => {
+            if (!payload?.delayMinutes) return;
+            setDelayAlert({
+                delayMinutes: payload.delayMinutes,
+                message: payload.message || `Delayed ~${payload.delayMinutes} min due to traffic`,
+                etaText: payload.etaText || '',
+                etaLabel: payload.etaLabel || 'dropoff'
+            });
+            // Auto-dismiss after 10 seconds
+            if (delayAlertTimerRef.current) clearTimeout(delayAlertTimerRef.current);
+            delayAlertTimerRef.current = setTimeout(() => setDelayAlert(null), 10000);
         });
 
         socket.on('ride:fare-update', (payload: any) => {
@@ -1028,6 +1046,8 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         setLiveEtaLabel(null);
         setLiveEtaSource(null);
         setLiveEtaUpdatedAt(null);
+        setDelayAlert(null);
+        if (delayAlertTimerRef.current) clearTimeout(delayAlertTimerRef.current);
         setOtpCode(null);
         setCurrentFare(null);
         setChatMessages([]);
@@ -1049,6 +1069,39 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     // ─── RENDER ───
     return (
         <div className="relative w-full h-screen overflow-hidden bg-white dark:bg-zinc-950">
+            {/* ── Congestion Delay Alert Toast (User Story 2.6) ── */}
+            {delayAlert && (
+                <div className="absolute top-16 left-4 right-4 z-[90] animate-in slide-in-from-top duration-500">
+                    <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded-2xl p-4 shadow-xl backdrop-blur-sm">
+                        <div className="flex items-start gap-3">
+                            <div className="size-10 bg-amber-100 dark:bg-amber-800/50 rounded-xl flex items-center justify-center shrink-0">
+                                <span className="material-icons-outlined text-amber-600 dark:text-amber-400">traffic</span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-0.5">
+                                    <h4 className="text-sm font-black text-amber-800 dark:text-amber-300">Traffic Delay Detected</h4>
+                                    <span className="bg-amber-200 dark:bg-amber-700 text-amber-800 dark:text-amber-200 text-[10px] font-bold px-2 py-0.5 rounded-full">+{delayAlert.delayMinutes} min</span>
+                                </div>
+                                <p className="text-xs text-amber-700 dark:text-amber-400">
+                                    {delayAlert.message}. New ETA: <span className="font-bold">{delayAlert.etaText}</span>
+                                    {delayAlert.etaLabel === 'pickup' ? ' to pickup' : ' to destination'}
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setDelayAlert(null)}
+                                className="p-1 rounded-lg hover:bg-amber-200 dark:hover:bg-amber-800 transition-colors shrink-0"
+                            >
+                                <span className="material-icons-outlined text-amber-500 text-sm">close</span>
+                            </button>
+                        </div>
+                        {/* Progress bar for auto-dismiss */}
+                        <div className="mt-3 h-1 bg-amber-200 dark:bg-amber-800 rounded-full overflow-hidden">
+                            <div className="h-full bg-amber-500 dark:bg-amber-400 rounded-full animate-[shrink_10s_linear_forwards]" style={{ animation: 'shrink 10s linear forwards' }} />
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Map */}
             <div
                 ref={mapContainerRef}

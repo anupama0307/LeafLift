@@ -5,6 +5,12 @@
   padding: 0;
 }
 
+/* Delay alert auto-dismiss progress bar */
+@keyframes shrink {
+  from { width: 100%; }
+  to { width: 0%; }
+}
+
 html, body, #root {
   height: 100%;
   width: 100%;
