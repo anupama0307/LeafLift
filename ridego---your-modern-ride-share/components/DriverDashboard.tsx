@@ -143,7 +143,11 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
         dropoff: payload.dropoff,
         fare: payload.currentFare || payload.fare,
         isPooled: payload.isPooled,
-        routeIndex: payload.routeIndex
+        routeIndex: payload.routeIndex,
+        genderPreference: payload.genderPreference,
+        rider: payload.rider,
+        safetyOptions: payload.safetyOptions,
+        accessibilityOptions: payload.accessibilityOptions
       };
       addOrUpdateRequestMarker(request);
       setRequests((prev) => {
@@ -1021,10 +1025,22 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
                         <div className="absolute top-0 right-0 p-4">
                           <span className="text-2xl font-black text-emerald-600 dark:text-emerald-400">₹{req.fare}</span>
                         </div>
-                        <div className="flex items-center gap-2 mb-4">
+                        <div className="flex items-center flex-wrap gap-2 mb-4">
                           <span className={`px-2 py-1 ${req.isPooled ? 'bg-emerald-600' : 'bg-black dark:bg-white'} text-white dark:text-black rounded-lg text-[8px] font-black uppercase tracking-widest`}>
                             {req.isPooled ? 'Pool Request' : 'Private Ride'}
                           </span>
+                          {req.genderPreference && req.genderPreference !== 'Any' && (
+                            <span className="px-2 py-1 bg-leaf-500 text-white rounded-lg text-[8px] font-black uppercase tracking-widest flex items-center gap-1">
+                              <span className="material-icons text-[10px]">{req.genderPreference === 'Female only' ? 'female' : 'male'}</span>
+                              {req.genderPreference}
+                            </span>
+                          )}
+                          {(req.safetyOptions || []).includes('Women Safety') && (
+                            <span className="px-2 py-1 bg-pink-500 text-white rounded-lg text-[8px] font-black uppercase tracking-widest flex items-center gap-1">
+                              <span className="material-icons text-[10px]">female</span>
+                              Women Safety
+                            </span>
+                          )}
                         </div>
 
                         <div className="flex items-start gap-4 mb-6">

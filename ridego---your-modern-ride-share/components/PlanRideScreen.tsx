@@ -287,7 +287,8 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                 dropoff: dropoffCoords
                     ? { address: destination, lat: dropoffCoords.lat, lng: dropoffCoords.lng }
                     : null,
-                fare: currentFare, isPooled: rideMode === 'Pooled'
+                fare: currentFare, isPooled: rideMode === 'Pooled',
+                genderPreference
             });
         } else if (activeRideId) {
             socket.emit('rider:search:stop', { rideId: activeRideId });
@@ -682,7 +683,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const fetchMatchingDrivers = async (start: { lat: number; lng: number }, end: { lat: number; lng: number }) => {
         try {
             const accStr = accessibilityOptions.join(',');
-            const resp = await fetch(`${API_BASE_URL}/api/rider/match-driver?pickupLat=${start.lat}&pickupLng=${start.lng}&dropoffLat=${end.lat}&dropoffLng=${end.lng}&accessibilityOptions=${accStr}`);
+            const resp = await fetch(`${API_BASE_URL}/api/rider/match-driver?pickupLat=${start.lat}&pickupLng=${start.lng}&dropoffLat=${end.lat}&dropoffLng=${end.lng}&accessibilityOptions=${accStr}&genderPreference=${genderPreference}`);
             if (resp.ok) {
                 const data = await resp.json();
                 setMatchedDrivers(data);
@@ -852,7 +853,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
 
         const fetchPooledRides = async () => {
             try {
-                const url = `${API_BASE_URL}/api/rides/pooled-in-progress?lat=${pickupCoords.lat}&lng=${pickupCoords.lng}&destLat=${dropoffCoords.lat}&destLng=${dropoffCoords.lng}&vehicleCategory=${selectedCategory}&radius=3`;
+                const url = `${API_BASE_URL}/api/rides/pooled-in-progress?lat=${pickupCoords.lat}&lng=${pickupCoords.lng}&destLat=${dropoffCoords.lat}&destLng=${dropoffCoords.lng}&vehicleCategory=${selectedCategory}&radius=3&gender=${user.gender}`;
                 const resp = await fetch(url);
                 if (resp.ok) {
                     const data = await resp.json();
@@ -1217,16 +1218,23 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                             </div>
                                         )}
                                         <div className={rideMode === 'Solo' ? 'col-span-2' : ''}>
-                                            <label className="text-[10px] font-black text-emerald-600/60 uppercase tracking-widest mb-1.5 block">Safety</label>
-                                            <select
-                                                value={genderPreference}
-                                                onChange={(e) => setGenderPreference(e.target.value as any)}
-                                                className="w-full h-10 bg-white dark:bg-zinc-800 border border-emerald-100 dark:border-emerald-800 rounded-xl text-xs font-black dark:text-white px-2 focus:ring-2 focus:ring-emerald-500 outline-none"
-                                            >
-                                                <option value="Any">Mixed Group</option>
-                                                <option value="Male only">Male only</option>
-                                                <option value="Female only">Female only</option>
-                                            </select>
+                                            <label className="text-[10px] font-black text-emerald-600/60 uppercase tracking-widest mb-1.5 block">Group Preference</label>
+                                            <div className="flex gap-2">
+                                                {[
+                                                    { id: 'Any', label: 'Mixed', icon: 'groups' },
+                                                    { id: 'Male only', label: 'Male', icon: 'male' },
+                                                    { id: 'Female only', label: 'Female', icon: 'female' }
+                                                ].map(opt => (
+                                                    <button
+                                                        key={opt.id}
+                                                        onClick={() => setGenderPreference(opt.id as any)}
+                                                        className={`flex-1 flex flex-col items-center justify-center py-2 h-12 rounded-xl border transition-all ${genderPreference === opt.id ? 'bg-emerald-600 border-emerald-600 text-white shadow-md' : 'bg-white dark:bg-zinc-800 border-emerald-100 dark:border-emerald-800 text-zinc-400'}`}
+                                                    >
+                                                        <span className="material-icons text-sm mb-0.5">{opt.icon}</span>
+                                                        <span className="text-[9px] font-black uppercase tracking-widest">{opt.label}</span>
+                                                    </button>
+                                                ))}
+                                            </div>
                                         </div>
                                     </div>
 

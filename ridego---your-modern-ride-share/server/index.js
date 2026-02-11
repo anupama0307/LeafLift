@@ -450,6 +450,13 @@ app.get('/api/rider/match-driver', async (req, res) => {
                 if (!supportsAll) return false;
             }
 
+            // Gender preference filtering
+            const genPref = req.query.genderPreference;
+            if (genPref && genPref !== 'Any') {
+                const targetGender = genPref === 'Female only' ? 'Female' : 'Male';
+                if (driver.gender !== targetGender) return false;
+            }
+
             return pickupDist <= 5 && dropoffDist <= 5;
         });
 
@@ -573,13 +580,17 @@ app.post('/api/rides', async (req, res) => {
             fare: ride.fare,
             currentFare: ride.currentFare,
             isPooled: ride.isPooled,
+            genderPreference: ride.genderPreference,
+            safetyOptions: ride.safetyOptions,
+            accessibilityOptions: ride.accessibilityOptions,
             routeIndex: ride.routeIndex,
             bookingTime: ride.bookingTime,
             rider: rider ? {
                 firstName: rider.firstName,
                 lastName: rider.lastName,
                 photoUrl: rider.photoUrl,
-                isVerified: rider.isVerified
+                isVerified: rider.isVerified,
+                gender: rider.gender
             } : null
         });
 
@@ -771,6 +782,13 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
         });
 
         const available = rides.filter((ride) => {
+            // Gender preference filtering
+            const riderGender = req.query.gender; // Assuming rider's gender is passed
+            if (ride.genderPreference && ride.genderPreference !== 'Any') {
+                const targetGender = ride.genderPreference === 'Female only' ? 'Female' : 'Male';
+                if (riderGender && riderGender !== targetGender) return false;
+            }
+
             // Check if ride has capacity
             const currentPassengers = ride.passengers + (ride.pooledRiders ? ride.pooledRiders.length : 0);
             const maxPass = ride.maxPassengers || 4;
