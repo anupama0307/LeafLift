@@ -300,7 +300,12 @@ const DemandScreen: React.FC = () => {
                     <span className="text-[10px] text-gray-400">Drivers: {r.drivers}</span>
                   </div>
                 </div>
-                <button className="px-3 py-1.5 rounded-lg bg-leaf-500 text-white text-[10px] font-bold hover:bg-leaf-600 transition-colors">
+                <button onClick={async () => {
+                  try {
+                    const res = await fetch(`${API}/driver-alerts/broadcast`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ zone: r.region, message: `🚨 High demand in ${r.region}! ${r.deficit} more drivers needed.` }) });
+                    if (res.ok) { const d = await res.json(); alert(`✅ Notified ${d.driversNotified} drivers for ${r.region}`); }
+                  } catch { alert('❌ Failed'); }
+                }} className="px-3 py-1.5 rounded-lg bg-leaf-500 text-white text-[10px] font-bold hover:bg-leaf-600 transition-colors">
                   Notify
                 </button>
               </div>
@@ -328,7 +333,13 @@ const DemandScreen: React.FC = () => {
           </div>
 
           {/* Broadcast Button */}
-          <button className="w-full py-3.5 rounded-xl bg-leaf-500 text-white text-sm font-bold hover:bg-leaf-600 transition-colors shadow-lg shadow-leaf-500/20 flex items-center justify-center gap-2 slide-up-d3">
+          <button onClick={async () => {
+            if (!confirm('Send surge alert to ALL nearby drivers?')) return;
+            try {
+              const res = await fetch(`${API}/driver-alerts/broadcast`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ zone: 'All Zones', message: '🚨 Surge alert! High demand across the city — go online now!' }) });
+              if (res.ok) { const d = await res.json(); alert(`✅ Alert sent to ${d.driversNotified} drivers!`); }
+            } catch { alert('❌ Broadcast failed'); }
+          }} className="w-full py-3.5 rounded-xl bg-leaf-500 text-white text-sm font-bold hover:bg-leaf-600 transition-colors shadow-lg shadow-leaf-500/20 flex items-center justify-center gap-2 slide-up-d3">
             <span className="material-icons text-lg">send</span>
             Broadcast Surge Alert to All Nearby Drivers
           </button>

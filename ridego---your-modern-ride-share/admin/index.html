@@ -118,6 +118,10 @@
             animation: pulse-ring 2s ease-in-out infinite;
         }
         
+        .pulse-ring-slow {
+            animation: pulse-ring 3s ease-in-out infinite;
+        }
+        
         @keyframes count-up {
             from {
                 opacity: 0;
@@ -131,6 +135,120 @@
         
         .count-up {
             animation: count-up 0.6s ease-out forwards;
+        }
+        
+        @keyframes float {
+            0%,
+            100% {
+                transform: translateY(0px);
+            }
+            50% {
+                transform: translateY(-4px);
+            }
+        }
+        
+        .animate-float {
+            animation: float 3s ease-in-out infinite;
+        }
+        
+        @keyframes pulse-scale {
+            0%,
+            100% {
+                transform: scale(1);
+            }
+            50% {
+                transform: scale(1.03);
+            }
+        }
+        
+        .animate-pulse-scale {
+            animation: pulse-scale 2s ease-in-out infinite;
+        }
+        
+        @keyframes fade-in {
+            from {
+                opacity: 0;
+            }
+            to {
+                opacity: 1;
+            }
+        }
+        
+        .animate-fade-in {
+            animation: fade-in 0.3s ease-out forwards;
+        }
+        
+        @keyframes slide-in-right {
+            from {
+                opacity: 0;
+                transform: translateX(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+        
+        .animate-slide-in-right {
+            animation: slide-in-right 0.4s ease-out forwards;
+        }
+        
+        @keyframes slide-in-left {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+        
+        .animate-slide-in-left {
+            animation: slide-in-left 0.4s ease-out forwards;
+        }
+        
+        @keyframes bounce-slow {
+            0%,
+            100% {
+                transform: translateY(0);
+            }
+            50% {
+                transform: translateY(-8px);
+            }
+        }
+        
+        .animate-bounce-slow {
+            animation: bounce-slow 2s ease-in-out infinite;
+        }
+        
+        @keyframes pulse-slow {
+            0%,
+            100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.7;
+            }
+        }
+        
+        .animate-pulse-slow {
+            animation: pulse-slow 3s ease-in-out infinite;
+        }
+        
+        @keyframes count-up-animation {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .animate-count-up {
+            animation: count-up-animation 0.6s ease-out forwards;
         }
     </style>
 </head>

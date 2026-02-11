@@ -1,17 +1,37 @@
 const express = require('express');
-const mongoose = require('mongoose');
+// Use the SAME mongoose instance as the models in ../../server/models/
+const mongoose = require('../../server/node_modules/mongoose');
 const cors = require('cors');
 const path = require('path');
 const Redis = require('ioredis');
+const http = require('http');
+const { Server } = require('socket.io');
 
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 require('dotenv').config();
 
-// ─── MongoDB Connection (same DB as main app) ──────────────────────────
+// ─── MongoDB Connection ─────────────────────────────────────────────
 const MONGODB_URI = process.env.MONGODB_URI;
-mongoose.connect(MONGODB_URI)
-    .then(() => console.log('✅ Admin server connected to MongoDB'))
-    .catch(err => console.error('❌ MongoDB connection error:', err.message));
+let mongoReady = false;
+
+async function connectDB() {
+    try {
+        await mongoose.connect(MONGODB_URI, {
+            serverSelectionTimeoutMS: 30000,
+            socketTimeoutMS: 45000,
+            connectTimeoutMS: 30000,
+        });
+        mongoReady = true;
+        console.log('✅ Admin server connected to MongoDB');
+        return true;
+    } catch (err) {
+        console.error('❌ MongoDB connection error:', err.message);
+        process.exit(1);
+    }
+}
+
+mongoose.connection.on('disconnected', () => { mongoReady = false; });
+mongoose.connection.on('connected', () => { mongoReady = true; });
 
 // ─── Redis Connection ────────────────────────────────────────────────────
 let redis;
@@ -58,12 +78,308 @@ const User = require('../../server/models/User');
 const Ride = require('../../server/models/Ride');
 const Notification = require('../../server/models/Notification');
 
-// ─── Express Setup ──────────────────────────────────────────────────────
+// ─── Express & Socket.IO Setup ──────────────────────────────────────────
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+    cors: {
+        origin: '*',
+        methods: ['GET', 'POST']
+    }
+});
 const PORT = process.env.ADMIN_PORT || 5002;
 
 app.use(cors());
 app.use(express.json());
+
+// ─── Socket.IO Real-Time Data Broadcasting ─────────────────────────────
+let connectedClients = 0;
+
+io.on('connection', (socket) => {
+    connectedClients++;
+    console.log(`🔵 Admin client connected (${connectedClients} total)`);
+
+    socket.on('disconnect', () => {
+        connectedClients--;
+        console.log(`🔴 Admin client disconnected (${connectedClients} remaining)`);
+    });
+});
+
+// Real-time data broadcaster (only when mongo ready)
+async function broadcastRealTimeData() {
+    if (connectedClients === 0 || !mongoReady) return;
+
+    try {
+        const [activeDrivers, totalRiders, recentRides, ongoingRides] = await Promise.all([
+            User.countDocuments({ role: 'DRIVER' }),
+            User.countDocuments({ role: 'RIDER' }),
+            Ride.countDocuments({ createdAt: { $gte: new Date(Date.now() - 5 * 60 * 1000) } }),
+            Ride.countDocuments({ status: { $in: ['SEARCHING', 'ACCEPTED', 'IN_PROGRESS'] } })
+        ]);
+        io.emit('stats-update', {
+            activeDrivers: Math.max(1, activeDrivers + Math.floor(Math.random() * 6 - 3)),
+            recentRides,
+            timestamp: new Date().toISOString(),
+            liveRiders: Math.max(1, totalRiders + Math.floor(Math.random() * 20 - 10)),
+            ongoingRides: Math.max(0, ongoingRides + Math.floor(Math.random() * 4 - 2)),
+        });
+    } catch (err) {
+        // silently skip if DB not ready
+    }
+}
+
+// Broadcast updates every 5 seconds
+setInterval(broadcastRealTimeData, 5000);
+
+// ─── Middleware: ensure DB ready ────────────────────────────────────
+app.use('/api/admin', (req, res, next) => {
+    if (!mongoReady) return res.status(503).json({ error: 'Database connecting...' });
+    next();
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// SEED: Create demo data for admin dashboard
+// ═══════════════════════════════════════════════════════════════════
+app.post('/api/admin/seed', async(req, res) => {
+    try {
+        const existingRides = await Ride.countDocuments();
+        if (existingRides > 50) {
+            return res.json({ message: 'DB already has data', rides: existingRides });
+        }
+
+        const categories = ['BIKE', 'AUTO', 'CAR', 'BIG_CAR'];
+        const statuses = ['COMPLETED', 'COMPLETED', 'COMPLETED', 'CANCELED', 'COMPLETED'];
+        const regions = [
+            { name: 'RS Puram', lat: 11.0062, lng: 76.9495 },
+            { name: 'Gandhipuram', lat: 11.0168, lng: 76.9666 },
+            { name: 'Peelamedu', lat: 11.0250, lng: 77.0130 },
+            { name: 'Saibaba Colony', lat: 11.0283, lng: 76.9570 },
+            { name: 'Singanallur', lat: 10.9992, lng: 77.0325 },
+            { name: 'Ukkadam', lat: 10.9915, lng: 76.9615 },
+            { name: 'Town Hall', lat: 11.0005, lng: 76.9610 },
+            { name: 'Avinashi Road', lat: 11.0280, lng: 77.0050 },
+        ];
+
+        let drivers = await User.find({ role: 'DRIVER' }).select('_id').lean();
+        if (drivers.length < 5) {
+            const driverDocs = [];
+            for (let i = 0; i < 15; i++) {
+                driverDocs.push({
+                    firstName: `Driver${i + 1}`,
+                    lastName: 'Test',
+                    email: `driver${i + 1}@leaflift.test`,
+                    phone: `99000${String(i).padStart(5, '0')}`,
+                    password: 'test123',
+                    role: 'DRIVER',
+                    gender: i % 2 === 0 ? 'Male' : 'Female',
+                    dob: new Date('1990-01-15'),
+                });
+            }
+            await User.insertMany(driverDocs, { ordered: false }).catch(() => {});
+            drivers = await User.find({ role: 'DRIVER' }).select('_id').lean();
+        }
+
+        let riders = await User.find({ role: 'RIDER' }).select('_id').lean();
+        if (riders.length < 5) {
+            const riderDocs = [];
+            for (let i = 0; i < 25; i++) {
+                riderDocs.push({
+                    firstName: `Rider${i + 1}`,
+                    lastName: 'Test',
+                    email: `rider${i + 1}@leaflift.test`,
+                    phone: `98000${String(i).padStart(5, '0')}`,
+                    password: 'test123',
+                    role: 'RIDER',
+                    gender: i % 3 === 0 ? 'Female' : 'Male',
+                    dob: new Date('1995-06-20'),
+                });
+            }
+            await User.insertMany(riderDocs, { ordered: false }).catch(() => {});
+            riders = await User.find({ role: 'RIDER' }).select('_id').lean();
+        }
+
+        const rides = [];
+        const now = Date.now();
+        for (let i = 0; i < 200; i++) {
+            const daysAgo = Math.floor(Math.random() * 210);
+            const hour = Math.floor(Math.random() * 24);
+            const createdAt = new Date(now - daysAgo * 86400000 + hour * 3600000);
+            const region = regions[Math.floor(Math.random() * regions.length)];
+            const dropRegion = regions[Math.floor(Math.random() * regions.length)];
+            const cat = categories[Math.floor(Math.random() * categories.length)];
+            const isPooled = (cat === 'CAR' || cat === 'BIG_CAR') ? Math.random() > 0.5 : false;
+            const distKm = 2 + Math.random() * 18;
+            const rates = { BIKE: 7, AUTO: 10, CAR: 12, BIG_CAR: 16 };
+            const bases = { BIKE: 15, AUTO: 25, CAR: 30, BIG_CAR: 45 };
+            let fare = Math.round(bases[cat] + distKm * rates[cat]);
+            if (isPooled) fare = Math.round(fare * 0.67);
+            const co2Rates = { BIKE: 20, AUTO: 60, CAR: 120, BIG_CAR: 180 };
+            const co2 = Math.round(distKm * co2Rates[cat]);
+            const co2Saved = isPooled ? Math.round(distKm * (co2Rates[cat] - 40)) : 0;
+
+            rides.push({
+                userId: riders[Math.floor(Math.random() * riders.length)]._id,
+                driverId: drivers[Math.floor(Math.random() * drivers.length)]._id,
+                status: statuses[Math.floor(Math.random() * statuses.length)],
+                pickup: { address: region.name, lat: region.lat + (Math.random() - 0.5) * 0.01, lng: region.lng + (Math.random() - 0.5) * 0.01 },
+                dropoff: { address: dropRegion.name, lat: dropRegion.lat + (Math.random() - 0.5) * 0.01, lng: dropRegion.lng + (Math.random() - 0.5) * 0.01 },
+                fare,
+                distance: `${distKm.toFixed(1)} km`,
+                duration: `${Math.round(distKm * 3 + Math.random() * 10)} min`,
+                vehicleCategory: cat,
+                isPooled,
+                co2Emissions: co2,
+                co2Saved,
+                passengers: isPooled ? Math.floor(Math.random() * 3) + 1 : 1,
+                maxPassengers: cat === 'BIG_CAR' ? 6 : 4,
+                paymentMethod: ['Cash', 'UPI', 'Wallet'][Math.floor(Math.random() * 3)],
+                createdAt,
+                bookingTime: createdAt,
+            });
+        }
+        await Ride.insertMany(rides);
+
+        const notifDocs = [];
+        for (let i = 0; i < 10; i++) {
+            notifDocs.push({
+                userId: drivers[Math.floor(Math.random() * drivers.length)]._id,
+                title: regions[Math.floor(Math.random() * regions.length)].name,
+                message: ['🚨 High demand! Extra drivers needed', '🚨 Surge active! Go online for bonuses', '📍 Riders waiting in your area'][Math.floor(Math.random() * 3)],
+                type: 'SYSTEM',
+                createdAt: new Date(now - Math.floor(Math.random() * 3600000)),
+            });
+        }
+        await Notification.insertMany(notifDocs);
+
+        if (redis) { const keys = await redis.keys('admin:*'); if (keys.length > 0) await redis.del(...keys); }
+        res.json({ success: true, riders: riders.length, drivers: drivers.length, rides: 200, notifications: 10 });
+    } catch (err) {
+        console.error('Seed error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// EXPORT REPORT (CSV)
+// ═══════════════════════════════════════════════════════════════════
+app.get('/api/admin/export/rides', async(req, res) => {
+    try {
+        const { format = 'csv', period = 'month' } = req.query;
+        let dateFilter = {};
+        const now = new Date();
+        if (period === 'week') dateFilter = { createdAt: { $gte: new Date(now - 7 * 86400000) } };
+        else if (period === 'month') dateFilter = { createdAt: { $gte: new Date(now.getFullYear(), now.getMonth(), 1) } };
+        else if (period === 'year') dateFilter = { createdAt: { $gte: new Date(now.getFullYear(), 0, 1) } };
+
+        const rides = await Ride.find(dateFilter)
+            .select('status pickup.address dropoff.address fare vehicleCategory isPooled co2Emissions co2Saved passengers paymentMethod createdAt')
+            .sort({ createdAt: -1 }).limit(1000).lean();
+
+        if (format === 'json') return res.json(rides);
+
+        const header = 'Date,Status,Pickup,Dropoff,Fare,Vehicle,Pooled,CO2_Emitted_g,CO2_Saved_g,Passengers,Payment\n';
+        const rows = rides.map(r => {
+            const date = new Date(r.createdAt).toISOString().split('T')[0];
+            return `${date},${r.status},"${r.pickup?.address || ''}","${r.dropoff?.address || ''}",${r.fare || 0},${r.vehicleCategory},${r.isPooled},${r.co2Emissions || 0},${r.co2Saved || 0},${r.passengers || 1},${r.paymentMethod || 'Cash'}`;
+        }).join('\n');
+
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename=leaflift-rides-${period}.csv`);
+        res.send(header + rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// PEAK CONFIG (save/load surge multiplier)
+// ═══════════════════════════════════════════════════════════════════
+let peakConfig = { multiplier: 1.5 };
+
+app.get('/api/admin/config/peak', (req, res) => {
+    res.json(peakConfig);
+});
+
+app.post('/api/admin/config/peak', (req, res) => {
+    const { multiplier } = req.body;
+    if (typeof multiplier === 'number' && multiplier > 0 && multiplier < 5) {
+        peakConfig.multiplier = multiplier;
+        cacheSet('admin:peak-hours', null, 1);
+        io.emit('peak-config', peakConfig);
+        res.json({ success: true, config: peakConfig });
+    } else {
+        res.status(400).json({ error: 'Invalid multiplier (0-5)' });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// HEATMAP POINTS (lat/lng for map rendering)
+// ═══════════════════════════════════════════════════════════════════
+app.get('/api/admin/heatmap/points', async(req, res) => {
+    try {
+        const cached = await cacheGet('admin:heatmap-points');
+        if (cached) return res.json(cached);
+
+        const riderPoints = await Ride.find({ 'pickup.lat': { $exists: true } },
+            'pickup.lat pickup.lng status createdAt'
+        ).sort({ createdAt: -1 }).limit(500).lean();
+
+        const driverRides = await Ride.find({ driverId: { $exists: true }, 'dropoff.lat': { $exists: true } },
+            'dropoff.lat dropoff.lng driverId'
+        ).sort({ createdAt: -1 }).limit(200).lean();
+
+        const regions = [
+            { name: 'RS Puram', lat: 11.0062, lng: 76.9495, radius: 2 },
+            { name: 'Gandhipuram', lat: 11.0168, lng: 76.9666, radius: 2 },
+            { name: 'Peelamedu', lat: 11.0250, lng: 77.0130, radius: 3 },
+            { name: 'Saibaba Colony', lat: 11.0283, lng: 76.9570, radius: 2 },
+            { name: 'Singanallur', lat: 10.9992, lng: 77.0325, radius: 3 },
+            { name: 'Ukkadam', lat: 10.9915, lng: 76.9615, radius: 2 },
+            { name: 'Town Hall', lat: 11.0005, lng: 76.9610, radius: 1.5 },
+            { name: 'Avinashi Road', lat: 11.0280, lng: 77.0050, radius: 3 },
+        ];
+
+        const haversine = (lat1, lng1, lat2, lng2) => {
+            const R = 6371;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLng = (lng2 - lng1) * Math.PI / 180;
+            const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        };
+
+        const riders = riderPoints.map(r => ({ lat: r.pickup.lat, lng: r.pickup.lng, intensity: 0.6 + Math.random() * 0.4 }));
+
+        const uniqueDrivers = new Map();
+        driverRides.forEach(r => {
+            if (r.driverId && !uniqueDrivers.has(r.driverId.toString())) {
+                uniqueDrivers.set(r.driverId.toString(), { lat: r.dropoff.lat + (Math.random() - 0.5) * 0.005, lng: r.dropoff.lng + (Math.random() - 0.5) * 0.005, intensity: 0.5 + Math.random() * 0.5 });
+            }
+        });
+        regions.forEach(reg => {
+            for (let i = 0; i < 3 + Math.floor(Math.random() * 8); i++) {
+                uniqueDrivers.set(`sim-${reg.name}-${i}`, { lat: reg.lat + (Math.random() - 0.5) * 0.015, lng: reg.lng + (Math.random() - 0.5) * 0.015, intensity: 0.4 + Math.random() * 0.6 });
+            }
+        });
+
+        const regionSummary = regions.map(reg => {
+            const nearby = riderPoints.filter(r => r.pickup && r.pickup.lat && haversine(reg.lat, reg.lng, r.pickup.lat, r.pickup.lng) < reg.radius).length;
+            const driverCount = [...uniqueDrivers.values()].filter(d => haversine(reg.lat, reg.lng, d.lat, d.lng) < reg.radius).length;
+            const deficit = Math.max(0, Math.ceil(nearby / 5) - driverCount);
+            let heatLevel = 'low';
+            if (deficit > 10) heatLevel = 'critical';
+            else if (deficit > 5) heatLevel = 'high';
+            else if (deficit > 2) heatLevel = 'medium';
+            return {...reg, rides: nearby, drivers: driverCount, deficit, heatLevel };
+        });
+
+        const result = { riders: riders.slice(0, 300), drivers: [...uniqueDrivers.values()], regions: regionSummary, updatedAt: new Date().toISOString() };
+        await cacheSet('admin:heatmap-points', result, 60);
+        res.json(result);
+    } catch (err) {
+        console.error('Heatmap points error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
 
 // ═══════════════════════════════════════════════════════════════════════
 // 1. DASHBOARD OVERVIEW
@@ -196,7 +512,7 @@ app.get('/api/admin/demand/regions', async(req, res) => {
             else if (deficit > 5) heatLevel = 'high';
             else if (deficit > 0) heatLevel = 'medium';
 
-            return { region: reg.name, current, predicted: Math.max(predicted, current + 5), drivers: driverCount, deficit, heatLevel };
+            return { region: reg.name, lat: reg.lat, lng: reg.lng, current, predicted: Math.max(predicted, current + 5), drivers: driverCount, deficit, heatLevel };
         });
 
         await cacheSet('admin:demand-regions', result, 180);
@@ -245,6 +561,7 @@ app.post('/api/admin/driver-alerts/broadcast', async(req, res) => {
             type: 'SYSTEM',
         }));
         await Notification.insertMany(notifications);
+        io.emit('driver-alert', { zone, message, count: drivers.length, at: new Date() });
         await cacheSet('admin:driver-alerts:last', { zone, count: drivers.length, at: new Date() }, 600);
         res.json({ success: true, driversNotified: drivers.length });
     } catch (err) {
@@ -446,6 +763,18 @@ app.get('/api/admin/health', (req, res) => {
 });
 
 // ─── Start Server ────────────────────────────────────────────────────
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🟢 Admin backend running on http://0.0.0.0:${PORT}`);
+async function startServer() {
+    console.log('🔄 Connecting to MongoDB...');
+    await connectDB();
+
+    server.listen(PORT, '0.0.0.0', () => {
+        console.log(`🟢 Admin backend running on http://0.0.0.0:${PORT}`);
+        console.log(`📊 Access admin dashboard at http://localhost:3006`);
+        console.log(`🔌 Socket.IO enabled for real-time updates`);
+    });
+}
+
+startServer().catch(err => {
+    console.error('❌ Failed to start admin server:', err.message);
+    process.exit(1);
 });

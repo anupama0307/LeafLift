@@ -207,7 +207,13 @@ const FleetScreen: React.FC = () => {
                 </div>
               </div>
             </div>
-            <button className="w-full py-3 rounded-xl bg-leaf-500 text-white text-sm font-bold hover:bg-leaf-600 transition-colors shadow-lg shadow-leaf-500/20 flex items-center justify-center gap-2">
+            <button onClick={async () => {
+              try {
+                const res = await fetch(`${API}/export/rides?format=csv&period=${period}`);
+                if (res.ok) { const blob = await res.blob(); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `fleet-report-${period}.csv`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href); }
+                else alert('❌ No data to export');
+              } catch { alert('❌ Export failed'); }
+            }} className="w-full py-3 rounded-xl bg-leaf-500 text-white text-sm font-bold hover:bg-leaf-600 transition-colors shadow-lg shadow-leaf-500/20 flex items-center justify-center gap-2">
               <span className="material-icons text-lg">download</span>
               Generate & Download Report
             </button>
