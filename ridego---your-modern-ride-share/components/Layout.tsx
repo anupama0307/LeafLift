@@ -55,29 +55,28 @@ const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScre
         {children}
       </div>
 
-      {/* Navigation Bar (Sticky at bottom) */}
+      {/* Premium Navigation Bar (Sticky at bottom) */}
       {!isSpecialScreen && (
-        <div className="bg-white dark:bg-zinc-950 border-t border-gray-100 dark:border-gray-800 flex justify-around items-center pt-3 pb-8 px-4 z-50">
-          {isDriver ? (
-            /* Driver Specific Tabs: Dashboard, Inbox, Account */
-            <>
-              <NavItem screen={AppScreen.DRIVER_DASHBOARD} icon="dashboard" label="Dashboard" />
-              <NavItem screen={AppScreen.INBOX} icon="chat_bubble_outline" label="Inbox" />
-              <NavItem screen={AppScreen.ACCOUNT} icon="person" label="Account" />
-            </>
-          ) : (
-            /* Rider Specific Tabs */
-            <>
-              <NavItem screen={AppScreen.HOME} icon="home" label="Home" />
-              <NavItem screen={AppScreen.ACTIVITY} icon="receipt_long" label="Activity" />
-              <NavItem screen={AppScreen.INBOX} icon="chat_bubble_outline" label="Inbox" />
-              <NavItem screen={AppScreen.ACCOUNT} icon="person" label="Account" />
-            </>
-          )}
-
-          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-32 h-1 bg-gray-100 dark:bg-zinc-800 rounded-full"></div>
+        <div className="fixed bottom-0 inset-x-0 z-[100] p-6 pointer-events-none">
+          <div className="max-w-[430px] mx-auto bg-white/70 dark:bg-zinc-950/70 backdrop-blur-2xl border border-zinc-100 dark:border-zinc-800/50 rounded-[32px] flex justify-around items-center py-4 px-2 shadow-2xl pointer-events-auto">
+            {isDriver ? (
+              <>
+                <NavItem screen={AppScreen.DRIVER_DASHBOARD} icon="dashboard" label="Home" />
+                <NavItem screen={AppScreen.INBOX} icon="chat_bubble_outline" label="Inbox" />
+                <NavItem screen={AppScreen.ACCOUNT} icon="person" label="Account" />
+              </>
+            ) : (
+              <>
+                <NavItem screen={AppScreen.HOME} icon="home" label="Home" />
+                <NavItem screen={AppScreen.ACTIVITY} icon="receipt_long" label="History" />
+                <NavItem screen={AppScreen.INBOX} icon="chat_bubble_outline" label="Inbox" />
+                <NavItem screen={AppScreen.ACCOUNT} icon="person" label="Account" />
+              </>
+            )}
+          </div>
         </div>
       )}
+
 
       {/* Special Floating Navigation for Driver Dashboard Mode */}
       {currentScreen === AppScreen.DRIVER_DASHBOARD && (

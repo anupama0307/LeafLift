@@ -61,6 +61,7 @@ const RideSchema = new mongoose.Schema({
         type: Number,
         default: 4
     },
+    accessibilityOptions: [String],
     safetyOptions: [String],
     pooledRiders: [{
         userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

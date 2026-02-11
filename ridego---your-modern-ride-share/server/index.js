@@ -102,7 +102,8 @@ io.on('connection', (socket) => {
             pickup,
             dropoff,
             fare,
-            isPooled
+            isPooled,
+            accessibilityOptions
         });
     });
 
@@ -286,7 +287,9 @@ app.post('/api/signup', async (req, res) => {
             vehicleModel,
             vehicleNumber,
             rating,
-            photoUrl
+            rating,
+            photoUrl,
+            accessibilitySupport
         } = req.body;
 
         let user = await User.findOne({ phone, role });
@@ -302,7 +305,7 @@ app.post('/api/signup', async (req, res) => {
             photoUrl: photoUrl || `https://i.pravatar.cc/150?u=${phone}`
         } : {};
 
-        user = new User({ role, phone, firstName, lastName, dob, gender, license, aadhar, ...driverDefaults });
+        user = new User({ role, phone, firstName, lastName, dob, gender, license, aadhar, accessibilitySupport, ...driverDefaults });
         await user.save();
         res.status(201).json({ message: 'User created', user });
     } catch (error) {
@@ -317,6 +320,22 @@ app.get('/api/users', async (req, res) => {
         res.json(users);
     } catch (error) {
         res.status(500).json({ message: 'Error fetching users' });
+    }
+});
+
+app.put('/api/users/:userId', async (req, res) => {
+    try {
+        const { firstName, lastName, photoUrl, accessibilitySupport, gender } = req.body;
+        const user = await User.findByIdAndUpdate(
+            req.params.userId,
+            { firstName, lastName, photoUrl, accessibilitySupport, gender },
+            { new: true }
+        );
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        res.json(user);
+    } catch (error) {
+        console.error('Update user error:', error);
+        res.status(500).json({ message: 'Error updating user' });
     }
 });
 
@@ -376,6 +395,13 @@ app.get('/api/rider/match-driver', async (req, res) => {
             const pickupDist = getDistanceKm(pLat, pLng, route.source.lat, route.source.lng);
             // Check dropoff proximity (within 5km of driver destination)
             const dropoffDist = getDistanceKm(dLat, dLng, route.destination.lat, route.destination.lng);
+
+            // Check accessibility support if rider requested it
+            const reqAccessibility = req.query.accessibilityOptions ? req.query.accessibilityOptions.split(',') : [];
+            if (reqAccessibility.length > 0) {
+                const supportsAll = reqAccessibility.every(opt => (driver.accessibilitySupport || []).includes(opt));
+                if (!supportsAll) return false;
+            }
 
             return pickupDist <= 5 && dropoffDist <= 5;
         });

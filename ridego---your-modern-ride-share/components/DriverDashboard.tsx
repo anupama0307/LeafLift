@@ -53,6 +53,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
   const [dashboardView, setDashboardView] = useState<'HOME' | 'MAP'>('HOME');
   const [showActiveRideScreen, setShowActiveRideScreen] = useState(false);
   const [activeRideData, setActiveRideData] = useState<any>(null);
+  const [accessibilitySupport, setAccessibilitySupport] = useState<string[]>(user?.accessibilitySupport || []);
 
   // Daily Route State
   const [isRouteModalOpen, setIsRouteModalOpen] = useState(false);
@@ -768,6 +769,34 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
     hasActiveRide: !!activeRide
   });
 
+  const toggleAccessibility = async (opt: string) => {
+    const newSupport = accessibilitySupport.includes(opt)
+      ? accessibilitySupport.filter(o => o !== opt)
+      : [...accessibilitySupport, opt];
+
+    setAccessibilitySupport(newSupport);
+
+    // Update on backend
+    try {
+      const resp = await fetch(`${API_BASE_URL}/api/users/${user._id || user.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accessibilitySupport: newSupport })
+      });
+      if (resp.ok) {
+        // Update local storage
+        const userStr = localStorage.getItem('leaflift_user');
+        if (userStr) {
+          const u = JSON.parse(userStr);
+          u.accessibilitySupport = newSupport;
+          localStorage.setItem('leaflift_user', JSON.stringify(u));
+        }
+      }
+    } catch (error) {
+      console.error('Failed to update accessibility support', error);
+    }
+  };
+
   if (showActiveRideScreen && activeRideData) {
     console.log('✅ RENDERING ActiveRideScreen (Driver) with data:', activeRideData);
     return (
@@ -794,99 +823,139 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
       />
 
       {dashboardView === 'HOME' && (
-        <div className="flex-1 overflow-y-auto px-6 pt-12 pb-24 z-10 animate-in fade-in duration-500">
-          <div className="flex justify-between items-start mb-8">
+        <div className="flex-1 overflow-y-auto px-6 pt-12 pb-24 z-10 animate-in fade-in duration-500 hide-scrollbar">
+          <div className="flex justify-between items-start mb-10">
             <div>
-              <h1 className="text-3xl font-black text-black dark:text-white leading-tight">Welcome,</h1>
-              <h2 className="text-2xl font-bold text-leaf-600 dark:text-leaf-400">{user?.firstName || 'Driver'}</h2>
+              <p className="text-[10px] font-black text-emerald-600 uppercase tracking-[.25em] mb-1">Status: Active</p>
+              <h1 className="text-3xl font-black text-black dark:text-white leading-tight">Hello, <br />{user?.firstName || 'Partner'}</h1>
             </div>
             <button
               onClick={() => setIsNotificationsOpen(true)}
-              className="size-14 bg-[#f3f3f3] dark:bg-zinc-900 border border-gray-100 dark:border-zinc-800 rounded-2xl flex items-center justify-center relative shadow-sm group"
+              className="size-14 bg-zinc-50 dark:bg-zinc-900 border border-zinc-100 dark:border-zinc-800 rounded-[22px] flex items-center justify-center relative shadow-sm active:scale-90 transition-all group"
             >
-              <span className="material-icons-outlined text-black dark:text-white group-hover:scale-110 transition-transform">notifications</span>
+              <span className="material-icons-outlined text-zinc-950 dark:text-white group-hover:rotate-12 transition-transform">notifications</span>
               {notifications.some(n => !n.isRead) && (
-                <span className="absolute top-3 right-3 size-3 bg-red-500 rounded-full border-2 border-white dark:border-zinc-900 animate-pulse"></span>
+                <span className="absolute top-4 right-4 size-2.5 bg-emerald-500 rounded-full border-2 border-white dark:border-zinc-900 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]"></span>
               )}
             </button>
           </div>
 
-          {/* Stats Overview */}
-          <div className="grid grid-cols-3 gap-3 mb-8">
-            {[
-              {
-                label: 'Today',
-                value: `₹${driverRides.filter(r => r.status === 'COMPLETED' && new Date(r.bookingTime || r.createdAt).toDateString() === new Date().toDateString()).reduce((acc, r) => acc + (r.currentFare || r.fare || 0), 0)}`,
-                color: 'bg-leaf-600',
-                icon: 'payments'
-              },
-              { label: 'Rating', value: user?.rating?.toFixed(1) || '5.0', color: 'bg-zinc-900', icon: 'star' },
-              { label: 'Trips', value: String(driverRides.filter(r => r.status === 'COMPLETED').length), color: 'bg-[#f3f3f3]', icon: 'speed' }
-            ].map((stat, i) => (
-              <div key={i} className={`${stat.color} p-4 rounded-3xl flex flex-col justify-between aspect-[4/5] shadow-lg shadow-black/5`}>
-                <span className={`material-icons-outlined text-xl ${stat.color === 'bg-leaf-600' || stat.color === 'bg-zinc-900' ? 'text-white' : 'text-zinc-400'}`}>{stat.icon}</span>
-                <div>
-                  <p className={`text-[10px] font-black uppercase tracking-widest ${stat.color === 'bg-[#f3f3f3]' ? 'text-gray-400' : 'text-white/60'}`}>{stat.label}</p>
-                  <p className={`text-lg font-black ${stat.color === 'bg-[#f3f3f3]' ? 'text-black' : 'text-white'}`}>{stat.value}</p>
+          {/* Premium Earnings Card */}
+          <div className="relative overflow-hidden bg-zinc-950 dark:bg-white rounded-[40px] p-8 mb-8 shadow-2xl shadow-zinc-950/20">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/20 rounded-full blur-3xl -mr-16 -mt-16" />
+            <p className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-[0.3em] mb-2">Today's Earnings</p>
+            <div className="flex items-baseline gap-2 mb-8">
+              <span className="text-4xl font-black text-white dark:text-black">₹{driverRides.filter(r => r.status === 'COMPLETED' && new Date(r.bookingTime || r.createdAt).toDateString() === new Date().toDateString()).reduce((acc, r) => acc + (r.currentFare || r.fare || 0), 0)}</span>
+              <span className="text-emerald-500 font-bold text-xs uppercase tracking-widest">+12% vs yesterday</span>
+            </div>
+            <div className="flex gap-10">
+              <div>
+                <p className="text-[8px] font-black text-zinc-500 uppercase tracking-widest mb-1">Trips</p>
+                <p className="text-lg font-black text-white dark:text-black">{driverRides.filter(r => r.status === 'COMPLETED').length}</p>
+              </div>
+              <div>
+                <p className="text-[8px] font-black text-zinc-500 uppercase tracking-widest mb-1">Rating</p>
+                <div className="flex items-center gap-1">
+                  <span className="text-lg font-black text-white dark:text-black">{user?.rating?.toFixed(1) || '5.0'}</span>
+                  <span className="material-icons text-yellow-500 text-xs">star</span>
                 </div>
               </div>
-            ))}
+              <div>
+                <p className="text-[8px] font-black text-zinc-500 uppercase tracking-widest mb-1">Online</p>
+                <p className="text-lg font-black text-white dark:text-black">4.2h</p>
+              </div>
+            </div>
           </div>
 
-          {/* Quick Actions */}
-          <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4 px-1">Quick Actions</h3>
+          {/* Action Grid */}
+          <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400 mb-4 px-1">Control Center</h3>
           <div className="grid grid-cols-2 gap-4 mb-10">
             <button
               onClick={() => { setIsOnline(true); setDashboardView('MAP'); fetchRequests(); }}
-              className="bg-black dark:bg-white p-6 rounded-[32px] text-white dark:text-black flex flex-col items-center gap-3 active:scale-95 transition-all shadow-xl"
+              className="group relative bg-[#f2f2f2] dark:bg-zinc-900 border border-zinc-100 dark:border-zinc-800 p-6 rounded-[32px] flex flex-col items-center gap-4 active:scale-95 transition-all overflow-hidden"
             >
-              <span className="material-icons-outlined text-3xl">sensors</span>
-              <span className="font-black text-sm uppercase tracking-widest">Go Online</span>
+              <div className="absolute inset-0 bg-emerald-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+              <div className="relative z-10 size-12 rounded-2xl bg-white dark:bg-zinc-800 flex items-center justify-center group-hover:bg-white/20 transition-colors">
+                <span className="material-icons-outlined text-zinc-900 dark:text-white group-hover:text-white">sensors</span>
+              </div>
+              <span className="relative z-10 font-black text-xs uppercase tracking-widest text-zinc-900 dark:text-white group-hover:text-white">Go Online</span>
             </button>
             <button
               onClick={() => setIsRouteModalOpen(true)}
-              className="bg-leaf-500 p-6 rounded-[32px] text-white flex flex-col items-center gap-3 active:scale-95 transition-all shadow-xl"
+              className="group relative bg-[#f2f2f2] dark:bg-zinc-900 border border-zinc-100 dark:border-zinc-800 p-6 rounded-[32px] flex flex-col items-center gap-4 active:scale-95 transition-all overflow-hidden"
             >
-              <span className="material-icons-outlined text-3xl">route</span>
-              <span className="font-black text-sm uppercase tracking-widest">Daily Route</span>
+              <div className="absolute inset-0 bg-zinc-900 opacity-0 group-hover:opacity-100 transition-opacity" />
+              <div className="relative z-10 size-12 rounded-2xl bg-white dark:bg-zinc-800 flex items-center justify-center group-hover:bg-white/20 transition-colors">
+                <span className="material-icons-outlined text-zinc-900 dark:text-white group-hover:text-white">route</span>
+              </div>
+              <span className="relative z-10 font-black text-xs uppercase tracking-widest text-zinc-900 dark:text-white group-hover:text-white">Daily Route</span>
             </button>
           </div>
 
-          {/* Recent Activity */}
-          <div className="flex justify-between items-center mb-6">
-            <h3 className="text-xl font-black text-black dark:text-white">Recent Activity</h3>
-            <button className="text-xs font-bold text-gray-400 uppercase tracking-widest">See All</button>
+          {/* Accessibility Options */}
+          <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400 mb-4 px-1">Accessibility Support</h3>
+          <div className="grid grid-cols-2 gap-4 mb-10">
+            <button
+              onClick={() => toggleAccessibility('Wheelchair')}
+              className={`p-6 rounded-[32px] border flex flex-col items-center gap-3 transition-all ${accessibilitySupport.includes('Wheelchair') ? 'bg-emerald-600 border-emerald-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-zinc-50 dark:bg-zinc-900 border-zinc-100 dark:border-zinc-800 text-zinc-900 dark:text-white'}`}
+            >
+              <span className="material-icons-outlined text-2xl">accessible</span>
+              <span className="font-black text-[10px] uppercase tracking-widest">Wheelchair</span>
+            </button>
+            <button
+              onClick={() => toggleAccessibility('Assistance')}
+              className={`p-6 rounded-[32px] border flex flex-col items-center gap-3 transition-all ${accessibilitySupport.includes('Assistance') ? 'bg-emerald-600 border-emerald-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-zinc-50 dark:bg-zinc-900 border-zinc-100 dark:border-zinc-800 text-zinc-900 dark:text-white'}`}
+            >
+              <span className="material-icons-outlined text-2xl">help_outline</span>
+              <span className="font-black text-[10px] uppercase tracking-widest">Assistance</span>
+            </button>
           </div>
 
-          <div className="space-y-4">
-            {notifications.length === 0 && driverRides.length === 0 ? (
-              <div className="py-12 bg-gray-50 dark:bg-zinc-900 rounded-[32px] flex flex-col items-center justify-center opacity-40">
-                <span className="material-icons-outlined text-4xl mb-2">history</span>
-                <p className="font-bold text-sm">No recent activity</p>
-              </div>
+          {/* Insights Section */}
+          <div className="p-6 bg-emerald-50 dark:bg-emerald-900/10 rounded-[40px] border border-emerald-100 dark:border-emerald-800/30 mb-10 relative overflow-hidden">
+            <span className="material-icons absolute -right-4 -bottom-4 text-[100px] text-emerald-500/5 rotate-12">eco</span>
+            <div className="relative z-10">
+              <h3 className="text-lg font-black text-emerald-950 dark:text-emerald-50 leading-tight mb-2">High demand <br />in Koramangala</h3>
+              <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400 mb-4">Estimated earnings are 1.5x higher right now.</p>
+              <button className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-emerald-500/20">View Map</button>
+            </div>
+          </div>
+
+          {/* Activity List */}
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="text-xl font-black text-black dark:text-white">Trips & Alerts</h3>
+            <button className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">History</button>
+          </div>
+
+          <div className="space-y-3">
+            {[
+              ...notifications.map(n => ({ ...n, entryType: 'NOTIFICATION' })),
+              ...driverRides.slice(0, 5).map(r => ({ ...r, entryType: 'RIDE' }))
+            ].length === 0 ? (
+              <div className="py-10 text-center text-zinc-400 font-bold text-sm">No activity yet</div>
             ) : (
               [
                 ...notifications.map(n => ({ ...n, entryType: 'NOTIFICATION' })),
                 ...driverRides.slice(0, 10).map(r => ({ ...r, entryType: 'RIDE' }))
               ]
                 .sort((a, b) => new Date(b.createdAt || b.bookingTime).getTime() - new Date(a.createdAt || a.bookingTime).getTime())
-                .slice(0, 5)
+                .slice(0, 4)
                 .map((item: any) => (
-                  <div key={item._id} className="p-4 bg-[#fbfbfb] dark:bg-zinc-900/50 rounded-2xl flex items-center gap-4 border border-gray-100 dark:border-zinc-900">
-                    <div className={`size-12 rounded-xl flex items-center justify-center shrink-0 border border-gray-100 dark:border-zinc-800 ${item.entryType === 'RIDE' ? 'bg-blue-50 dark:bg-blue-900/20' : 'bg-white dark:bg-zinc-800'}`}>
-                      <span className={`material-icons-outlined ${item.entryType === 'RIDE' ? 'text-blue-600 dark:text-blue-400' : 'text-leaf-600 dark:text-leaf-400'}`}>
-                        {item.entryType === 'RIDE' ? 'directions_car' : (item.type === 'DAILY_JOIN_REQUEST' ? 'person_add' : 'notifications_active')}
+                  <div key={item._id} className="p-4 bg-white dark:bg-zinc-900/50 rounded-[28px] flex items-center gap-4 border border-zinc-50 dark:border-zinc-800/50 shadow-sm">
+                    <div className={`size-12 rounded-2xl flex items-center justify-center shrink-0 ${item.entryType === 'RIDE' ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600' : 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600'}`}>
+                      <span className="material-icons-outlined text-xl">
+                        {item.entryType === 'RIDE' ? 'directions_car' : 'notifications'}
                       </span>
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-black text-black dark:text-white truncate">
-                        {item.entryType === 'RIDE' ? `Trip to ${item.dropoff?.address?.split(',')[0] || 'Unknown'}` : item.title}
+                        {item.entryType === 'RIDE' ? `To ${item.dropoff?.address?.split(',')[0] || 'Unknown'}` : item.title}
                       </p>
-                      <p className="text-xs text-gray-400 dark:text-zinc-500 font-bold">
-                        {item.entryType === 'RIDE' ? `₹${item.currentFare || item.fare} • ${item.status}` : new Date(item.createdAt).toLocaleDateString()}
+                      <p className="text-[10px] text-zinc-400 dark:text-zinc-500 font-black uppercase tracking-widest">
+                        {item.entryType === 'RIDE' ? `₹${item.currentFare || item.fare} • ${item.status}` : 'Notification'}
                       </p>
                     </div>
-                    <span className="material-icons-outlined text-gray-300 text-sm">chevron_right</span>
+                    <span className="material-icons text-zinc-200 text-sm">chevron_right</span>
                   </div>
                 ))
             )}
@@ -896,94 +965,91 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
 
       {dashboardView === 'MAP' && (
         <>
-          <div className="absolute top-0 inset-x-0 z-30 p-4 pt-10 flex items-center justify-between">
+          {/* Status Overlay - Premium Pill */}
+          <div className="absolute top-12 inset-x-6 z-30 flex items-center gap-3">
             <button
               onClick={() => { setIsOnline(false); setDashboardView('HOME'); socketRef.current?.emit('driver:offline', { driverId: user?._id || user?.id }); }}
-              className="bg-white/90 dark:bg-black/80 backdrop-blur-xl size-12 rounded-2xl shadow-lg border border-white/10 flex items-center justify-center"
+              className="size-14 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-2xl rounded-2xl shadow-xl border border-white dark:border-zinc-800/50 flex items-center justify-center active:scale-90 transition-transform"
             >
-              <span className="material-icons-outlined text-black dark:text-white">arrow_back</span>
+              <span className="material-icons text-zinc-950 dark:text-white">close</span>
             </button>
 
-            <div className="flex-1 mx-4 bg-white/90 dark:bg-black/80 backdrop-blur-xl px-4 py-2 rounded-2xl shadow-lg border border-white/10 flex flex-col items-center justify-center">
-              <div className="flex items-center gap-2">
-                <div className={`size-2 rounded-full ${isOnline ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">{isOnline ? 'Online & Searching' : 'Offline'}</p>
+            <div className="flex-1 h-14 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-2xl px-6 rounded-2xl shadow-xl border border-white dark:border-zinc-800/50 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className={`size-2 rounded-full ${isOnline ? 'bg-emerald-500 animate-pulse shadow-[0_0_8px_emerald]' : 'bg-red-500'}`} />
+                <span className="text-[10px] font-black uppercase tracking-[0.2em] dark:text-white">{isOnline ? 'Online' : 'Offline'}</span>
               </div>
-              <p className="text-xs font-bold text-black dark:text-white">Waiting for ride requests...</p>
+              <p className="text-xs font-black text-emerald-600 dark:text-emerald-400">Finding Trips...</p>
             </div>
-
-            <button
-              onClick={() => setIsNotificationsOpen(true)}
-              className="size-12 bg-white/90 dark:bg-black/80 backdrop-blur-xl rounded-2xl shadow-lg border border-white/10 flex items-center justify-center relative"
-            >
-              <span className="material-icons-outlined text-black dark:text-white">notifications</span>
-              {notifications.some(n => !n.isRead) && (
-                <span className="absolute top-3 right-3 size-2.5 bg-red-500 rounded-full border-2 border-white dark:border-black"></span>
-              )}
-            </button>
           </div>
 
           {!activeRide && (
-            <div className="absolute bottom-0 inset-x-0 z-40 bg-white dark:bg-zinc-950 rounded-t-[40px] p-6 shadow-2xl animate-in slide-in-from-bottom duration-500">
-              <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-6"></div>
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-2xl font-black dark:text-white">Nearby Requests</h3>
-                <button onClick={fetchRequests} className="px-4 py-2 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-xl text-xs font-black uppercase tracking-widest">Refresh</button>
-              </div>
+            <div className="absolute bottom-0 inset-x-0 z-40 bg-zinc-50/70 dark:bg-zinc-950/70 backdrop-blur-3xl rounded-t-[40px] p-8 shadow-[0_-20px_50px_rgba(0,0,0,0.1)] border-t border-white dark:border-zinc-800/50 animate-in slide-in-from-bottom duration-500 pointer-events-none">
+              <div className="max-w-[430px] mx-auto pointer-events-auto">
+                <div className="w-12 h-1.5 bg-zinc-200 dark:bg-zinc-800 rounded-full mx-auto mb-8" />
+                <div className="flex items-center justify-between mb-8">
+                  <h3 className="text-2xl font-black dark:text-white">Nearby Trips</h3>
+                  <button
+                    onClick={fetchRequests}
+                    className="size-10 bg-zinc-100 dark:bg-zinc-800 rounded-xl flex items-center justify-center active:scale-90 transition-transform"
+                  >
+                    <span className="material-icons text-zinc-600 dark:text-zinc-400">refresh</span>
+                  </button>
+                </div>
 
-              {requests.length === 0 ? (
-                <div className="py-12 border-2 border-dashed border-gray-100 dark:border-zinc-900 rounded-[32px] flex flex-col items-center justify-center text-center px-10">
-                  <div className="relative mb-4">
-                    <div className="size-16 bg-gray-50 dark:bg-zinc-900 rounded-full flex items-center justify-center">
-                      <span className="material-icons-outlined text-3xl opacity-20 dark:text-white">radar</span>
+                {requests.length === 0 ? (
+                  <div className="py-16 text-center">
+                    <div className="size-20 bg-emerald-500/10 rounded-3xl flex items-center justify-center mx-auto mb-6">
+                      <span className="material-icons text-3xl text-emerald-600 animate-pulse">radar</span>
                     </div>
-                    <div className="absolute inset-0 border-2 border-green-500/20 rounded-full animate-ping"></div>
+                    <p className="text-lg font-black dark:text-white mb-2">Scanning for riders</p>
+                    <p className="text-xs font-bold text-zinc-400 max-w-[200px] mx-auto">Stay near busy junctions or corporate hubs for more requests.</p>
                   </div>
-                  <p className="text-lg font-bold dark:text-white mb-2 underline underline-offset-4 decoration-leaf-500 h-10 decoration-2">Finding riders...</p>
-                  <p className="text-xs text-gray-400 font-medium">Keep the app open and stay near high-demand areas.</p>
-                </div>
-              ) : (
-                <div className="space-y-4 max-h-[40vh] overflow-y-auto pr-1 custom-scrollbar">
-                  {requests.map((req) => (
-                    <div
-                      key={req.rideId}
-                      onClick={() => setSelectedRequest(req)}
-                      className="p-5 rounded-[28px] border border-gray-100 dark:border-zinc-900 bg-[#fbfbfb] dark:bg-zinc-900/50 cursor-pointer active:scale-[0.98] transition-all group"
-                    >
-                      <div className="flex justify-between items-center mb-3">
-                        <div className="flex items-center gap-2">
-                          <span className="px-2 py-1 bg-black dark:bg-white text-white dark:text-black rounded-lg text-[10px] font-black uppercase tracking-widest">
-                            {req.isPooled ? 'Pool' : 'Solo'}
-                          </span>
-                          <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{req.routeIndex ? `Route #${req.routeIndex}` : 'Direct'}</span>
-                        </div>
-                        <span className="font-black text-2xl text-leaf-600 dark:text-leaf-400">₹{req.fare}</span>
-                      </div>
-                      <div className="flex items-center gap-3 mb-4">
-                        <div className="flex flex-col items-center gap-1 shrink-0">
-                          <div className="size-2 bg-leaf-500 rounded-full"></div>
-                          <div className="w-0.5 flex-1 bg-gray-200 dark:bg-zinc-800 min-h-[12px]"></div>
-                          <div className="size-2 bg-red-500 rounded-full"></div>
-                        </div>
-                        <div className="flex-1 min-w-0 pr-4">
-                          <p className="text-sm font-bold dark:text-white truncate mb-1">{req.pickup?.address || 'Pickup'}</p>
-                          <p className="text-sm font-bold dark:text-white truncate">{req.dropoff?.address || 'Drop'}</p>
-                        </div>
-                      </div>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleAcceptRide(req.rideId); }}
-                        className="w-full bg-leaf-600 dark:bg-leaf-500 text-white py-3 rounded-2xl font-black text-sm shadow-lg shadow-leaf-500/20 group-hover:scale-[1.02] transition-all"
+                ) : (
+                  <div className="space-y-4 max-h-[40vh] overflow-y-auto hide-scrollbar pr-1">
+                    {requests.map((req) => (
+                      <div
+                        key={req.rideId}
+                        onClick={() => setSelectedRequest(req)}
+                        className="p-6 rounded-[32px] border border-white dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm shadow-sm active:scale-[0.98] transition-all group overflow-hidden relative"
                       >
-                        Accept Ride
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
+                        <div className="absolute top-0 right-0 p-4">
+                          <span className="text-2xl font-black text-emerald-600 dark:text-emerald-400">₹{req.fare}</span>
+                        </div>
+                        <div className="flex items-center gap-2 mb-4">
+                          <span className={`px-2 py-1 ${req.isPooled ? 'bg-emerald-600' : 'bg-black dark:bg-white'} text-white dark:text-black rounded-lg text-[8px] font-black uppercase tracking-widest`}>
+                            {req.isPooled ? 'Pool Request' : 'Private Ride'}
+                          </span>
+                        </div>
+
+                        <div className="flex items-start gap-4 mb-6">
+                          <div className="flex flex-col items-center gap-1.5 pt-1.5">
+                            <div className="size-2 bg-emerald-500 rounded-full shadow-[0_0_8px_emerald]" />
+                            <div className="w-0.5 h-6 bg-zinc-100 dark:bg-zinc-800" />
+                            <div className="size-2 bg-red-500 rounded-full" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-black dark:text-white truncate mb-4">{req.pickup?.address?.split(',')[0]}</p>
+                            <p className="text-sm font-black dark:text-white truncate">{req.dropoff?.address?.split(',')[0]}</p>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleAcceptRide(req.rideId); }}
+                          className="w-full bg-zinc-950 dark:bg-white text-white dark:text-black py-4 rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-xl active:scale-95 transition-all"
+                        >
+                          Accept Trip
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </>
       )}
+
 
       {/* Shared Ride Overlay */}
       {activeRide && (

@@ -70,6 +70,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     // Pooling Preferences
     const [genderPreference, setGenderPreference] = useState<'Any' | 'Male only' | 'Female only'>('Any');
     const [safetyOptions, setSafetyOptions] = useState<string[]>([]);
+    const [accessibilityOptions, setAccessibilityOptions] = useState<string[]>([]);
     const [isPoolingConfigOpen, setIsPoolingConfigOpen] = useState(false);
     const [poolConsentRequest, setPoolConsentRequest] = useState<any>(null);
     const [pooledRiders, setPooledRiders] = useState<any[]>([]);
@@ -680,7 +681,8 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
 
     const fetchMatchingDrivers = async (start: { lat: number; lng: number }, end: { lat: number; lng: number }) => {
         try {
-            const resp = await fetch(`${API_BASE_URL}/api/rider/match-driver?pickupLat=${start.lat}&pickupLng=${start.lng}&dropoffLat=${end.lat}&dropoffLng=${end.lng}`);
+            const accStr = accessibilityOptions.join(',');
+            const resp = await fetch(`${API_BASE_URL}/api/rider/match-driver?pickupLat=${start.lat}&pickupLng=${start.lng}&dropoffLat=${end.lat}&dropoffLng=${end.lng}&accessibilityOptions=${accStr}`);
             if (resp.ok) {
                 const data = await resp.json();
                 setMatchedDrivers(data);
@@ -895,6 +897,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             genderPreference,
             maxPoolSize: rideMode === 'Pooled' ? maxPassengers : passengers,
             safetyOptions,
+            accessibilityOptions,
             passengers,
             maxPassengers: rideMode === 'Pooled' ? maxPassengers : passengers,
             bookingTime: new Date().toISOString()
@@ -1100,327 +1103,216 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                 </div>
             )}
 
-            {/* ── Ride Options Sheet ── */}
+            {/* ── Premium Ride Options Sheet ── */}
             {rideStatus === 'IDLE' && showOptions && (
-                <div className="absolute bottom-0 left-0 right-0 z-40 bg-white dark:bg-zinc-900 rounded-t-3xl shadow-2xl max-h-[75vh] flex flex-col">
-                    <div className="w-12 h-1 bg-gray-300 rounded-full mx-auto my-3" />
-                    <div className="px-4 pb-3">
-                        <h2 className="text-xl font-bold mb-1 dark:text-white">Choose a ride</h2>
-                        {routeInfo && (
-                            <p className="text-sm text-gray-500 dark:text-gray-400">
-                                {routeInfo.distance} • {routeInfo.duration}
-                            </p>
-                        )}
+                <div className="absolute inset-x-0 bottom-0 z-50 animate-in slide-in-from-bottom duration-500 pointer-events-none">
+                    <div className="max-w-[430px] mx-auto bg-white dark:bg-zinc-900 rounded-t-[40px] shadow-[0_-20px_50px_rgba(0,0,0,0.1)] dark:shadow-none border-t border-zinc-100 dark:border-zinc-800 pointer-events-auto flex flex-col max-h-[85vh]">
+                        {/* Drag Handle */}
+                        <div className="w-12 h-1.5 bg-zinc-100 dark:bg-zinc-800 rounded-full mx-auto my-4 shrink-0" />
 
-                        {/* Alternative Routes */}
-                        {availableRoutes.length > 1 && (
-                            <div className="mt-3 mb-3">
-                                <p className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-2">
-                                    {availableRoutes.length} Routes
-                                </p>
-                                <div className="flex gap-2 overflow-x-auto pb-2 hide-scrollbar">
-                                    {availableRoutes.map((route, idx) => {
-                                        const info = formatRouteInfo(route);
-                                        return (
-                                            <button
-                                                key={idx}
-                                                onClick={() => handleRouteSelect(idx)}
-                                                className={`flex-shrink-0 w-28 p-2 rounded-lg border-2 transition-all ${idx === selectedRouteIndex
-                                                    ? 'border-black dark:border-white bg-gray-100 dark:bg-zinc-800'
-                                                    : 'border-gray-200 dark:border-zinc-700 hover:border-gray-400'
-                                                    }`}
-                                            >
-                                                <div className="text-xs font-bold dark:text-white">
-                                                    Route {idx + 1}
-                                                    {idx === 0 && <span className="text-green-500 ml-1">⚡</span>}
-                                                </div>
-                                                <div className="text-xs text-gray-500">{info.distance} • {info.duration}</div>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
+                        <div className="px-6 flex-1 overflow-y-auto hide-scrollbar pb-6">
+                            <div className="mb-6">
+                                <h2 className="text-2xl font-black dark:text-white leading-tight">Pick your ride</h2>
+                                {routeInfo && (
+                                    <div className="flex items-center gap-2 mt-1 text-zinc-400 font-bold text-xs uppercase tracking-widest">
+                                        <span>{routeInfo.distance}</span>
+                                        <div className="size-1 bg-zinc-200 rounded-full" />
+                                        <span>{routeInfo.duration}</span>
+                                    </div>
+                                )}
                             </div>
-                        )}
 
-                        {/* Mode Toggle */}
-                        <div className="flex gap-2 mt-3">
-                            <button
-                                onClick={() => setRideMode('Solo')}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Solo'
-                                    ? 'bg-black dark:bg-white text-white dark:text-black'
-                                    : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
-                                    }`}
-                            >
-                                Solo
-                            </button>
-                            <button
-                                onClick={() => setRideMode('Pooled')}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Pooled'
-                                    ? 'bg-green-500 text-white'
-                                    : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
-                                    }`}
-                            >
-                                🌱 Pool
-                            </button>
-                        </div>
-
-                        {/* Passengers */}
-                        <div className="flex items-center gap-3 mt-3">
-                            <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Passengers:</span>
-                            {[1, 2, 3, 4].map(n => (
+                            {/* Ride Mode Selector */}
+                            <div className="flex p-1 bg-zinc-100 dark:bg-zinc-800 rounded-2xl mb-6">
                                 <button
-                                    key={n}
-                                    onClick={() => setPassengers(n)}
-                                    className={`w-8 h-8 rounded-full text-xs font-bold ${passengers === n
-                                        ? 'bg-black dark:bg-white text-white dark:text-black'
-                                        : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300'
-                                        }`}
+                                    onClick={() => setRideMode('Solo')}
+                                    className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${rideMode === 'Solo' ? 'bg-white dark:bg-zinc-900 shadow-sm dark:text-white' : 'text-zinc-400'}`}
                                 >
-                                    {n}
+                                    Solo
                                 </button>
-                            ))}
-                        </div>
-
-                        {rideMode === 'Pooled' && (selectedCategory === 'CAR' || selectedCategory === 'BIG_CAR') && (
-                            <div className="mt-3 space-y-3 p-3 bg-green-50 dark:bg-green-900/10 rounded-2xl border border-green-100 dark:border-green-800/30">
-                                <div className="flex items-center justify-between">
-                                    <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Max Pool Size:</span>
-                                    <div className="flex gap-2">
-                                        {[2, 3, 4, selectedCategory === 'BIG_CAR' ? 6 : null].filter(Boolean).map(n => (
-                                            <button
-                                                key={n}
-                                                onClick={() => setMaxPassengers(n!)}
-                                                className={`w-8 h-8 rounded-lg text-xs font-bold transition-all ${maxPassengers === n
-                                                    ? 'bg-green-500 text-white shadow-lg shadow-green-500/20'
-                                                    : 'bg-white dark:bg-zinc-800 text-gray-600 dark:text-gray-300'
-                                                    }`}
-                                            >
-                                                {n}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                                <div className="flex items-center justify-between">
-                                    <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Gender Preference:</span>
-                                    <select
-                                        value={genderPreference}
-                                        onChange={(e) => setGenderPreference(e.target.value as any)}
-                                        className="text-xs font-bold bg-white dark:bg-zinc-800 border-none rounded-lg p-1 dark:text-white"
-                                    >
-                                        <option value="Any">Any</option>
-                                        <option value="Male only">Male only</option>
-                                        <option value="Female only">Female only</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <span className="text-xs font-bold text-gray-500 dark:text-gray-400 block mb-2">Safety Options:</span>
-                                    <div className="flex flex-wrap gap-2">
-                                        {['Women Safety', 'CCTV Enabled', 'Verified Profiles'].map(opt => (
-                                            <button
-                                                key={opt}
-                                                onClick={() => setSafetyOptions(prev => prev.includes(opt) ? prev.filter(o => o !== opt) : [...prev, opt])}
-                                                className={`px-3 py-1.5 rounded-full text-[10px] font-bold transition-all ${safetyOptions.includes(opt)
-                                                    ? 'bg-green-500 text-white'
-                                                    : 'bg-white dark:bg-zinc-800 text-gray-500 dark:text-gray-400'
-                                                    }`}
-                                            >
-                                                {opt}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
+                                <button
+                                    onClick={() => setRideMode('Pooled')}
+                                    className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${rideMode === 'Pooled' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/20' : 'text-zinc-400'}`}
+                                >
+                                    <span className="material-icons text-sm">eco</span>
+                                    Pool
+                                </button>
                             </div>
-                        )}
 
-                        {rideMode === 'Pooled' && (selectedCategory === 'BIKE' || selectedCategory === 'AUTO') && (
-                            <div className="mt-3 p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
-                                <p className="text-xs text-yellow-700 dark:text-yellow-400">⚠️ Pooling only available for Car & Big Car</p>
-                            </div>
-                        )}
-                    </div>
+                            {/* Categories Grid */}
+                            <div className="space-y-3 mb-8">
+                                {VEHICLE_CATEGORIES.map(cat => {
+                                    const price = categoryPrices.get(cat.id) || 0;
+                                    const isSelected = selectedCategory === cat.id;
+                                    const route = availableRoutes[selectedRouteIndex];
+                                    const co2 = route ? calculateCO2(route.distance, cat.id) : 0;
+                                    const co2Pool = route ? calculateCO2(route.distance, 'pool') : 0;
+                                    const etaMin = route ? Math.round(route.duration / 60) : Math.floor(Math.random() * 5) + 2;
 
-                    {/* In-Progress Pooled Rides */}
-                    {rideMode === 'Pooled' && inProgressPooledRides.length > 0 && (
-                        <div className="px-4 py-3 border-t border-gray-200 dark:border-zinc-700">
-                            <h3 className="text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">
-                                🚗 Join Ongoing Pool Rides
-                            </h3>
-                            <div className="space-y-2 max-h-40 overflow-y-auto">
-                                {inProgressPooledRides.map((ride) => (
-                                    <div
-                                        key={ride._id}
-                                        className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800"
-                                    >
-                                        <div className="flex items-center justify-between">
-                                            <div className="flex-1">
+                                    return (
+                                        <button
+                                            key={cat.id}
+                                            onClick={() => setSelectedCategory(cat.id)}
+                                            className={`w-full group p-4 rounded-[28px] border-2 transition-all flex items-center gap-4 ${isSelected ? 'border-zinc-950 dark:border-white bg-zinc-50 dark:bg-zinc-800' : 'border-zinc-50 dark:border-zinc-800/50 hover:border-zinc-200'}`}
+                                        >
+                                            <div className={`size-16 rounded-2xl flex items-center justify-center transition-colors ${isSelected ? 'bg-zinc-900 text-white dark:bg-white dark:text-black' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-400'}`}>
+                                                <span className="material-icons text-3xl">{cat.icon}</span>
+                                            </div>
+
+                                            <div className="flex-1 text-left">
                                                 <div className="flex items-center gap-2">
-                                                    <span className="material-icons text-green-600 dark:text-green-400" style={{ fontSize: '18px' }}>
-                                                        {ride.vehicleCategory === 'BIG_CAR' ? 'airport_shuttle' : 'directions_car'}
-                                                    </span>
-                                                    <span className="text-sm font-bold text-gray-800 dark:text-gray-200">
-                                                        {ride.vehicleCategory === 'BIG_CAR' ? 'Big Car' : 'Car'}
-                                                    </span>
-                                                    <span className="text-xs text-gray-600 dark:text-gray-400">
-                                                        • {ride.availableSeats} seat{ride.availableSeats > 1 ? 's' : ''} left
-                                                    </span>
+                                                    <span className="font-black dark:text-white">{cat.label}</span>
+                                                    {etaMin < 5 && <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Fastest</span>}
                                                 </div>
-                                                <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                                                    {ride.status === 'ACCEPTED' ? '📍 Picking up' : '🚗 In progress'}
-                                                </p>
-                                            </div>
-                                            <button
-                                                onClick={async () => {
-                                                    const userStr = localStorage.getItem('leaflift_user');
-                                                    const user = userStr ? JSON.parse(userStr) : null;
-                                                    if (!user?._id) return;
-                                                    try {
-                                                        const resp = await fetch(`${API_BASE_URL}/api/rides/${ride._id}/pool/join`, {
-                                                            method: 'POST',
-                                                            headers: { 'Content-Type': 'application/json' },
-                                                            body: JSON.stringify({
-                                                                userId: user._id,
-                                                                pickup: { address: pickup, lat: pickupCoords?.lat, lng: pickupCoords?.lng },
-                                                                dropoff: { address: destination, lat: dropoffCoords?.lat, lng: dropoffCoords?.lng },
-                                                                passengers
-                                                            })
-                                                        });
-                                                        if (resp.ok) {
-                                                            alert('Pool request sent to driver!');
-                                                        }
-                                                    } catch (error) {
-                                                        console.error('Join pool error:', error);
-                                                    }
-                                                }}
-                                                className="px-3 py-1.5 bg-green-500 text-white text-xs font-bold rounded-lg hover:bg-green-600"
-                                            >
-                                                Join
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-
-                    {matchedDrivers.length > 0 && (
-                        <div className="mb-6 px-4">
-                            <div className="flex justify-between items-center mb-4 px-1">
-                                <h3 className="text-[10px] font-black uppercase tracking-[.25em] text-gray-400">Recommended Partners</h3>
-                                <span className="text-[10px] font-black text-leaf-500 uppercase tracking-widest">{matchedDrivers.length} Found</span>
-                            </div>
-                            <div className="space-y-4">
-                                {matchedDrivers.map((driver) => (
-                                    <div key={driver.id} className="bg-[#fbfbfb] dark:bg-zinc-900/50 border border-gray-100 dark:border-zinc-800 p-5 rounded-[32px] transition-all hover:border-leaf-500/30 group shadow-sm">
-                                        <div className="flex items-center gap-4 mb-4">
-                                            <div className="relative">
-                                                <img src={driver.photoUrl || `https://i.pravatar.cc/150?u=${driver.id}`} alt={driver.name} className="w-14 h-14 rounded-2xl object-cover border border-gray-100 dark:border-zinc-800 shadow-md" />
-                                                <div className="absolute -bottom-1 -right-1 bg-leaf-500 size-5 flex items-center justify-center rounded-lg border-2 border-white dark:border-zinc-900 shadow-sm">
-                                                    <span className="material-icons-outlined text-white text-[10px] font-black">verified</span>
+                                                <div className="flex items-center gap-1.5 mt-0.5">
+                                                    <span className="material-icons text-[14px] text-zinc-400">schedule</span>
+                                                    <span className="text-xs font-bold text-zinc-400">{etaMin} min away</span>
                                                 </div>
-                                            </div>
-                                            <div className="flex-1 min-w-0">
-                                                <div className="flex justify-between items-start">
-                                                    <div className="text-lg font-black dark:text-white truncate pr-2">{driver.name}</div>
-                                                    <div className="flex items-center gap-1 bg-yellow-400/10 px-2 py-0.5 rounded-full border border-yellow-400/20">
-                                                        <span className="material-icons-outlined text-yellow-500 text-xs">star</span>
-                                                        <span className="text-[10px] font-black text-yellow-600 dark:text-yellow-400">{driver.rating}</span>
+                                                {rideMode === 'Pooled' && (cat.id === 'CAR' || cat.id === 'BIG_CAR') && (
+                                                    <div className="mt-2 flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
+                                                        <span className="material-icons text-[14px]">eco</span>
+                                                        <span className="text-[10px] font-black uppercase tracking-widest">Save {co2 - co2Pool}g CO₂</span>
                                                     </div>
-                                                </div>
-                                                <div className="text-xs font-bold text-gray-400 dark:text-zinc-500 mt-0.5">{driver.vehicle} • {driver.vehicleNumber}</div>
+                                                )}
                                             </div>
+
+                                            <div className="text-right">
+                                                <p className="text-xl font-black dark:text-white">₹{price}</p>
+                                                {isSelected && (
+                                                    <div className="size-5 bg-emerald-500 rounded-full flex items-center justify-center ml-auto mt-1">
+                                                        <span className="material-icons text-white text-[12px]">check</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            {/* Ride Preferences */}
+                            {(rideMode === 'Pooled' || (selectedCategory === 'CAR' || selectedCategory === 'BIG_CAR')) && (
+                                <div className="p-6 bg-emerald-50 dark:bg-emerald-900/10 rounded-[32px] border border-emerald-100 dark:border-emerald-800/30 mb-8 animate-in zoom-in duration-300">
+                                    <div className="flex items-center gap-3 mb-6">
+                                        <div className="size-10 bg-emerald-600 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-500/20">
+                                            <span className="material-icons text-white">tune</span>
                                         </div>
-                                        <div className="flex items-center gap-3">
-                                            <div className="flex-1 p-3 bg-gray-50 dark:bg-zinc-800 rounded-2xl flex items-center gap-2">
-                                                <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400 text-sm">nature_people</span>
-                                                <span className="text-[10px] font-black text-gray-500 uppercase tracking-tight">Eco-friendly Choice</span>
+                                        <h3 className="text-sm font-black dark:text-white uppercase tracking-widest">Preferences</h3>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-4 mb-6">
+                                        {rideMode === 'Pooled' && (
+                                            <div>
+                                                <label className="text-[10px] font-black text-emerald-600/60 uppercase tracking-widest mb-1.5 block">Max Riders</label>
+                                                <div className="flex gap-2">
+                                                    {[2, 3, 4].map(n => (
+                                                        <button
+                                                            key={n}
+                                                            onClick={() => setMaxPassengers(n)}
+                                                            className={`size-10 rounded-xl font-black text-xs transition-all ${maxPassengers === n ? 'bg-emerald-600 text-white' : 'bg-white dark:bg-zinc-800 text-zinc-400 border border-emerald-100 dark:border-emerald-800'}`}
+                                                        >
+                                                            {n}
+                                                        </button>
+                                                    ))}
+                                                </div>
                                             </div>
-                                            <button
-                                                className="px-8 py-3 bg-black dark:bg-white text-white dark:text-black text-xs font-black rounded-2xl uppercase tracking-widest shadow-xl shadow-black/10 active:scale-95 transition-all group-hover:bg-leaf-600 group-hover:text-white"
-                                                onClick={() => handleRequestJoin(driver.id)}
+                                        )}
+                                        <div className={rideMode === 'Solo' ? 'col-span-2' : ''}>
+                                            <label className="text-[10px] font-black text-emerald-600/60 uppercase tracking-widest mb-1.5 block">Safety</label>
+                                            <select
+                                                value={genderPreference}
+                                                onChange={(e) => setGenderPreference(e.target.value as any)}
+                                                className="w-full h-10 bg-white dark:bg-zinc-800 border border-emerald-100 dark:border-emerald-800 rounded-xl text-xs font-black dark:text-white px-2 focus:ring-2 focus:ring-emerald-500 outline-none"
                                             >
-                                                Invite
-                                            </button>
+                                                <option value="Any">Mixed Group</option>
+                                                <option value="Male only">Male only</option>
+                                                <option value="Female only">Female only</option>
+                                            </select>
                                         </div>
                                     </div>
-                                ))}
+
+                                    <div className="flex flex-wrap gap-2">
+                                        {[
+                                            { id: 'Women Safety', icon: 'female' },
+                                            { id: 'Verified Profiles', icon: 'verified' },
+                                            { id: 'Wheelchair', icon: 'accessible' }
+                                        ].map(opt => {
+                                            const isSelected = safetyOptions.includes(opt.id) || accessibilityOptions.includes(opt.id);
+                                            return (
+                                                <button
+                                                    key={opt.id}
+                                                    onClick={() => {
+                                                        if (opt.id === 'Wheelchair') {
+                                                            setAccessibilityOptions(prev => prev.includes(opt.id) ? prev.filter(o => o !== opt.id) : [...prev, opt.id]);
+                                                        } else {
+                                                            setSafetyOptions(prev => prev.includes(opt.id) ? prev.filter(o => o !== opt.id) : [...prev, opt.id]);
+                                                        }
+                                                    }}
+                                                    className={`px-4 py-2 rounded-full text-[10px] font-bold border transition-all flex items-center gap-1.5 ${isSelected ? 'bg-emerald-600 text-white border-emerald-600 shadow-md shadow-emerald-500/10' : 'bg-white dark:bg-zinc-800 text-emerald-600 border-emerald-100 dark:border-emerald-800'}`}
+                                                >
+                                                    <span className="material-icons text-[12px]">{opt.icon}</span>
+                                                    {opt.id}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Ongoing Pools - Redesigned */}
+                            {rideMode === 'Pooled' && inProgressPooledRides.length > 0 && (
+                                <div className="mb-8">
+                                    <h3 className="text-[10px] font-black text-zinc-400 uppercase tracking-[.25em] mb-4">Join active pools</h3>
+                                    <div className="space-y-3">
+                                        {inProgressPooledRides.slice(0, 2).map((ride) => (
+                                            <div key={ride._id} className="p-4 bg-zinc-900 dark:bg-black rounded-[28px] text-white flex items-center gap-4 relative overflow-hidden group">
+                                                <div className="absolute right-0 top-0 size-24 bg-emerald-500/10 rounded-full blur-3xl group-hover:scale-150 transition-transform duration-700" />
+                                                <div className="size-12 bg-zinc-800 rounded-2xl flex items-center justify-center">
+                                                    <span className="material-icons text-emerald-400">{ride.vehicleCategory === 'BIG_CAR' ? 'airport_shuttle' : 'directions_car'}</span>
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="text-sm font-black truncate">Near your pickup</p>
+                                                    <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">{ride.availableSeats} seats available</p>
+                                                </div>
+                                                <button
+                                                    onClick={() => {/* Join logic */ }}
+                                                    className="px-6 py-2.5 bg-emerald-600 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all"
+                                                >
+                                                    Join
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Sticky Action Footer */}
+                        <div className="p-6 bg-white dark:bg-zinc-900 border-t border-zinc-50 dark:border-zinc-800 shrink-0">
+                            <div className="flex gap-4">
+                                <button
+                                    onClick={() => setShowPaymentModal(true)}
+                                    className="size-16 bg-zinc-50 dark:bg-zinc-800 rounded-[24px] flex flex-col items-center justify-center border border-zinc-100 dark:border-zinc-700 shadow-sm active:scale-90 transition-all"
+                                >
+                                    <span className="material-icons-outlined text-zinc-600 dark:text-zinc-400">payments</span>
+                                    <span className="text-[8px] font-black uppercase mt-0.5">{paymentMethod}</span>
+                                </button>
+                                <button
+                                    onClick={handleConfirmRide}
+                                    disabled={isRequesting}
+                                    className="flex-1 h-16 bg-zinc-950 dark:bg-white text-white dark:text-black rounded-[24px] font-black text-sm uppercase tracking-[.2em] shadow-2xl shadow-zinc-950/20 active:scale-95 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
+                                >
+                                    {isRequesting ? (
+                                        <div className="size-5 border-2 border-white dark:border-black border-t-transparent rounded-full animate-spin" />
+                                    ) : (
+                                        <>Book {VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label}</>
+                                    )}
+                                </button>
                             </div>
                         </div>
-                    )}
-
-                    {/* Vehicle Categories */}
-                    <div className="flex-1 overflow-y-auto px-4 py-2 hide-scrollbar">
-                        {VEHICLE_CATEGORIES.map(cat => {
-                            const price = categoryPrices.get(cat.id) || 0;
-                            const route = availableRoutes[selectedRouteIndex];
-                            const co2 = route ? calculateCO2(route.distance, cat.id) : 0;
-                            const co2Pool = route ? calculateCO2(route.distance, 'pool') : 0;
-                            const etaMin = route ? Math.round(route.duration / 60) : 0;
-
-                            return (
-                                <button
-                                    key={cat.id}
-                                    onClick={() => setSelectedCategory(cat.id)}
-                                    className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 mb-3 transition-all ${selectedCategory === cat.id
-                                        ? 'border-black dark:border-white bg-gray-50 dark:bg-zinc-800'
-                                        : 'border-transparent hover:bg-gray-50 dark:hover:bg-zinc-800'
-                                        }`}
-                                >
-                                    <div className="w-14 h-14 rounded-2xl bg-gray-100 dark:bg-zinc-700 flex items-center justify-center">
-                                        <span className="material-icons-outlined text-2xl text-gray-700 dark:text-white">
-                                            {cat.icon}
-                                        </span>
-                                    </div>
-                                    <div className="flex-1 text-left">
-                                        <div className="font-bold text-base dark:text-white">{cat.label}</div>
-                                        <div className="text-xs text-gray-500 dark:text-gray-400">
-                                            {etaMin} min • {cat.capacity} seats
-                                        </div>
-                                        {rideMode === 'Pooled' ? (
-                                            <div className="mt-1 inline-flex items-center gap-1 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-200 text-xs font-semibold px-2 py-0.5 rounded-full">
-                                                🌱 Save {co2 - co2Pool}g CO₂
-                                            </div>
-                                        ) : (
-                                            <div className="mt-1 text-xs text-gray-400">~{co2}g CO₂</div>
-                                        )}
-                                    </div>
-                                    <div className="text-right">
-                                        <div className="font-bold text-lg dark:text-white">₹{price}</div>
-                                        {selectedCategory === cat.id && (
-                                            <div className="text-green-500 text-xs mt-1">✓</div>
-                                        )}
-                                    </div>
-                                </button>
-                            );
-                        })}
-                    </div>
-
-                    {/* Footer */}
-                    <div className="p-4 border-t border-gray-200 dark:border-zinc-800">
-                        <button
-                            onClick={() => setShowPaymentModal(true)}
-                            className="w-full flex items-center justify-between mb-3 p-3 bg-gray-50 dark:bg-zinc-800 rounded-xl hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors"
-                        >
-                            <span className="font-semibold dark:text-white">{paymentMethod}</span>
-                            <span className="material-icons-outlined dark:text-white">chevron_right</span>
-                        </button>
-                        <button
-                            onClick={handleConfirmRide}
-                            disabled={isRequesting}
-                            className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-4 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg"
-                        >
-                            {isRequesting ? (
-                                <span className="flex items-center justify-center gap-2">
-                                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                                    Booking...
-                                </span>
-                            ) : (
-                                `Book ${VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label} - ₹${categoryPrices.get(selectedCategory) || 0}`
-                            )}
-                        </button>
                     </div>
                 </div>
             )}
+
 
             {/* ── Searching State ── */}
             {rideStatus === 'SEARCHING' && (

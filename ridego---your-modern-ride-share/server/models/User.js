@@ -15,6 +15,7 @@ const userSchema = new mongoose.Schema({
     vehicleNumber: { type: String },
     rating: { type: Number, default: 4.8 },
     photoUrl: { type: String },
+    accessibilitySupport: [String], // e.g. ['Wheelchair', 'Hearing Impaired Assistance']
     // Wallet
     walletBalance: { type: Number, default: 0 },
     // Eco stats
