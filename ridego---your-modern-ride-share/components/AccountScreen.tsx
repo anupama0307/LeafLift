@@ -16,7 +16,7 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
   const [addAmount, setAddAmount] = useState('');
   const [showAddMoney, setShowAddMoney] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
-  const [privacySettings, setPrivacySettings] = useState(user?.privacySettings || { shareStats: true, publicProfile: true });
+  const [privacySettings, setPrivacySettings] = useState(user?.privacySettings || { shareStats: true, publicProfile: true, locationSharing: true });
 
   useEffect(() => {
     if (user?.privacySettings) {
@@ -141,6 +141,13 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
               description="Makes your profile and rating visible to other members."
               enabled={privacySettings.publicProfile}
               onChange={(val) => updatePrivacy('publicProfile', val)}
+            />
+            <div className="h-px bg-gray-100 dark:bg-zinc-800 my-2" />
+            <Toggle
+              label="Live Location Sharing"
+              description="Enable real-time tracking during active rides for safety."
+              enabled={privacySettings.locationSharing}
+              onChange={(val) => updatePrivacy('locationSharing', val)}
             />
           </div>
 

@@ -45,7 +45,8 @@ const userSchema = new mongoose.Schema({
     },
     privacySettings: {
         shareStats: { type: Boolean, default: true },
-        publicProfile: { type: Boolean, default: true }
+        publicProfile: { type: Boolean, default: true },
+        locationSharing: { type: Boolean, default: true }
     }
 });
 

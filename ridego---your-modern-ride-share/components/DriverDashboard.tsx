@@ -979,7 +979,12 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
                 <div className={`size-2 rounded-full ${isOnline ? 'bg-emerald-500 animate-pulse shadow-[0_0_8px_emerald]' : 'bg-red-500'}`} />
                 <span className="text-[10px] font-black uppercase tracking-[0.2em] dark:text-white">{isOnline ? 'Online' : 'Offline'}</span>
               </div>
-              <p className="text-xs font-black text-emerald-600 dark:text-emerald-400">Finding Trips...</p>
+              <div className="flex flex-col">
+                <p className="text-[10px] font-black text-emerald-600 dark:text-emerald-400">Finding Trips...</p>
+                {user?.privacySettings?.locationSharing && (
+                  <p className="text-[8px] font-bold text-blue-500 dark:text-blue-400 uppercase tracking-widest mt-0.5">Live Location On</p>
+                )}
+              </div>
             </div>
           </div>
 

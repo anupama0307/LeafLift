@@ -54,9 +54,17 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenPlan }) => {
     <div className="pb-32 pt-12 bg-white dark:bg-zinc-950 min-h-screen animate-in fade-in duration-1000 hide-scrollbar">
       {/* Search Header - Redesigned for Premium Feel */}
       <div className="px-6 mb-10">
-        <div className="flex items-center gap-2 mb-2">
-          <div className="size-2 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
-          <span className="text-[10px] font-black text-emerald-600 uppercase tracking-[0.3em]">Ready to roll</span>
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <div className="size-2 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
+            <span className="text-[10px] font-black text-emerald-600 uppercase tracking-[0.3em]">Ready to roll</span>
+          </div>
+          {user?.privacySettings?.locationSharing && (
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800/30 animate-in fade-in zoom-in duration-500">
+              <span className="material-icons text-[12px] text-blue-500">location_on</span>
+              <span className="text-[9px] font-black text-blue-600 dark:text-blue-400 uppercase tracking-widest">Live Sharing</span>
+            </div>
+          )}
         </div>
         <h1 className="text-4xl font-black mb-8 dark:text-white leading-[1.1] tracking-tight">Where are we <br />heading today?</h1>
 

@@ -38,7 +38,18 @@ const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScre
       {/* Top Bar / Status Bar (Simulated) */}
       {!isSpecialScreen && (
         <div className="flex justify-between items-center px-8 pt-4 pb-2">
-          <span className="text-sm font-semibold">9:41</span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-black dark:text-white">9:41</span>
+            {user?.privacySettings?.locationSharing && (
+              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-leaf-50 dark:bg-leaf-900/30 border border-leaf-100 dark:border-leaf-800/30">
+                <span className="flex h-1.5 w-1.5 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-leaf-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-leaf-500"></span>
+                </span>
+                <span className="text-[10px] font-black uppercase tracking-tighter text-leaf-700 dark:text-leaf-400">Live</span>
+              </div>
+            )}
+          </div>
           <div className="flex gap-1.5 items-center">
             <button onClick={toggleDarkMode} className="material-icons-outlined text-sm text-leaf-600 dark:text-leaf-400 hover:opacity-60 transition-opacity">
               {document.documentElement.classList.contains('dark') ? 'light_mode' : 'dark_mode'}
