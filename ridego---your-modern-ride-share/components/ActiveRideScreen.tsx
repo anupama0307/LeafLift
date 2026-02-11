@@ -188,9 +188,11 @@ const ActiveRideScreen: React.FC<ActiveRideScreenProps> = ({ user, rideData, onB
                                     className="size-14 rounded-2xl object-cover ring-2 ring-emerald-500/20"
                                     alt=""
                                 />
-                                <div className="absolute -bottom-1 -right-1 size-5 bg-emerald-500 border-2 border-white dark:border-zinc-900 rounded-full flex items-center justify-center shadow-md">
-                                    <span className="material-icons text-[10px] text-white">verified</span>
-                                </div>
+                                {otherPerson?.isVerified && (
+                                    <div className="absolute -bottom-1 -right-1 size-5 bg-emerald-500 border-2 border-white dark:border-zinc-900 rounded-full flex items-center justify-center shadow-md">
+                                        <span className="material-icons text-[10px] text-white">verified</span>
+                                    </div>
+                                )}
                             </div>
 
                             <div className="flex-1 min-w-0">
@@ -224,7 +226,10 @@ const ActiveRideScreen: React.FC<ActiveRideScreenProps> = ({ user, rideData, onB
                                     <span className="material-icons text-emerald-600 dark:text-emerald-400 text-lg">person</span>
                                 </div>
                                 <div className="flex-1 min-w-0">
-                                    <p className="font-black text-sm dark:text-white truncate">{pr.firstName} {pr.lastName}</p>
+                                    <div className="flex items-center gap-1.5">
+                                        <p className="font-black text-sm dark:text-white truncate">{pr.firstName} {pr.lastName}</p>
+                                        {pr.isVerified && <span className="material-icons text-emerald-500 text-[14px]">verified</span>}
+                                    </div>
                                     <p className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">Pooled Rider</p>
                                 </div>
                                 <div className="text-right">

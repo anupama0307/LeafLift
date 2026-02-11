@@ -444,6 +444,7 @@ app.get('/api/rider/match-driver', async (req, res) => {
             vehicle: `${d.vehicleMake || ''} ${d.vehicleModel || ''}`,
             vehicleNumber: d.vehicleNumber,
             photoUrl: d.photoUrl,
+            isVerified: d.isVerified,
             phone: maskPhone(d.phone), // Ensure phone is masked
             dailyRoute: d.dailyRoute
         })));
@@ -548,6 +549,7 @@ app.post('/api/rides', async (req, res) => {
         const ride = new Ride(payload);
         await ride.save();
 
+        const rider = await User.findById(payload.userId);
         io.to('drivers:online').emit('ride:request', {
             rideId: ride._id,
             pickup: ride.pickup,
@@ -556,7 +558,13 @@ app.post('/api/rides', async (req, res) => {
             currentFare: ride.currentFare,
             isPooled: ride.isPooled,
             routeIndex: ride.routeIndex,
-            bookingTime: ride.bookingTime
+            bookingTime: ride.bookingTime,
+            rider: rider ? {
+                firstName: rider.firstName,
+                lastName: rider.lastName,
+                photoUrl: rider.photoUrl,
+                isVerified: rider.isVerified
+            } : null
         });
 
         res.status(201).json(ride);
@@ -588,7 +596,9 @@ app.get('/api/rides/driver/:driverId', async (req, res) => {
 app.get('/api/rides/nearby', async (req, res) => {
     try {
         const { lat, lng, radius = 6 } = req.query;
-        const rides = await Ride.find({ status: 'SEARCHING' }).sort({ bookingTime: -1 });
+        const rides = await Ride.find({ status: 'SEARCHING' })
+            .populate('userId', 'firstName lastName photoUrl isVerified')
+            .sort({ bookingTime: -1 });
 
         const latNum = lat ? Number(lat) : null;
         const lngNum = lng ? Number(lng) : null;
@@ -671,11 +681,13 @@ app.get('/api/driver/:userId/active-ride', async (req, res) => {
                 vehicle: `${driver.vehicleMake || 'Car'} ${driver.vehicleModel || ''}`.trim(),
                 vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                 photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
+                isVerified: driver.isVerified,
                 maskedPhone: maskPhone(driver.phone)
             } : null,
             rider: rider ? {
                 id: rider._id,
                 name: `${rider.firstName} ${rider.lastName}`,
+                isVerified: rider.isVerified,
                 maskedPhone: maskPhone(rider.phone)
             } : null
         });
@@ -705,11 +717,13 @@ app.get('/api/rider/:userId/active-ride', async (req, res) => {
                 vehicle: `${driver.vehicleMake || 'Car'} ${driver.vehicleModel || ''}`.trim(),
                 vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                 photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
+                isVerified: driver.isVerified,
                 maskedPhone: maskPhone(driver.phone)
             } : null,
             rider: rider ? {
                 id: rider._id,
                 name: `${rider.firstName} ${rider.lastName}`,
+                isVerified: rider.isVerified,
                 maskedPhone: maskPhone(rider.phone)
             } : null
         });
@@ -849,11 +863,13 @@ app.post('/api/rides/:rideId/accept', async (req, res) => {
                 vehicle: `${driver.vehicleMake || 'Car'} ${driver.vehicleModel || ''}`.trim(),
                 vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                 photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
+                isVerified: driver.isVerified,
                 maskedPhone: maskPhone(driver.phone)
             } : null,
             rider: rider ? {
                 id: rider._id,
                 name: `${rider.firstName} ${rider.lastName}`,
+                isVerified: rider.isVerified,
                 maskedPhone: maskPhone(rider.phone)
             } : null
         };

@@ -1401,7 +1401,10 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                     alt=""
                                 />
                                 <div className="flex-1">
-                                    <div className="font-bold dark:text-white">{driverDetails.name}</div>
+                                    <div className="font-bold dark:text-white flex items-center gap-1.5">
+                                        {driverDetails.name}
+                                        {driverDetails.isVerified && <span className="material-icons text-emerald-500 text-[16px]">verified</span>}
+                                    </div>
                                     <div className="text-xs text-gray-500 dark:text-gray-400">
                                         {driverDetails.vehicle} • {driverDetails.vehicleNumber}
                                     </div>

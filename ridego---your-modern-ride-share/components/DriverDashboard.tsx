@@ -1029,6 +1029,10 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
                             <div className="size-2 bg-red-500 rounded-full" />
                           </div>
                           <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <p className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Rider</p>
+                              {req.rider?.isVerified && <span className="material-icons text-emerald-500 text-[12px]">verified</span>}
+                            </div>
                             <p className="text-sm font-black dark:text-white truncate mb-4">{req.pickup?.address?.split(',')[0]}</p>
                             <p className="text-sm font-black dark:text-white truncate">{req.dropoff?.address?.split(',')[0]}</p>
                           </div>
@@ -1061,7 +1065,10 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
                 <img src={riderDetails?.photoUrl || `https://i.pravatar.cc/150?u=${activeRide.userId}`} className="w-full h-full object-cover" />
               </div>
               <div>
-                <h3 className="text-xl font-black dark:text-white">{riderDetails?.name || 'Rider'}</h3>
+                <div className="flex items-center gap-1.5">
+                  <h3 className="text-xl font-black dark:text-white">{riderDetails?.name || 'Rider'}</h3>
+                  {riderDetails?.isVerified && <span className="material-icons text-emerald-500 text-[18px]">verified</span>}
+                </div>
                 <p className="text-xs font-black uppercase tracking-widest text-[#f2b90d]">{rideStatus.replace('_', ' ')}</p>
               </div>
             </div>
