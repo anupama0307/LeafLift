@@ -2,8 +2,8 @@ const mongoose = require('mongoose');
 
 const userSchema = new mongoose.Schema({
     role: { type: String, enum: ['RIDER', 'DRIVER'], required: true },
-    email: { type: String, required: true },
-    phone: { type: String, required: true },
+    email: { type: String, required: true, unique: true, index: true },
+    phone: { type: String, required: true, index: true },
     firstName: { type: String, required: true },
     lastName: { type: String, required: true },
     dob: { type: String, required: true },
@@ -26,6 +26,20 @@ const userSchema = new mongoose.Schema({
     totalTrips: { type: Number, default: 0 },
     totalKmTraveled: { type: Number, default: 0 },
     createdAt: { type: Date, default: Date.now },
+    // Daily Route
+    dailyRoute: {
+        source: {
+            address: String,
+            lat: Number,
+            lng: Number
+        },
+        destination: {
+            address: String,
+            lat: Number,
+            lng: Number
+        },
+        isActive: { type: Boolean, default: false }
+    }
 });
 
 

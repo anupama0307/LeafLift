@@ -17,6 +17,8 @@ interface AuthScreenProps {
 
 type AuthMode = 'WELCOME' | 'SIGNIN' | 'SIGNUP_FORM' | 'EMAIL_OTP' | 'OAUTH_COMPLETE';
 type UserRole = 'RIDER' | 'DRIVER';
+type AuthRole = 'RIDER' | 'DRIVER';
+type AuthStep = 'ROLE' | 'LANDING' | 'OTP' | 'NAME' | 'DOB' | 'GENDER' | 'LICENSE' | 'AADHAR';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
@@ -355,6 +357,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     if (!gender) return 'Please select your gender';
     if (role === 'DRIVER') {
       if (!license.trim()) return 'Driving license number is required';
+      if (license.length > 16) return 'Driving license number must be at most 16 characters';
       if (!aadhar.trim() || aadhar.length < 12) return 'Please enter a valid 12-digit Aadhar number';
     }
     return null;
@@ -480,6 +483,23 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
         </button>
       </div>
 
+      {/* Sign In / Sign Up Toggle */}
+      <div className="flex bg-[#f3f3f3] dark:bg-zinc-800 rounded-xl p-1 mb-6">
+        <button
+          type="button"
+          className="flex-1 py-3 rounded-lg text-sm font-black transition-all bg-white dark:bg-zinc-700 text-black dark:text-white shadow-sm"
+        >
+          Sign In
+        </button>
+        <button
+          type="button"
+          onClick={() => { setMode('SIGNUP_FORM'); setError(null); setSuccessMessage(null); }}
+          className="flex-1 py-3 rounded-lg text-sm font-black transition-all text-gray-400 dark:text-zinc-500"
+        >
+          Sign Up
+        </button>
+      </div>
+
       <StepHeader title="Sign In" subtitle="Welcome back! Sign in to continue." />
 
       <OAuthButtons forMode="signin" />
@@ -549,6 +569,23 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
         </button>
         <button onClick={toggleTheme} className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full">
           <span className="material-icons-outlined text-sm">{isDark ? 'light_mode' : 'dark_mode'}</span>
+        </button>
+      </div>
+
+      {/* Sign In / Sign Up Toggle */}
+      <div className="flex bg-[#f3f3f3] dark:bg-zinc-800 rounded-xl p-1 mb-6">
+        <button
+          type="button"
+          onClick={() => { setMode('SIGNIN'); setError(null); setSuccessMessage(null); }}
+          className="flex-1 py-3 rounded-lg text-sm font-black transition-all text-gray-400 dark:text-zinc-500"
+        >
+          Sign In
+        </button>
+        <button
+          type="button"
+          className="flex-1 py-3 rounded-lg text-sm font-black transition-all bg-white dark:bg-zinc-700 text-black dark:text-white shadow-sm"
+        >
+          Sign Up
         </button>
       </div>
 
@@ -707,8 +744,10 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
                 className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
                 placeholder="DL-XXXXXXXXXXXXX"
                 value={license}
-                onChange={(e) => setLicense(e.target.value)}
+                maxLength={16}
+                onChange={(e) => setLicense(e.target.value.slice(0, 16).toUpperCase())}
               />
+              <p className="text-xs text-gray-400 font-medium mt-1 px-1">Maximum 16 characters</p>
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">Aadhar Number</label>
@@ -867,8 +906,10 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
                 className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
                 placeholder="DL-XXXXXXXXXXXXX"
                 value={license}
-                onChange={(e) => setLicense(e.target.value)}
+                maxLength={16}
+                onChange={(e) => setLicense(e.target.value.slice(0, 16).toUpperCase())}
               />
+              <p className="text-xs text-gray-400 font-medium mt-1 px-1">Maximum 16 characters</p>
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">Aadhar Number</label>
@@ -981,11 +1022,14 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     <div className="flex-1 flex flex-col bg-white dark:bg-black overflow-y-auto">
       <div className="h-12 w-full flex items-center justify-between px-6 pt-2">
         <span className="text-black dark:text-white font-bold text-sm">9:41</span>
-        <div className="flex items-center gap-1.5">
-          <span className="material-icons-outlined text-[18px] text-black dark:text-white">signal_cellular_4_bar</span>
-          <span className="material-icons-outlined text-[18px] text-black dark:text-white">wifi</span>
-          <span className="material-icons-outlined text-[22px] text-black dark:text-white">battery_full</span>
-        </div>
+        <button onClick={toggleTheme} className="flex items-center gap-1.5 bg-gray-100 dark:bg-zinc-800 px-3 py-1.5 rounded-full hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors">
+          <span className="material-icons-outlined text-base text-leaf-600 dark:text-leaf-400">
+            {isDark ? 'light_mode' : 'dark_mode'}
+          </span>
+          <span className="text-xs font-bold text-gray-600 dark:text-zinc-400">
+            {isDark ? 'Light' : 'Dark'}
+          </span>
+        </button>
       </div>
       {renderContent()}
       <div className="pb-4 flex justify-center w-full mt-auto">

@@ -15,6 +15,16 @@ const User = require('./models/User');
 // In-memory OTP store (use Redis in production)
 const otpStore = new Map();
 
+// Clean expired OTPs every 10 minutes to prevent memory leak
+setInterval(() => {
+    const now = Date.now();
+    for (const [email, data] of otpStore.entries()) {
+        if (now > data.expiresAt) {
+            otpStore.delete(email);
+        }
+    }
+}, 10 * 60 * 1000);
+
 // Email transporter for sending OTPs
 const emailTransporter = nodemailer.createTransport({
     service: 'gmail',
@@ -24,13 +34,15 @@ const emailTransporter = nodemailer.createTransport({
     },
 });
 const Ride = require('./models/Ride');
+const Notification = require('./models/Notification');
 
 const app = express();
 const PORT = process.env.PORT || 5001;
+const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:3005';
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
     cors: {
-        origin: '*',
+        origin: CORS_ORIGIN,
         methods: ['GET', 'POST', 'PUT']
     }
 });
@@ -76,6 +88,10 @@ io.on('connection', (socket) => {
         if (role === 'DRIVER') {
             socket.data.role = 'DRIVER';
             socket.join('drivers:online');
+            // Track this socket in onlineDrivers so location-filtered emits work
+            const entry = onlineDrivers.get(userId) || { socketIds: new Set(), location: null };
+            entry.socketIds.add(socket.id);
+            onlineDrivers.set(userId, entry);
         }
         if (role === 'RIDER') {
             socket.data.role = 'RIDER';
@@ -93,8 +109,14 @@ io.on('connection', (socket) => {
 
     socket.on('driver:location', ({ driverId, lat, lng }) => {
         if (!driverId || typeof lat !== 'number' || typeof lng !== 'number') return;
-        const entry = onlineDrivers.get(driverId) || { socketIds: new Set(), location: null };
+        const entry = onlineDrivers.get(driverId) || { socketIds: new Set(), location: null, lastUpdate: 0 };
+        
+        // Throttle: max 1 update per second to prevent flooding
+        const now = Date.now();
+        if (now - (entry.lastUpdate || 0) < 1000) return;
+        
         entry.location = { lat, lng, updatedAt: new Date() };
+        entry.lastUpdate = now;
         onlineDrivers.set(driverId, entry);
         io.to('riders:online').emit('nearby:driver:update', { driverId, lat, lng });
     });
@@ -108,14 +130,23 @@ io.on('connection', (socket) => {
     socket.on('rider:search', ({ rideId, riderId, pickup, dropoff, fare, isPooled }) => {
         if (!rideId || !pickup || !pickup.lat || !pickup.lng) return;
         socket.data.searchRideId = rideId;
-        io.to('drivers:online').emit('nearby:rider:update', {
-            rideId,
-            riderId,
-            pickup,
-            dropoff,
-            fare,
-            isPooled
-        });
+        const NEARBY_RADIUS_KM = 6;
+        const payload = { rideId, riderId, pickup, dropoff, fare, isPooled };
+
+        // Send only to drivers within radius instead of broadcasting to all
+        for (const [driverId, entry] of onlineDrivers.entries()) {
+            if (!entry.location || typeof entry.location.lat !== 'number') {
+                // Driver has no GPS yet, skip
+                continue;
+            }
+            const dist = getDistanceKm(entry.location.lat, entry.location.lng, pickup.lat, pickup.lng);
+            if (dist !== null && dist <= NEARBY_RADIUS_KM) {
+                // Emit to each socket this driver has
+                for (const sid of entry.socketIds) {
+                    io.to(sid).emit('nearby:rider:update', payload);
+                }
+            }
+        }
     });
 
     socket.on('rider:search:stop', ({ rideId }) => {
@@ -174,10 +205,10 @@ app.get('/api/ola/autocomplete', async(req, res) => {
     }
 });
 
-// ✅ OLA Maps Directions Proxy
+// ✅ OLA Maps Directions Proxy (with multi-stop waypoints support)
 app.post('/api/ola/directions', async(req, res) => {
     try {
-        const { origin, destination, alternatives } = req.body;
+        const { origin, destination, alternatives, waypoints } = req.body;
 
         if (!origin || !destination) {
             return res.status(400).json({ error: 'Origin and destination required' });
@@ -187,9 +218,14 @@ app.post('/api/ola/directions', async(req, res) => {
             return res.status(500).json({ error: 'OLA_MAPS_API_KEY not configured' });
         }
 
-        const url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&alternatives=${alternatives || false}&steps=true&overview=full&language=en&traffic_metadata=true&api_key=${OLA_API_KEY}`;
+        let url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&alternatives=${alternatives || false}&steps=true&overview=full&language=en&traffic_metadata=true&api_key=${OLA_API_KEY}`;
 
-        console.log(`🗺️ OLA Directions: ${origin} → ${destination}`);
+        // Add waypoints for multi-stop rides (format: "lat,lng|lat,lng")
+        if (waypoints && Array.isArray(waypoints) && waypoints.length > 0) {
+            url += `&waypoints=${waypoints.join('|')}`;
+        }
+
+        console.log(`🗺️ OLA Directions: ${origin} → ${destination}${waypoints ? ` via ${waypoints.length} stops` : ''}`);
         const response = await axios.post(url);
         res.json(response.data);
 
@@ -237,9 +273,13 @@ app.get('/api/health', (req, res) => {
 
 // MongoDB Connection
 const MONGODB_URI = process.env.MONGODB_URI;
-mongoose.connect(MONGODB_URI)
-    .then(() => console.log('✅ Connected to MongoDB'))
-    .catch(err => console.error('❌ MongoDB error:', err));
+if (MONGODB_URI) {
+    mongoose.connect(MONGODB_URI)
+        .then(() => console.log('✅ Connected to MongoDB'))
+        .catch(err => console.error('❌ MongoDB error:', err));
+} else {
+    console.warn('⚠️ MONGODB_URI not set - database features will not work');
+}
 
 // User Routes
 app.post('/api/login', async(req, res) => {
@@ -292,9 +332,18 @@ app.post('/api/signup', async(req, res) => {
         } : {};
 
         user = new User({
-            role, email, phone, firstName, lastName, dob, gender,
-            license, aadhar, authProvider: authProvider || 'email',
-            emailVerified: true, photoUrl,
+            role,
+            email,
+            phone,
+            firstName,
+            lastName,
+            dob,
+            gender,
+            license,
+            aadhar,
+            authProvider: authProvider || 'email',
+            emailVerified: true,
+            photoUrl,
             ...driverDefaults
         });
         await user.save();
@@ -405,6 +454,169 @@ app.put('/api/users/:userId', async(req, res) => {
     }
 });
 
+// ── Driver Daily Route ──
+app.post('/api/driver/route', async(req, res) => {
+    console.log('📬 Received route update request:', JSON.stringify(req.body, null, 2));
+    try {
+        const { userId, source, destination, isActive } = req.body;
+
+        // Validate required fields
+        if (!userId) {
+            return res.status(400).json({ message: 'userId is required' });
+        }
+        if (!source || !source.address || source.lat === undefined || source.lng === undefined) {
+            return res.status(400).json({ message: 'source with address, lat, lng is required' });
+        }
+        if (!destination || !destination.address || destination.lat === undefined || destination.lng === undefined) {
+            return res.status(400).json({ message: 'destination with address, lat, lng is required' });
+        }
+
+        const dailyRoute = {
+            source: {
+                address: source.address,
+                lat: Number(source.lat),
+                lng: Number(source.lng)
+            },
+            destination: {
+                address: destination.address,
+                lat: Number(destination.lat),
+                lng: Number(destination.lng)
+            },
+            isActive: isActive !== undefined ? isActive : true
+        };
+
+        const user = await User.findByIdAndUpdate(
+            userId, { dailyRoute }, { new: true, runValidators: false }
+        );
+
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        console.log('✅ Route updated successfully for user:', userId);
+        res.json({ message: 'Route updated', dailyRoute: user.dailyRoute });
+    } catch (error) {
+        console.error('❌ Update route error:', error);
+        res.status(500).json({ message: 'Error updating route', error: error.message });
+    }
+});
+
+app.get('/api/rider/match-driver', async(req, res) => {
+    try {
+        const { pickupLat, pickupLng, dropoffLat, dropoffLng } = req.query;
+        if (!pickupLat || !pickupLng || !dropoffLat || !dropoffLng) {
+            return res.status(400).json({ message: 'Missing coordinates' });
+        }
+
+        const pLat = Number(pickupLat);
+        const pLng = Number(pickupLng);
+        const dLat = Number(dropoffLat);
+        const dLng = Number(dropoffLng);
+
+        // Find drivers with active daily routes matching the rider's request
+        const drivers = await User.find({
+            role: 'DRIVER',
+            'dailyRoute.isActive': true
+        });
+
+        const matches = drivers.filter(driver => {
+            const route = driver.dailyRoute;
+            if (!route || !route.source || !route.destination) return false;
+
+            // Check pickup proximity (within 5km of driver source)
+            const pickupDist = getDistanceKm(pLat, pLng, route.source.lat, route.source.lng);
+            // Check dropoff proximity (within 5km of driver destination)
+            const dropoffDist = getDistanceKm(dLat, dLng, route.destination.lat, route.destination.lng);
+
+            return pickupDist <= 5 && dropoffDist <= 5;
+        });
+
+        res.json(matches.map(d => ({
+            id: d._id,
+            name: [d.firstName, d.lastName].filter(Boolean).join(' ') || d.email || 'Driver',
+            rating: d.rating || 4.8,
+            vehicle: [d.vehicleMake || '', d.vehicleModel || ''].filter(Boolean).join(' ') || 'Car',
+            vehicleNumber: d.vehicleNumber,
+            photoUrl: d.photoUrl,
+            phone: maskPhone(d.phone),
+            dailyRoute: d.dailyRoute
+        })));
+    } catch (error) {
+        console.error('Match driver error:', error);
+        res.status(500).json({ message: 'Error matching drivers' });
+    }
+});
+
+// ── Notifications ──
+app.get('/api/notifications/:userId', async(req, res) => {
+    try {
+        const notifications = await Notification.find({ userId: req.params.userId }).sort({ createdAt: -1 }).limit(20);
+        res.json(notifications);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching notifications' });
+    }
+});
+
+app.post('/api/notifications/:id/read', async(req, res) => {
+    try {
+        await Notification.findByIdAndUpdate(req.params.id, { isRead: true });
+        res.json({ ok: true });
+    } catch (error) {
+        res.status(500).json({ message: 'Error marking notification as read' });
+    }
+});
+
+app.get('/api/notifications/sent/:userId', async(req, res) => {
+    try {
+        const notifications = await Notification.find({ fromId: req.params.userId }).sort({ createdAt: -1 }).limit(20);
+        res.json(notifications);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching sent requests' });
+    }
+});
+
+// ── Daily Route Join Request ──
+app.post('/api/rider/request-daily-join', async(req, res) => {
+    console.log('📬 Daily join request received:', JSON.stringify(req.body, null, 2));
+    try {
+        const { riderId, driverId, pickup, dropoff } = req.body;
+
+        if (!riderId || !driverId || !pickup || !dropoff) {
+            console.error('❌ Missing fields in join request');
+            return res.status(400).json({ message: 'Missing required fields' });
+        }
+
+        const rider = await User.findById(riderId);
+        if (!rider) {
+            console.error('❌ Rider not found:', riderId);
+            return res.status(404).json({ message: 'Rider not found' });
+        }
+
+        const pickupAddr = pickup.address || 'Unknown Pickup';
+        const dropoffAddr = dropoff.address || 'Unknown Dropoff';
+
+        const notification = new Notification({
+            userId: driverId,
+            fromId: riderId,
+            title: 'New Daily Route Partner?',
+            message: `${rider.firstName} wants to join your daily route from ${pickupAddr.split(',')[0]} to ${dropoffAddr.split(',')[0]}.`,
+            type: 'DAILY_JOIN_REQUEST',
+            data: { riderId, pickup, dropoff }
+        });
+
+        await notification.save();
+        console.log('✅ Notification saved for driver:', driverId);
+
+        if (io) {
+            io.to(`user:${driverId}`).emit('notification:new', notification);
+            console.log('📡 Socket notification emitted to:', `user:${driverId}`);
+        }
+
+        res.json({ message: 'Request sent successfully', notification });
+    } catch (error) {
+        console.error('❌ Request daily join error:', error);
+        res.status(500).json({ message: 'Error sending join request', error: error.message });
+    }
+});
+
 // Ride Routes
 app.post('/api/rides', async(req, res) => {
     try {
@@ -426,7 +638,9 @@ app.post('/api/rides', async(req, res) => {
         const ride = new Ride(payload);
         await ride.save();
 
-        io.to('drivers:online').emit('ride:request', {
+        // Location-filtered broadcast: only send to drivers within 6 km of pickup
+        const RIDE_BROADCAST_RADIUS_KM = 6;
+        const ridePayload = {
             rideId: ride._id,
             pickup: ride.pickup,
             dropoff: ride.dropoff,
@@ -435,7 +649,25 @@ app.post('/api/rides', async(req, res) => {
             isPooled: ride.isPooled,
             routeIndex: ride.routeIndex,
             bookingTime: ride.bookingTime
-        });
+        };
+
+        if (ride.pickup && typeof ride.pickup.lat === 'number' && typeof ride.pickup.lng === 'number') {
+            let sentCount = 0;
+            for (const [driverId, entry] of onlineDrivers.entries()) {
+                if (!entry.location || typeof entry.location.lat !== 'number') continue;
+                const dist = getDistanceKm(entry.location.lat, entry.location.lng, ride.pickup.lat, ride.pickup.lng);
+                if (dist !== null && dist <= RIDE_BROADCAST_RADIUS_KM) {
+                    for (const sid of entry.socketIds) {
+                        io.to(sid).emit('ride:request', ridePayload);
+                    }
+                    sentCount++;
+                }
+            }
+            console.log(`ride:request sent to ${sentCount} nearby drivers (within ${RIDE_BROADCAST_RADIUS_KM}km)`);
+        } else {
+            // Fallback: no pickup coords, broadcast to all
+            io.to('drivers:online').emit('ride:request', ridePayload);
+        }
 
         res.status(201).json(ride);
     } catch (error) {
@@ -466,7 +698,18 @@ app.get('/api/rides/driver/:driverId', async(req, res) => {
 app.get('/api/rides/nearby', async(req, res) => {
     try {
         const { lat, lng, radius = 6 } = req.query;
-        const rides = await Ride.find({ status: 'SEARCHING' }).sort({ bookingTime: -1 });
+        // Only return rides created in the last 15 minutes to avoid stale requests
+        const staleThreshold = new Date(Date.now() - 15 * 60 * 1000);
+        const rides = await Ride.find({
+            status: 'SEARCHING',
+            createdAt: { $gte: staleThreshold }
+        }).sort({ bookingTime: -1 });
+
+        // Auto-cancel old stale SEARCHING rides
+        await Ride.updateMany(
+            { status: 'SEARCHING', createdAt: { $lt: staleThreshold } },
+            { $set: { status: 'CANCELED' } }
+        );
 
         const latNum = lat ? Number(lat) : null;
         const lngNum = lng ? Number(lng) : null;
@@ -600,6 +843,195 @@ app.put('/api/rides/:rideId/status', async(req, res) => {
     }
 });
 
+// ─── Cancel Ride (Driver or Rider) with Auto Re-Search ───
+app.post('/api/rides/:rideId/cancel', async(req, res) => {
+    try {
+        const { canceledBy, cancelReason } = req.body;
+        if (!canceledBy || !['RIDER', 'DRIVER'].includes(canceledBy)) {
+            return res.status(400).json({ message: 'canceledBy must be RIDER or DRIVER' });
+        }
+
+        const ride = await Ride.findById(req.params.rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        // Only allow cancel for active statuses
+        if (!['SEARCHING', 'ACCEPTED', 'ARRIVED'].includes(ride.status)) {
+            return res.status(409).json({ message: `Cannot cancel ride with status ${ride.status}` });
+        }
+
+        // Calculate cancellation fee (only if ride was ACCEPTED or ARRIVED)
+        let cancellationFee = 0;
+        if (canceledBy === 'DRIVER' && ['ACCEPTED', 'ARRIVED'].includes(ride.status)) {
+            // Driver penalty: flat ₹50 for canceling after accepting
+            cancellationFee = 50;
+        } else if (canceledBy === 'RIDER' && ['ACCEPTED', 'ARRIVED'].includes(ride.status)) {
+            // Rider pays ₹25 if driver already started coming
+            cancellationFee = 25;
+        }
+
+        const previousDriverId = ride.driverId;
+
+        ride.status = 'CANCELED';
+        ride.canceledBy = canceledBy;
+        ride.cancelReason = cancelReason || '';
+        ride.canceledAt = new Date();
+        ride.cancellationFee = cancellationFee;
+        if (previousDriverId) {
+            ride.previousDriverIds = [...(ride.previousDriverIds || []), previousDriverId];
+        }
+        await ride.save();
+
+        // Notify the other party via socket
+        const cancelPayload = {
+            rideId: ride._id,
+            canceledBy,
+            cancelReason: cancelReason || '',
+            cancellationFee,
+            status: 'CANCELED'
+        };
+
+        if (canceledBy === 'DRIVER') {
+            // Notify rider
+            io.to(`user:${ride.userId}`).emit('ride:canceled', cancelPayload);
+            io.to(`ride:${ride._id}`).emit('ride:canceled', cancelPayload);
+
+            // Create notification for rider
+            try {
+                const driver = previousDriverId ? await User.findById(previousDriverId) : null;
+                const driverName = driver ? [driver.firstName, driver.lastName].filter(Boolean).join(' ') || 'Driver' : 'Driver';
+                await Notification.create({
+                    userId: ride.userId,
+                    fromId: previousDriverId,
+                    title: 'Ride Canceled by Driver',
+                    message: `${driverName} canceled your ride${cancelReason ? ': ' + cancelReason : ''}. We're searching for another driver.`,
+                    type: 'RIDE_CANCELED',
+                    data: { rideId: ride._id, canceledBy, cancellationFee }
+                });
+                io.to(`user:${ride.userId}`).emit('notification:new', {
+                    title: 'Ride Canceled by Driver',
+                    message: `${driverName} canceled your ride. Searching for a new driver...`,
+                    type: 'RIDE_CANCELED'
+                });
+            } catch (e) { console.error('Cancel notification error:', e); }
+
+            // ─── Auto Re-Search: Find nearby drivers within 5km traveling same route ───
+            const AUTO_SEARCH_RADIUS_KM = 5;
+            let nearbyDriversFound = 0;
+
+            if (ride.pickup && typeof ride.pickup.lat === 'number') {
+                // Create a new ride entry for re-search
+                const reSearchRide = new Ride({
+                    userId: ride.userId,
+                    status: 'SEARCHING',
+                    pickup: ride.pickup,
+                    dropoff: ride.dropoff,
+                    fare: ride.fare,
+                    currentFare: ride.currentFare || ride.fare,
+                    distance: ride.distance,
+                    duration: ride.duration,
+                    rideType: ride.rideType,
+                    paymentMethod: ride.paymentMethod,
+                    routeIndex: ride.routeIndex,
+                    vehicleCategory: ride.vehicleCategory,
+                    co2Emissions: ride.co2Emissions,
+                    co2Saved: ride.co2Saved,
+                    isPooled: ride.isPooled,
+                    passengers: ride.passengers,
+                    maxPassengers: ride.maxPassengers,
+                    stops: ride.stops || [],
+                    previousDriverIds: [...(ride.previousDriverIds || [])],
+                    autoReSearched: true,
+                    bookingTime: new Date()
+                });
+                await reSearchRide.save();
+
+                // Mark original ride as re-searched
+                ride.autoReSearched = true;
+                await ride.save();
+
+                // Broadcast to nearby drivers (excluding previous driver)
+                const ridePayload = {
+                    rideId: reSearchRide._id,
+                    pickup: reSearchRide.pickup,
+                    dropoff: reSearchRide.dropoff,
+                    fare: reSearchRide.fare,
+                    currentFare: reSearchRide.currentFare,
+                    isPooled: reSearchRide.isPooled,
+                    routeIndex: reSearchRide.routeIndex,
+                    bookingTime: reSearchRide.bookingTime,
+                    isReSearch: true
+                };
+
+                const excludeDriverIds = new Set((reSearchRide.previousDriverIds || []).map(id => id.toString()));
+
+                for (const [driverId, entry] of onlineDrivers.entries()) {
+                    // Skip the driver who just canceled
+                    if (excludeDriverIds.has(driverId)) continue;
+                    if (!entry.location || typeof entry.location.lat !== 'number') continue;
+
+                    const dist = getDistanceKm(
+                        entry.location.lat, entry.location.lng,
+                        ride.pickup.lat, ride.pickup.lng
+                    );
+                    if (dist !== null && dist <= AUTO_SEARCH_RADIUS_KM) {
+                        for (const sid of entry.socketIds) {
+                            io.to(sid).emit('ride:request', ridePayload);
+                        }
+                        nearbyDriversFound++;
+                    }
+                }
+
+                console.log(`Auto re-search: broadcast to ${nearbyDriversFound} nearby drivers (within ${AUTO_SEARCH_RADIUS_KM}km)`);
+
+                // Notify rider about re-search result
+                io.to(`user:${ride.userId}`).emit('ride:re-search', {
+                    oldRideId: ride._id,
+                    newRideId: reSearchRide._id,
+                    driversNotified: nearbyDriversFound,
+                    searchRadius: AUTO_SEARCH_RADIUS_KM
+                });
+            }
+
+        } else if (canceledBy === 'RIDER') {
+            // Notify driver
+            if (ride.driverId) {
+                io.to(`user:${ride.driverId}`).emit('ride:canceled', cancelPayload);
+            }
+            io.to(`ride:${ride._id}`).emit('ride:canceled', cancelPayload);
+
+            // Create notification for driver
+            if (ride.driverId) {
+                try {
+                    const rider = await User.findById(ride.userId);
+                    const riderName = rider ? [rider.firstName, rider.lastName].filter(Boolean).join(' ') || 'Rider' : 'Rider';
+                    await Notification.create({
+                        userId: ride.driverId,
+                        fromId: ride.userId,
+                        title: 'Ride Canceled by Rider',
+                        message: `${riderName} canceled the ride${cancelReason ? ': ' + cancelReason : ''}.`,
+                        type: 'RIDE_CANCELED',
+                        data: { rideId: ride._id, canceledBy, cancellationFee }
+                    });
+                    io.to(`user:${ride.driverId}`).emit('notification:new', {
+                        title: 'Ride Canceled by Rider',
+                        message: `${riderName} canceled the ride.`,
+                        type: 'RIDE_CANCELED'
+                    });
+                } catch (e) { console.error('Cancel notification error:', e); }
+            }
+        }
+
+        res.json({
+            ride,
+            cancellationFee,
+            canceledBy
+        });
+    } catch (error) {
+        console.error('Cancel ride error:', error);
+        res.status(500).json({ message: 'Error canceling ride' });
+    }
+});
+
 // Driver presence
 app.post('/api/drivers/online', async(req, res) => {
     const { driverId, location } = req.body;
@@ -640,6 +1072,15 @@ app.post('/api/rides/:rideId/accept', async(req, res) => {
         ride.driverId = driverId;
         ride.status = 'ACCEPTED';
         ride.etaToPickup = etaToPickup;
+
+        // Store original ETA as baseline for delay detection
+        const etaMatch = etaToPickup && etaToPickup.match(/(\d+)/);
+        if (etaMatch) {
+            ride.originalEtaMinutes = parseInt(etaMatch[1], 10);
+        } else if (distanceKm) {
+            ride.originalEtaMinutes = Math.max(1, Math.round((distanceKm / 28) * 60));
+        }
+
         if (hasDriverLocation) {
             ride.driverLocation = { lat: driverLocation.lat, lng: driverLocation.lng, updatedAt: new Date() };
         }
@@ -654,16 +1095,16 @@ app.post('/api/rides/:rideId/accept', async(req, res) => {
             ride,
             driver: driver ? {
                 id: driver._id,
-                name: `${driver.firstName} ${driver.lastName}`,
+                name: [driver.firstName, driver.lastName].filter(Boolean).join(' ') || driver.email || 'Driver',
                 rating: driver.rating || 4.8,
-                vehicle: `${driver.vehicleMake || 'Car'} ${driver.vehicleModel || ''}`.trim(),
+                vehicle: [driver.vehicleMake || 'Car', driver.vehicleModel || ''].filter(Boolean).join(' '),
                 vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                 photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
                 maskedPhone: maskPhone(driver.phone)
             } : null,
             rider: rider ? {
                 id: rider._id,
-                name: `${rider.firstName} ${rider.lastName}`,
+                name: [rider.firstName, rider.lastName].filter(Boolean).join(' ') || rider.email || 'Rider',
                 maskedPhone: maskPhone(rider.phone)
             } : null
         };
@@ -982,7 +1423,7 @@ app.get('/api/users/:userId/wallet', async(req, res) => {
     try {
         const user = await User.findById(req.params.userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
-        res.json({ walletBalance: user.walletBalance || 0 });
+        res.json({ balance: user.walletBalance || 0 });
     } catch (error) {
         res.status(500).json({ message: 'Error fetching wallet' });
     }
@@ -1089,11 +1530,306 @@ app.get('/api/drivers/nearby', async(req, res) => {
     }
 });
 
-// Only start listening if this file is run directly (not imported for testing)
+// ── Multi-Stop: Mark stop as reached ──
+app.post('/api/rides/:rideId/stops/:stopIndex/reached', async(req, res) => {
+    try {
+        const ride = await Ride.findById(req.params.rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        const stopIdx = parseInt(req.params.stopIndex, 10);
+        if (!ride.stops || stopIdx < 0 || stopIdx >= ride.stops.length) {
+            return res.status(400).json({ message: 'Invalid stop index' });
+        }
+
+        ride.stops[stopIdx].status = 'REACHED';
+        ride.stops[stopIdx].reachedAt = new Date();
+        ride.currentStopIndex = stopIdx + 1;
+        await ride.save();
+
+        const payload = {
+            rideId: ride._id,
+            stopIndex: stopIdx,
+            currentStopIndex: ride.currentStopIndex,
+            stops: ride.stops
+        };
+
+        io.to(`ride:${ride._id}`).emit('ride:stop-reached', payload);
+        io.to(`user:${ride.userId}`).emit('ride:stop-reached', payload);
+        if (ride.driverId) io.to(`user:${ride.driverId}`).emit('ride:stop-reached', payload);
+
+        res.json({ ok: true, ride });
+    } catch (error) {
+        console.error('Stop reached error:', error);
+        res.status(500).json({ message: 'Error marking stop as reached' });
+    }
+});
+
+// ── Multi-Stop: Skip a stop ──
+app.post('/api/rides/:rideId/stops/:stopIndex/skip', async(req, res) => {
+    try {
+        const ride = await Ride.findById(req.params.rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        const stopIdx = parseInt(req.params.stopIndex, 10);
+        if (!ride.stops || stopIdx < 0 || stopIdx >= ride.stops.length) {
+            return res.status(400).json({ message: 'Invalid stop index' });
+        }
+
+        ride.stops[stopIdx].status = 'SKIPPED';
+        ride.currentStopIndex = stopIdx + 1;
+        await ride.save();
+
+        const payload = {
+            rideId: ride._id,
+            stopIndex: stopIdx,
+            currentStopIndex: ride.currentStopIndex,
+            stops: ride.stops
+        };
+
+        io.to(`ride:${ride._id}`).emit('ride:stop-skipped', payload);
+        io.to(`user:${ride.userId}`).emit('ride:stop-skipped', payload);
+        if (ride.driverId) io.to(`user:${ride.driverId}`).emit('ride:stop-skipped', payload);
+
+        res.json({ ok: true, ride });
+    } catch (error) {
+        console.error('Stop skip error:', error);
+        res.status(500).json({ message: 'Error skipping stop' });
+    }
+});
+
+// ── Multi-Stop: Get ride stops info ──
+app.get('/api/rides/:rideId/stops', async(req, res) => {
+    try {
+        const ride = await Ride.findById(req.params.rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        res.json({
+            stops: ride.stops || [],
+            currentStopIndex: ride.currentStopIndex || 0,
+            pickup: ride.pickup,
+            dropoff: ride.dropoff
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching stops' });
+    }
+});
+
+// ── Live ETA for active rides ──
+app.get('/api/rides/:rideId/live-eta', async(req, res) => {
+    try {
+        const ride = await Ride.findById(req.params.rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        const driverEntry = ride.driverId ? onlineDrivers.get(ride.driverId.toString()) : null;
+        const driverLoc = driverEntry?.location || ride.driverLocation;
+
+        if (!driverLoc || typeof driverLoc.lat !== 'number') {
+            return res.json({ etaMinutes: null, etaText: 'N/A', source: 'unavailable' });
+        }
+
+        let destinationLat, destinationLng;
+        if (ride.status === 'ACCEPTED' || ride.status === 'ARRIVED') {
+            // ETA to pickup
+            if (!ride.pickup || typeof ride.pickup.lat !== 'number') {
+                return res.json({ etaMinutes: null, etaText: 'N/A', source: 'no-pickup' });
+            }
+            destinationLat = ride.pickup.lat;
+            destinationLng = ride.pickup.lng;
+        } else if (ride.status === 'IN_PROGRESS') {
+            // ETA to dropoff
+            if (!ride.dropoff || typeof ride.dropoff.lat !== 'number') {
+                return res.json({ etaMinutes: null, etaText: 'N/A', source: 'no-dropoff' });
+            }
+            destinationLat = ride.dropoff.lat;
+            destinationLng = ride.dropoff.lng;
+        } else {
+            return res.json({ etaMinutes: null, etaText: 'N/A', source: 'inactive' });
+        }
+
+        // Try OLA Directions API for traffic-aware ETA
+        let etaMinutes = null;
+        let etaText = 'N/A';
+        let source = 'haversine';
+
+        if (OLA_API_KEY) {
+            try {
+                const origin = `${driverLoc.lat},${driverLoc.lng}`;
+                const destination = `${destinationLat},${destinationLng}`;
+                const url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&alternatives=false&steps=false&overview=none&language=en&traffic_metadata=true&api_key=${OLA_API_KEY}`;
+                const response = await axios.post(url);
+                const routes = response.data?.routes;
+                if (routes && routes.length > 0) {
+                    const durationSec = routes[0].legs?.[0]?.duration || routes[0].duration;
+                    if (typeof durationSec === 'number') {
+                        etaMinutes = Math.max(1, Math.round(durationSec / 60));
+                        etaText = `${etaMinutes} min`;
+                        source = 'ola-traffic';
+                    }
+                }
+            } catch (e) {
+                console.error('Live ETA OLA API error:', e.message);
+            }
+        }
+
+        // Fallback to Haversine estimate
+        if (etaMinutes === null) {
+            const distKm = getDistanceKm(driverLoc.lat, driverLoc.lng, destinationLat, destinationLng);
+            etaText = estimateEtaMinutes(distKm);
+            etaMinutes = distKm ? Math.max(1, Math.round((distKm / 28) * 60)) : null;
+        }
+
+        res.json({ etaMinutes, etaText, source, rideStatus: ride.status });
+    } catch (error) {
+        console.error('Live ETA error:', error);
+        res.status(500).json({ message: 'Error computing live ETA' });
+    }
+});
+
+// ── Periodic live ETA broadcast (every 60 seconds) ──
+const LIVE_ETA_INTERVAL_MS = 60 * 1000;
+let liveEtaTimer = null;
+
+const broadcastLiveEta = async () => {
+    try {
+        const activeRides = await Ride.find({
+            status: { $in: ['ACCEPTED', 'ARRIVED', 'IN_PROGRESS'] },
+            driverId: { $ne: null }
+        });
+
+        for (const ride of activeRides) {
+            const driverEntry = onlineDrivers.get(ride.driverId.toString());
+            const driverLoc = driverEntry?.location || ride.driverLocation;
+
+            if (!driverLoc || typeof driverLoc.lat !== 'number') continue;
+
+            let destinationLat, destinationLng, etaLabel;
+            if (ride.status === 'ACCEPTED' || ride.status === 'ARRIVED') {
+                if (!ride.pickup || typeof ride.pickup.lat !== 'number') continue;
+                destinationLat = ride.pickup.lat;
+                destinationLng = ride.pickup.lng;
+                etaLabel = 'pickup';
+            } else {
+                if (!ride.dropoff || typeof ride.dropoff.lat !== 'number') continue;
+                destinationLat = ride.dropoff.lat;
+                destinationLng = ride.dropoff.lng;
+                etaLabel = 'dropoff';
+            }
+
+            let etaMinutes = null;
+            let etaText = 'N/A';
+            let source = 'haversine';
+
+            if (OLA_API_KEY) {
+                try {
+                    const origin = `${driverLoc.lat},${driverLoc.lng}`;
+                    const dest = `${destinationLat},${destinationLng}`;
+                    const url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${dest}&alternatives=false&steps=false&overview=none&language=en&traffic_metadata=true&api_key=${OLA_API_KEY}`;
+                    const resp = await axios.post(url);
+                    const routes = resp.data?.routes;
+                    if (routes && routes.length > 0) {
+                        const durationSec = routes[0].legs?.[0]?.duration || routes[0].duration;
+                        if (typeof durationSec === 'number') {
+                            etaMinutes = Math.max(1, Math.round(durationSec / 60));
+                            etaText = `${etaMinutes} min`;
+                            source = 'ola-traffic';
+                        }
+                    }
+                } catch (e) {
+                    // Silently fall back to haversine
+                }
+            }
+
+            if (etaMinutes === null) {
+                const distKm = getDistanceKm(driverLoc.lat, driverLoc.lng, destinationLat, destinationLng);
+                etaText = estimateEtaMinutes(distKm);
+                etaMinutes = distKm ? Math.max(1, Math.round((distKm / 28) * 60)) : null;
+            }
+
+            const payload = {
+                rideId: ride._id,
+                etaMinutes,
+                etaText,
+                etaLabel,
+                source,
+                updatedAt: new Date().toISOString()
+            };
+
+            // Update the ride document with latest ETA
+            if (etaLabel === 'pickup') {
+                ride.etaToPickup = etaText;
+            } else {
+                ride.etaToDropoff = etaText;
+            }
+
+            // ── Delay Detection (User Story 2.6) ──
+            const DELAY_THRESHOLD_MIN = 5;
+            const DELAY_ALERT_COOLDOWN_MS = 5 * 60 * 1000; // 5 min cooldown between alerts
+
+            if (etaMinutes !== null && ride.originalEtaMinutes) {
+                const delayMinutes = etaMinutes - ride.originalEtaMinutes;
+                const now = Date.now();
+                const lastAlert = ride.lastDelayAlertAt ? new Date(ride.lastDelayAlertAt).getTime() : 0;
+                const cooldownPassed = (now - lastAlert) > DELAY_ALERT_COOLDOWN_MS;
+
+                if (delayMinutes >= DELAY_THRESHOLD_MIN && cooldownPassed) {
+                    ride.lastDelayAlertAt = new Date();
+
+                    // Create persistent notification
+                    const notification = new Notification({
+                        userId: ride.userId,
+                        title: 'Traffic Delay Detected',
+                        message: `Your ride is delayed by ~${delayMinutes} min due to traffic congestion. Updated ETA: ${etaText}.`,
+                        type: 'DELAY_ALERT',
+                        data: {
+                            rideId: ride._id,
+                            delayMinutes,
+                            originalEtaMinutes: ride.originalEtaMinutes,
+                            currentEtaMinutes: etaMinutes,
+                            etaLabel
+                        }
+                    });
+                    await notification.save();
+
+                    // Push real-time delay alert to rider
+                    const delayPayload = {
+                        rideId: ride._id,
+                        delayMinutes,
+                        originalEtaMinutes: ride.originalEtaMinutes,
+                        currentEtaMinutes: etaMinutes,
+                        etaText,
+                        etaLabel,
+                        message: `Delayed ~${delayMinutes} min due to traffic`,
+                        notificationId: notification._id
+                    };
+                    io.to(`ride:${ride._id}`).emit('ride:delay-alert', delayPayload);
+                    io.to(`user:${ride.userId}`).emit('ride:delay-alert', delayPayload);
+                    console.log(`⚠️  Delay alert: ride ${ride._id} delayed ${delayMinutes}min`);
+                }
+            }
+
+            await ride.save();
+
+            // Emit to rider and driver
+            io.to(`ride:${ride._id}`).emit('ride:eta-update', payload);
+            io.to(`user:${ride.userId}`).emit('ride:eta-update', payload);
+            if (ride.driverId) io.to(`user:${ride.driverId}`).emit('ride:eta-update', payload);
+        }
+    } catch (error) {
+        console.error('Live ETA broadcast error:', error);
+    }
+};
+
+// Start ETA broadcast when DB is connected
+mongoose.connection.once('open', () => {
+    liveEtaTimer = setInterval(broadcastLiveEta, LIVE_ETA_INTERVAL_MS);
+    console.log('⏱️  Live ETA broadcast started (every 60s)');
+});
+
+// Only start listening when run directly (not when imported for testing)
 if (require.main === module) {
     httpServer.listen(PORT, () => {
-        console.log(`✅ OLA Maps Server running on port ${PORT}`);
+        console.log(`🚀 Server running on http://localhost:${PORT}`);
     });
 }
 
-module.exports = { app, httpServer, io, onlineDrivers, otpStore };
+module.exports = { app, httpServer, io, onlineDrivers, otpStore, liveEtaTimer };

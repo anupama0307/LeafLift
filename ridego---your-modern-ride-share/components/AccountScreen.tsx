@@ -6,7 +6,7 @@ interface AccountScreenProps {
   onSignOut?: () => void;
 }
 
-type AccountSubScreen = 'MAIN' | 'SETTINGS' | 'SAFETY_PRIVACY';
+type AccountSubScreen = 'MAIN' | 'SETTINGS' | 'SAFETY_PRIVACY' | 'HELP' | 'WALLET' | 'TRIPS';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
@@ -45,6 +45,14 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut }) => {
   const [rideRecording, setRideRecording] = useState(false);
   const [trustedContacts, setTrustedContacts] = useState<string[]>([]);
 
+  // Trips state
+  const [trips, setTrips] = useState<any[]>([]);
+  const [tripsLoading, setTripsLoading] = useState(false);
+  const [tripsFilter, setTripsFilter] = useState<'all' | 'completed' | 'canceled'>('all');
+
+  // Wallet transactions state
+  const [transactions, setTransactions] = useState<any[]>([]);
+
   useEffect(() => {
     if (!user?._id) return;
     fetch(`${API_BASE_URL}/api/users/${user._id}/stats`)
@@ -53,9 +61,21 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut }) => {
       .catch(() => {});
     fetch(`${API_BASE_URL}/api/users/${user._id}/wallet`)
       .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) setWalletBalance(d.walletBalance || 0); })
+      .then(d => { if (d) setWalletBalance(d.balance || d.walletBalance || 0); })
       .catch(() => {});
   }, [user]);
+
+  // Fetch trips when TRIPS screen is opened
+  useEffect(() => {
+    if (subScreen === 'TRIPS' && user?._id) {
+      setTripsLoading(true);
+      fetch(`${API_BASE_URL}/api/rides/user/${user._id}`)
+        .then(r => r.ok ? r.json() : [])
+        .then(d => setTrips(d || []))
+        .catch(() => setTrips([]))
+        .finally(() => setTripsLoading(false));
+    }
+  }, [subScreen, user]);
 
   const handleAddMoney = async () => {
     const amt = parseFloat(addAmount);
@@ -603,9 +623,357 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut }) => {
     </div>
   );
 
+  // --- Help Screen ---
+  const renderHelp = () => (
+    <div className="px-5 pb-24 animate-in fade-in duration-300 bg-white dark:bg-black min-h-full">
+      <SubScreenHeader title="Help & Support" onBack={() => setSubScreen('MAIN')} />
+
+      {/* Emergency Contact */}
+      <div className="bg-red-50 dark:bg-red-900/10 rounded-2xl p-5 border border-red-100 dark:border-red-900/30 mb-6">
+        <div className="flex items-center gap-3 mb-3">
+          <div className="size-12 rounded-2xl bg-red-500 flex items-center justify-center">
+            <span className="material-icons-outlined text-white text-2xl">emergency</span>
+          </div>
+          <div>
+            <p className="text-lg font-black text-red-600 dark:text-red-400">Emergency?</p>
+            <p className="text-xs text-red-500/70">Call for immediate assistance</p>
+          </div>
+        </div>
+        <button 
+          onClick={() => window.open('tel:112', '_self')}
+          className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-3 rounded-xl text-sm transition-colors flex items-center justify-center gap-2"
+        >
+          <span className="material-icons-outlined text-lg">call</span>
+          Call 112
+        </button>
+      </div>
+
+      {/* FAQ Section */}
+      <SectionTitle>Frequently Asked Questions</SectionTitle>
+      <div className="bg-gray-50 dark:bg-zinc-900/50 rounded-2xl border border-gray-100 dark:border-zinc-800 mb-6 divide-y divide-gray-100 dark:divide-zinc-800">
+        {[
+          { q: 'How do I book a ride?', a: 'Tap the search bar on the home screen, enter your destination, select a vehicle type, and confirm your booking.' },
+          { q: 'How do I cancel a ride?', a: 'Go to Activity tab, find your upcoming ride, and tap Cancel. Note: Cancellation fees may apply.' },
+          { q: 'How do I add money to my wallet?', a: 'Go to Account > Wallet, tap "Add Money", enter the amount, and complete the payment.' },
+          { q: 'How do I contact my driver?', a: 'Once your ride is confirmed, you can call or message your driver directly from the ride tracking screen.' },
+          { q: 'How do I report an issue?', a: 'Go to Activity, select the ride, and tap "Report Issue" or contact our support team below.' },
+        ].map((faq, i) => (
+          <details key={i} className="group">
+            <summary className="flex items-center justify-between p-4 cursor-pointer list-none">
+              <span className="text-sm font-bold text-black dark:text-white pr-4">{faq.q}</span>
+              <span className="material-icons-outlined text-gray-400 group-open:rotate-180 transition-transform">expand_more</span>
+            </summary>
+            <div className="px-4 pb-4 text-sm text-gray-600 dark:text-zinc-400">{faq.a}</div>
+          </details>
+        ))}
+      </div>
+
+      {/* Contact Options */}
+      <SectionTitle>Contact Us</SectionTitle>
+      <div className="space-y-3 mb-6">
+        <button 
+          onClick={() => window.open('https://mail.google.com/mail/?view=cm&to=support@leaflift.com&su=Support%20Request', '_blank')}
+          className="w-full flex items-center gap-4 bg-gray-50 dark:bg-zinc-900/50 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors text-left"
+        >
+          <div className="size-12 rounded-xl bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
+            <span className="material-icons-outlined text-blue-500 text-xl">email</span>
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-bold text-black dark:text-white">Email Support</p>
+            <p className="text-xs text-gray-500 dark:text-zinc-500">support@leaflift.com</p>
+          </div>
+          <span className="material-icons-outlined text-gray-400">chevron_right</span>
+        </button>
+        <button 
+          onClick={() => window.open('tel:+911234567890', '_self')}
+          className="w-full flex items-center gap-4 bg-gray-50 dark:bg-zinc-900/50 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors text-left"
+        >
+          <div className="size-12 rounded-xl bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
+            <span className="material-icons-outlined text-green-500 text-xl">phone</span>
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-bold text-black dark:text-white">Call Support</p>
+            <p className="text-xs text-gray-500 dark:text-zinc-500">+91 123 456 7890</p>
+          </div>
+          <span className="material-icons-outlined text-gray-400">chevron_right</span>
+        </button>
+        <button className="w-full flex items-center gap-4 bg-gray-50 dark:bg-zinc-900/50 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors text-left">
+          <div className="size-12 rounded-xl bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center">
+            <span className="material-icons-outlined text-purple-500 text-xl">chat</span>
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-bold text-black dark:text-white">Live Chat</p>
+            <p className="text-xs text-gray-500 dark:text-zinc-500">Chat with our support team</p>
+          </div>
+          <span className="material-icons-outlined text-gray-400">chevron_right</span>
+        </button>
+      </div>
+
+      {/* App Info */}
+      <div className="mt-8 text-center">
+        <p className="text-xs text-gray-400 dark:text-zinc-600">LeafLift v1.2.0</p>
+        <p className="text-[10px] text-gray-400 dark:text-zinc-600 mt-1">© 2026 LeafLift. All rights reserved.</p>
+      </div>
+    </div>
+  );
+
+  // --- Wallet Screen ---
+  const renderWallet = () => (
+    <div className="px-5 pb-24 animate-in fade-in duration-300 bg-white dark:bg-black min-h-full">
+      <SubScreenHeader title="Wallet" onBack={() => setSubScreen('MAIN')} />
+
+      {/* Balance Card */}
+      <div className="bg-gradient-to-br from-leaf-500 to-leaf-600 text-white p-6 rounded-[32px] mb-6 shadow-2xl relative overflow-hidden">
+        <div className="relative z-10">
+          <p className="text-[10px] font-black uppercase tracking-widest opacity-70 mb-1">Available Balance</p>
+          <h2 className="text-4xl font-black mb-4">₹{walletBalance.toFixed(2)}</h2>
+          <button
+            onClick={() => setShowAddMoney(true)}
+            className="bg-white/20 hover:bg-white/30 backdrop-blur-sm text-white font-bold py-2.5 px-6 rounded-xl text-sm transition-colors flex items-center gap-2"
+          >
+            <span className="material-icons-outlined text-lg">add</span>
+            Add Money
+          </button>
+        </div>
+        <div className="absolute right-0 bottom-0 size-32 opacity-10 -rotate-12">
+          <span className="material-icons text-[120px]">account_balance_wallet</span>
+        </div>
+      </div>
+
+      {/* Quick Add Amounts */}
+      <SectionTitle>Quick Add</SectionTitle>
+      <div className="grid grid-cols-4 gap-2 mb-6">
+        {[100, 200, 500, 1000].map((amt) => (
+          <button
+            key={amt}
+            onClick={async () => {
+              if (!user?._id) return;
+              try {
+                const resp = await fetch(`${API_BASE_URL}/api/users/${user._id}/wallet/add`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ amount: amt })
+                });
+                if (resp.ok) {
+                  const d = await resp.json();
+                  setWalletBalance(d.walletBalance || walletBalance + amt);
+                }
+              } catch {}
+            }}
+            className="bg-gray-50 dark:bg-zinc-900 hover:bg-leaf-50 dark:hover:bg-leaf-900/20 border border-gray-100 dark:border-zinc-800 hover:border-leaf-300 dark:hover:border-leaf-700 p-3 rounded-xl text-center transition-all"
+          >
+            <p className="text-sm font-black text-black dark:text-white">₹{amt}</p>
+          </button>
+        ))}
+      </div>
+
+      {/* Payment Methods */}
+      <SectionTitle>Payment Methods</SectionTitle>
+      <div className="bg-gray-50 dark:bg-zinc-900/50 rounded-2xl border border-gray-100 dark:border-zinc-800 mb-6">
+        <div className="flex items-center gap-4 p-4 border-b border-gray-100 dark:border-zinc-800">
+          <div className="size-12 rounded-xl bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
+            <span className="material-icons-outlined text-blue-500 text-xl">credit_card</span>
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-bold text-black dark:text-white">Add Card</p>
+            <p className="text-xs text-gray-500 dark:text-zinc-500">Credit or Debit Card</p>
+          </div>
+          <span className="material-icons-outlined text-gray-400">add</span>
+        </div>
+        <div className="flex items-center gap-4 p-4 border-b border-gray-100 dark:border-zinc-800">
+          <div className="size-12 rounded-xl bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center">
+            <span className="material-icons-outlined text-purple-500 text-xl">qr_code_2</span>
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-bold text-black dark:text-white">UPI</p>
+            <p className="text-xs text-gray-500 dark:text-zinc-500">Google Pay, PhonePe, Paytm</p>
+          </div>
+          <span className="material-icons-outlined text-gray-400">add</span>
+        </div>
+        <div className="flex items-center gap-4 p-4">
+          <div className="size-12 rounded-xl bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
+            <span className="material-icons-outlined text-green-500 text-xl">payments</span>
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-bold text-black dark:text-white">Cash</p>
+            <p className="text-xs text-gray-500 dark:text-zinc-500">Pay after ride</p>
+          </div>
+          <span className="material-icons text-green-500">check_circle</span>
+        </div>
+      </div>
+
+      {/* Transaction History placeholder */}
+      <SectionTitle>Recent Transactions</SectionTitle>
+      <div className="bg-gray-50 dark:bg-zinc-900/50 rounded-2xl border border-gray-100 dark:border-zinc-800 p-6 text-center">
+        <span className="material-icons-outlined text-4xl text-gray-300 dark:text-zinc-600 mb-2">receipt_long</span>
+        <p className="text-sm font-bold text-gray-500 dark:text-zinc-500">No transactions yet</p>
+        <p className="text-xs text-gray-400 dark:text-zinc-600 mt-1">Your payment history will appear here</p>
+      </div>
+
+      {/* Add Money Modal */}
+      {showAddMoney && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end justify-center" onClick={() => setShowAddMoney(false)}>
+          <div className="w-full max-w-lg bg-white dark:bg-zinc-900 rounded-t-[32px] p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="w-12 h-1.5 bg-gray-200 dark:bg-zinc-700 rounded-full mx-auto mb-6"></div>
+            <h3 className="text-2xl font-black text-black dark:text-white mb-6">Add Money</h3>
+            <div className="mb-4">
+              <label className="block text-xs font-bold text-gray-500 dark:text-zinc-500 mb-2">Enter Amount</label>
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-xl font-bold text-gray-400">₹</span>
+                <input
+                  type="number"
+                  value={addAmount}
+                  onChange={(e) => setAddAmount(e.target.value)}
+                  placeholder="0"
+                  className="w-full bg-gray-100 dark:bg-zinc-800 border-0 rounded-xl pl-10 pr-4 py-4 text-2xl font-black text-black dark:text-white focus:ring-2 focus:ring-leaf-500"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2 mb-4">
+              {[100, 200, 500].map((amt) => (
+                <button
+                  key={amt}
+                  onClick={() => setAddAmount(amt.toString())}
+                  className="flex-1 py-2 bg-gray-100 dark:bg-zinc-800 rounded-lg text-sm font-bold text-black dark:text-white hover:bg-leaf-100 dark:hover:bg-leaf-900/30 transition-colors"
+                >
+                  +₹{amt}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={handleAddMoney}
+              disabled={!addAmount || parseFloat(addAmount) <= 0}
+              className="w-full bg-leaf-500 hover:bg-leaf-600 disabled:bg-gray-300 dark:disabled:bg-zinc-700 text-white font-bold py-4 rounded-xl transition-colors"
+            >
+              Add ₹{addAmount || '0'} to Wallet
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  // --- Trips Screen ---
+  const renderTrips = () => {
+    const filteredTrips = trips.filter(trip => {
+      if (tripsFilter === 'all') return true;
+      if (tripsFilter === 'completed') return trip.status === 'COMPLETED';
+      if (tripsFilter === 'canceled') return trip.status === 'CANCELED';
+      return true;
+    });
+
+    return (
+      <div className="px-5 pb-24 animate-in fade-in duration-300 bg-white dark:bg-black min-h-full">
+        <SubScreenHeader title="My Trips" onBack={() => setSubScreen('MAIN')} />
+
+        {/* Stats Summary */}
+        <div className="grid grid-cols-3 gap-3 mb-6">
+          <div className="bg-leaf-50 dark:bg-leaf-900/20 p-4 rounded-2xl text-center">
+            <p className="text-2xl font-black text-leaf-600 dark:text-leaf-400">{stats?.totalTrips || 0}</p>
+            <p className="text-[10px] font-bold text-gray-500 dark:text-zinc-500 uppercase">Total Trips</p>
+          </div>
+          <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-2xl text-center">
+            <p className="text-2xl font-black text-blue-600 dark:text-blue-400">{stats?.totalKmTraveled?.toFixed(0) || 0}</p>
+            <p className="text-[10px] font-bold text-gray-500 dark:text-zinc-500 uppercase">KM Traveled</p>
+          </div>
+          <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-2xl text-center">
+            <p className="text-2xl font-black text-green-600 dark:text-green-400">{stats?.totalCO2Saved?.toFixed(1) || 0}</p>
+            <p className="text-[10px] font-bold text-gray-500 dark:text-zinc-500 uppercase">kg CO₂ Saved</p>
+          </div>
+        </div>
+
+        {/* Filter Tabs */}
+        <div className="flex gap-2 mb-6">
+          {(['all', 'completed', 'canceled'] as const).map((filter) => (
+            <button
+              key={filter}
+              onClick={() => setTripsFilter(filter)}
+              className={`px-4 py-2 rounded-full text-xs font-black uppercase tracking-wider transition-all ${
+                tripsFilter === filter
+                  ? 'bg-black dark:bg-white text-white dark:text-black'
+                  : 'bg-gray-100 dark:bg-zinc-900 text-gray-600 dark:text-zinc-400'
+              }`}
+            >
+              {filter}
+            </button>
+          ))}
+        </div>
+
+        {/* Trips List */}
+        {tripsLoading ? (
+          <div className="flex items-center justify-center py-20">
+            <span className="material-icons-outlined text-4xl text-gray-300 dark:text-zinc-600 animate-spin">sync</span>
+          </div>
+        ) : filteredTrips.length === 0 ? (
+          <div className="bg-gray-50 dark:bg-zinc-900/50 rounded-2xl border border-gray-100 dark:border-zinc-800 p-10 text-center">
+            <span className="material-icons-outlined text-5xl text-gray-300 dark:text-zinc-600 mb-3">directions_car</span>
+            <p className="text-lg font-bold text-gray-500 dark:text-zinc-500">No trips yet</p>
+            <p className="text-sm text-gray-400 dark:text-zinc-600 mt-1">Your ride history will appear here</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {filteredTrips.map((trip) => (
+              <div key={trip._id} className="bg-gray-50 dark:bg-zinc-900/50 rounded-2xl border border-gray-100 dark:border-zinc-800 p-4">
+                <div className="flex items-start justify-between mb-3">
+                  <div className="flex items-center gap-3">
+                    <div className={`size-10 rounded-xl flex items-center justify-center ${
+                      trip.status === 'COMPLETED' ? 'bg-green-100 dark:bg-green-900/30' :
+                      trip.status === 'CANCELED' ? 'bg-red-100 dark:bg-red-900/30' :
+                      'bg-blue-100 dark:bg-blue-900/30'
+                    }`}>
+                      <span className={`material-icons-outlined ${
+                        trip.status === 'COMPLETED' ? 'text-green-500' :
+                        trip.status === 'CANCELED' ? 'text-red-500' :
+                        'text-blue-500'
+                      }`}>directions_car</span>
+                    </div>
+                    <div>
+                      <p className="text-sm font-black text-black dark:text-white">
+                        {trip.dropoff?.address?.split(',')[0] || 'Unknown Destination'}
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-zinc-500">
+                        {new Date(trip.bookingTime || trip.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-lg font-black text-black dark:text-white">₹{trip.currentFare || trip.fare}</p>
+                    <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
+                      trip.status === 'COMPLETED' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
+                      trip.status === 'CANCELED' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
+                      'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                    }`}>
+                      {trip.status.replace('_', ' ')}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-zinc-500">
+                  <span className="material-icons-outlined text-sm">access_time</span>
+                  <span>{new Date(trip.bookingTime || trip.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</span>
+                  <span>•</span>
+                  <span>{trip.distance || 'N/A'}</span>
+                  <span>•</span>
+                  <span className="capitalize">{trip.vehicleCategory?.toLowerCase() || 'Car'}</span>
+                </div>
+                {trip.status === 'COMPLETED' && (
+                  <button className="mt-3 w-full py-2 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-600 dark:text-leaf-400 rounded-xl text-xs font-bold hover:bg-leaf-100 dark:hover:bg-leaf-900/30 transition-colors">
+                    Book Again
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // --- Route to sub-screens ---
   if (subScreen === 'SETTINGS') return renderSettings();
   if (subScreen === 'SAFETY_PRIVACY') return renderSafetyPrivacy();
+  if (subScreen === 'HELP') return renderHelp();
+  if (subScreen === 'WALLET') return renderWallet();
+  if (subScreen === 'TRIPS') return renderTrips();
 
   if (isDriver) {
     return (
@@ -790,18 +1158,18 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut }) => {
       </div>
 
       <div className="grid grid-cols-3 gap-3 mb-8">
-        <div className="bg-[#f3f3f3] dark:bg-zinc-900 p-4 rounded-2xl text-center">
+        <button onClick={() => setSubScreen('HELP')} className="bg-[#f3f3f3] dark:bg-zinc-900 p-4 rounded-2xl text-center hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors active:scale-95">
           <span className="material-icons-outlined text-blue-500 mb-1">help_outline</span>
           <p className="text-xs font-bold text-black dark:text-white">Help</p>
-        </div>
-        <div className="bg-[#f3f3f3] dark:bg-zinc-900 p-4 rounded-2xl text-center">
+        </button>
+        <button onClick={() => setSubScreen('WALLET')} className="bg-[#f3f3f3] dark:bg-zinc-900 p-4 rounded-2xl text-center hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors active:scale-95">
           <span className="material-icons-outlined text-green-500 mb-1">account_balance_wallet</span>
           <p className="text-xs font-bold text-black dark:text-white">Wallet</p>
-        </div>
-        <div className="bg-[#f3f3f3] dark:bg-zinc-900 p-4 rounded-2xl text-center">
+        </button>
+        <button onClick={() => setSubScreen('TRIPS')} className="bg-[#f3f3f3] dark:bg-zinc-900 p-4 rounded-2xl text-center hover:bg-purple-50 dark:hover:bg-purple-900/20 transition-colors active:scale-95">
           <span className="material-icons-outlined text-purple-500 mb-1">receipt_long</span>
           <p className="text-xs font-bold text-black dark:text-white">Trips</p>
-        </div>
+        </button>
       </div>
 
       <div className="space-y-1">

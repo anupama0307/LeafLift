@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport" />
+    <title>LeafLift Admin — Analytics Dashboard</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        primary: "#000000",
+                        leaf: {
+                            DEFAULT: "#22C55E",
+                            light: "#DCFCE7",
+                            dark: "#166534",
+                            50: "#F0FDF4",
+                            100: "#DCFCE7",
+                            200: "#BBF7D0",
+                            300: "#86EFAC",
+                            400: "#4ADE80",
+                            500: "#22C55E",
+                            600: "#16A34A",
+                            700: "#15803D",
+                            800: "#166534",
+                            900: "#14532D",
+                        },
+                        "background-light": "#FFFFFF",
+                        "background-dark": "#121212",
+                        "card-light": "#F3F3F3",
+                        "card-dark": "#1E1E1E",
+                    },
+                    fontFamily: {
+                        sans: ["Inter", "sans-serif"],
+                    },
+                    borderRadius: {
+                        DEFAULT: "16px",
+                        '2xl': "24px",
+                        '3xl': "32px",
+                    },
+                },
+            },
+        };
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-tap-highlight-color: transparent;
+            overscroll-behavior-y: contain;
+        }
+        
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        
+        .hide-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        
+        @keyframes slide-up {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .slide-up {
+            animation: slide-up 0.4s ease-out forwards;
+        }
+        
+        .slide-up-d1 {
+            animation: slide-up 0.4s ease-out 0.08s forwards;
+            opacity: 0;
+        }
+        
+        .slide-up-d2 {
+            animation: slide-up 0.4s ease-out 0.16s forwards;
+            opacity: 0;
+        }
+        
+        .slide-up-d3 {
+            animation: slide-up 0.4s ease-out 0.24s forwards;
+            opacity: 0;
+        }
+        
+        .slide-up-d4 {
+            animation: slide-up 0.4s ease-out 0.32s forwards;
+            opacity: 0;
+        }
+        
+        @keyframes pulse-ring {
+            0% {
+                transform: scale(0.9);
+                opacity: 0.7;
+            }
+            50% {
+                transform: scale(1.05);
+                opacity: 1;
+            }
+            100% {
+                transform: scale(0.9);
+                opacity: 0.7;
+            }
+        }
+        
+        .pulse-ring {
+            animation: pulse-ring 2s ease-in-out infinite;
+        }
+        
+        .pulse-ring-slow {
+            animation: pulse-ring 3s ease-in-out infinite;
+        }
+        
+        @keyframes count-up {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .count-up {
+            animation: count-up 0.6s ease-out forwards;
+        }
+        
+        @keyframes float {
+            0%,
+            100% {
+                transform: translateY(0px);
+            }
+            50% {
+                transform: translateY(-4px);
+            }
+        }
+        
+        .animate-float {
+            animation: float 3s ease-in-out infinite;
+        }
+        
+        @keyframes pulse-scale {
+            0%,
+            100% {
+                transform: scale(1);
+            }
+            50% {
+                transform: scale(1.03);
+            }
+        }
+        
+        .animate-pulse-scale {
+            animation: pulse-scale 2s ease-in-out infinite;
+        }
+        
+        @keyframes fade-in {
+            from {
+                opacity: 0;
+            }
+            to {
+                opacity: 1;
+            }
+        }
+        
+        .animate-fade-in {
+            animation: fade-in 0.3s ease-out forwards;
+        }
+        
+        @keyframes slide-in-right {
+            from {
+                opacity: 0;
+                transform: translateX(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+        
+        .animate-slide-in-right {
+            animation: slide-in-right 0.4s ease-out forwards;
+        }
+        
+        @keyframes slide-in-left {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+        
+        .animate-slide-in-left {
+            animation: slide-in-left 0.4s ease-out forwards;
+        }
+        
+        @keyframes bounce-slow {
+            0%,
+            100% {
+                transform: translateY(0);
+            }
+            50% {
+                transform: translateY(-8px);
+            }
+        }
+        
+        .animate-bounce-slow {
+            animation: bounce-slow 2s ease-in-out infinite;
+        }
+        
+        @keyframes pulse-slow {
+            0%,
+            100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.7;
+            }
+        }
+        
+        .animate-pulse-slow {
+            animation: pulse-slow 3s ease-in-out infinite;
+        }
+        
+        @keyframes count-up-animation {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .animate-count-up {
+            animation: count-up-animation 0.6s ease-out forwards;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-100 dark:bg-zinc-950 text-gray-900 dark:text-white">
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+</body>
+
+</html>

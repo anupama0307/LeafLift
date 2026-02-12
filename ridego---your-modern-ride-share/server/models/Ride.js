@@ -25,6 +25,16 @@ const RideSchema = new mongoose.Schema({
         lat: Number,
         lng: Number
     },
+    // Multi-stop waypoints
+    stops: [{
+        address: { type: String, required: true },
+        lat: { type: Number, required: true },
+        lng: { type: Number, required: true },
+        order: { type: Number, required: true },
+        status: { type: String, enum: ['PENDING', 'REACHED', 'SKIPPED'], default: 'PENDING' },
+        reachedAt: Date
+    }],
+    currentStopIndex: { type: Number, default: 0 },
     fare: Number,
     distance: String,
     duration: String,
@@ -68,6 +78,9 @@ const RideSchema = new mongoose.Schema({
         updatedAt: Date
     },
     etaToPickup: String,
+    etaToDropoff: String,
+    originalEtaMinutes: { type: Number, default: null },
+    lastDelayAlertAt: { type: Date, default: null },
     otp: String,
     otpVerified: {
         type: Boolean,
@@ -111,6 +124,17 @@ const RideSchema = new mongoose.Schema({
         type: Date,
         default: Date.now
     },
+    // Cancellation tracking
+    canceledBy: {
+        type: String,
+        enum: ['RIDER', 'DRIVER', 'SYSTEM', null],
+        default: null
+    },
+    cancelReason: { type: String, default: '' },
+    canceledAt: { type: Date, default: null },
+    cancellationFee: { type: Number, default: 0 },
+    autoReSearched: { type: Boolean, default: false },
+    previousDriverIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     createdAt: {
         type: Date,
         default: Date.now
