@@ -1228,10 +1228,12 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                     <button
                                                         key={opt.id}
                                                         onClick={() => setGenderPreference(opt.id as any)}
-                                                        className={`flex-1 flex flex-col items-center justify-center py-2 h-12 rounded-xl border transition-all ${genderPreference === opt.id ? 'bg-emerald-600 border-emerald-600 text-white shadow-md' : 'bg-white dark:bg-zinc-800 border-emerald-100 dark:border-emerald-800 text-zinc-400'}`}
+                                                        className={`flex-1 flex flex-col items-center justify-center py-2 h-12 rounded-xl border transition-all active:scale-95 ${genderPreference === opt.id
+                                                            ? 'bg-emerald-600 border-emerald-600 text-white shadow-lg shadow-emerald-500/20'
+                                                            : 'bg-white dark:bg-zinc-800 border-emerald-100 dark:border-emerald-800 text-zinc-400 hober:border-emerald-500/50'}`}
                                                     >
-                                                        <span className="material-icons text-sm mb-0.5">{opt.icon}</span>
-                                                        <span className="text-[9px] font-black uppercase tracking-widest">{opt.label}</span>
+                                                        <span className="material-icons text-sm mb-0.5 pointer-events-none">{opt.icon}</span>
+                                                        <span className="text-[9px] font-black uppercase tracking-widest pointer-events-none">{opt.label}</span>
                                                     </button>
                                                 ))}
                                             </div>

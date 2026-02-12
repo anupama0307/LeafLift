@@ -212,6 +212,14 @@ const ActiveRideScreen: React.FC<ActiveRideScreenProps> = ({ user, rideData, onB
                                         </span>
                                     </div>
                                 )}
+                                {ride.genderPreference && ride.genderPreference !== 'Any' && (
+                                    <div className="flex items-center gap-1 mt-1.5 px-2 py-0.5 bg-leaf-50 dark:bg-leaf-900/20 border border-leaf-100 dark:border-leaf-800 rounded-md w-fit">
+                                        <span className="material-icons text-[12px] text-leaf-600 dark:text-leaf-400">{ride.genderPreference === 'Female only' ? 'female' : 'male'}</span>
+                                        <span className="text-[9px] font-black text-leaf-600 dark:text-leaf-400 uppercase tracking-widest">
+                                            {ride.genderPreference}
+                                        </span>
+                                    </div>
+                                )}
                             </div>
 
                             <button onClick={() => setChatOpen(true)} className="size-12 bg-white dark:bg-zinc-800 rounded-2xl flex items-center justify-center shadow-sm border border-zinc-100 dark:border-zinc-700 active:scale-90 transition-all">

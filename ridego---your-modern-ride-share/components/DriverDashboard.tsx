@@ -1032,13 +1032,13 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
                             {req.isPooled ? 'Pool Request' : 'Private Ride'}
                           </span>
                           {req.genderPreference && req.genderPreference !== 'Any' && (
-                            <span className="px-2 py-1 bg-leaf-500 text-white rounded-lg text-[8px] font-black uppercase tracking-widest flex items-center gap-1">
+                            <span className="px-2 py-1 bg-leaf-500/10 dark:bg-leaf-400/10 text-leaf-600 dark:text-leaf-400 border border-leaf-200 dark:border-leaf-800 rounded-lg text-[8px] font-black uppercase tracking-widest flex items-center gap-1 shadow-sm">
                               <span className="material-icons text-[10px]">{req.genderPreference === 'Female only' ? 'female' : 'male'}</span>
                               {req.genderPreference}
                             </span>
                           )}
                           {(req.safetyOptions || []).includes('Women Safety') && (
-                            <span className="px-2 py-1 bg-pink-500 text-white rounded-lg text-[8px] font-black uppercase tracking-widest flex items-center gap-1">
+                            <span className="px-2 py-1 bg-pink-500/10 text-pink-600 border border-pink-200 rounded-lg text-[8px] font-black uppercase tracking-widest flex items-center gap-1 shadow-sm">
                               <span className="material-icons text-[10px]">female</span>
                               Women Safety
                             </span>
