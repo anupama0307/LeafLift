@@ -683,7 +683,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const fetchMatchingDrivers = async (start: { lat: number; lng: number }, end: { lat: number; lng: number }) => {
         try {
             const accStr = accessibilityOptions.join(',');
-            const resp = await fetch(`${API_BASE_URL}/api/rider/match-driver?pickupLat=${start.lat}&pickupLng=${start.lng}&dropoffLat=${end.lat}&dropoffLng=${end.lng}&accessibilityOptions=${accStr}&genderPreference=${genderPreference}`);
+            const resp = await fetch(`${API_BASE_URL}/api/rider/match-driver?pickupLat=${start.lat}&pickupLng=${start.lng}&dropoffLat=${end.lat}&dropoffLng=${end.lng}&accessibilityOptions=${accStr}&genderPreference=${genderPreference}&riderGender=${user?.gender}`);
             if (resp.ok) {
                 const data = await resp.json();
                 setMatchedDrivers(data);
@@ -853,7 +853,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
 
         const fetchPooledRides = async () => {
             try {
-                const url = `${API_BASE_URL}/api/rides/pooled-in-progress?lat=${pickupCoords.lat}&lng=${pickupCoords.lng}&destLat=${dropoffCoords.lat}&destLng=${dropoffCoords.lng}&vehicleCategory=${selectedCategory}&radius=3&gender=${user.gender}`;
+                const url = `${API_BASE_URL}/api/rides/pooled-in-progress?lat=${pickupCoords.lat}&lng=${pickupCoords.lng}&destLat=${dropoffCoords.lat}&destLng=${dropoffCoords.lng}&vehicleCategory=${selectedCategory}&radius=3&gender=${user.gender}&genderPreference=${genderPreference}`;
                 const resp = await fetch(url);
                 if (resp.ok) {
                     const data = await resp.json();

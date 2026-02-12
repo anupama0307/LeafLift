@@ -390,7 +390,7 @@ app.put('/api/users/:userId/privacy', async (req, res) => {
 app.post('/api/driver/route', async (req, res) => {
     console.log('📬 Received route update request:', JSON.stringify(req.body, null, 2));
     try {
-        const { userId, source, destination, isActive } = req.body;
+        const { userId, source, destination, isActive, genderPreference } = req.body;
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
 
@@ -405,7 +405,8 @@ app.post('/api/driver/route', async (req, res) => {
                 lat: Number(destination.lat),
                 lng: Number(destination.lng)
             },
-            isActive: isActive !== undefined ? isActive : true
+            isActive: isActive !== undefined ? isActive : true,
+            genderPreference: genderPreference || 'Any'
         };
         await user.save();
         console.log('✅ Route updated successfully for user:', userId);
@@ -450,11 +451,21 @@ app.get('/api/rider/match-driver', async (req, res) => {
                 if (!supportsAll) return false;
             }
 
-            // Gender preference filtering
-            const genPref = req.query.genderPreference;
-            if (genPref && genPref !== 'Any') {
-                const targetGender = genPref === 'Female only' ? 'Female' : 'Male';
+            // Gender preference filtering (Bidirectional)
+            const riderGenderPref = req.query.genderPreference;
+            const riderGender = req.query.riderGender;
+
+            // 1. Check Rider's preference vs Driver's gender
+            if (riderGenderPref && riderGenderPref !== 'Any') {
+                const targetGender = riderGenderPref === 'Female only' ? 'Female' : 'Male';
                 if (driver.gender !== targetGender) return false;
+            }
+
+            // 2. Check Driver's preference vs Rider's gender
+            const driverGenPref = driver.dailyRoute?.genderPreference;
+            if (driverGenPref && driverGenPref !== 'Any') {
+                const targetGender = driverGenPref === 'Female only' ? 'Female' : 'Male';
+                if (riderGender && riderGender !== targetGender) return false;
             }
 
             return pickupDist <= 5 && dropoffDist <= 5;
@@ -779,14 +790,30 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
             status: { $in: ['ACCEPTED', 'IN_PROGRESS'] },
             isPooled: true,
             vehicleCategory: vehicleCategory || { $in: ['CAR', 'BIG_CAR'] }
-        });
+        }).populate('userId driverId');
 
         const available = rides.filter((ride) => {
-            // Gender preference filtering
-            const riderGender = req.query.gender; // Assuming rider's gender is passed
+            const riderGender = req.query.gender;
+            const riderPref = req.query.genderPreference;
+
+            // 1. Check existing ride's preference vs joining rider's gender
             if (ride.genderPreference && ride.genderPreference !== 'Any') {
                 const targetGender = ride.genderPreference === 'Female only' ? 'Female' : 'Male';
                 if (riderGender && riderGender !== targetGender) return false;
+            }
+
+            // 2. Check joining rider's preference vs existing participants
+            if (riderPref && riderPref !== 'Any') {
+                const targetGender = riderPref === 'Female only' ? 'Female' : 'Male';
+
+                // Check original rider
+                if (ride.userId && ride.userId.gender !== targetGender) return false;
+
+                // Check driver
+                if (ride.driverId && ride.driverId.gender !== targetGender) return false;
+
+                // Check other pooled riders
+                if (ride.pooledRiders && ride.pooledRiders.some(pr => pr.gender && pr.gender !== targetGender)) return false;
             }
 
             // Check if ride has capacity
@@ -1139,6 +1166,7 @@ app.post('/api/rides/:rideId/pool/join', async (req, res) => {
             userId,
             firstName: newRider.firstName,
             lastName: newRider.lastName,
+            gender: newRider.gender,
             pickup,
             dropoff,
             status: 'PENDING_CONSENT'

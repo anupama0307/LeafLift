@@ -41,7 +41,8 @@ const userSchema = new mongoose.Schema({
             lat: Number,
             lng: Number
         },
-        isActive: { type: Boolean, default: false }
+        isActive: { type: Boolean, default: false },
+        genderPreference: { type: String, enum: ['Any', 'Male only', 'Female only'], default: 'Any' }
     },
     privacySettings: {
         shareStats: { type: Boolean, default: true },

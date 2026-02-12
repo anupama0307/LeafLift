@@ -67,6 +67,7 @@ const RideSchema = new mongoose.Schema({
         userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         firstName: String,
         lastName: String,
+        gender: String,
         pickup: { address: String, lat: Number, lng: Number },
         dropoff: { address: String, lat: Number, lng: Number },
         fareAdjustment: { type: Number, default: 0 },

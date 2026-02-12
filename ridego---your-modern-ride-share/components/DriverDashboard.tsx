@@ -62,6 +62,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
   const [routeSearchQuery, setRouteSearchQuery] = useState('');
   const [routeSearchType, setRouteSearchType] = useState<'source' | 'dest'>('source');
   const [routeSuggestions, setRouteSuggestions] = useState<OlaPlace[]>([]);
+  const [dailyRouteGenderPreference, setDailyRouteGenderPreference] = useState<'Any' | 'Male only' | 'Female only'>(user?.dailyRoute?.genderPreference || 'Any');
 
   const mapRef = useRef<any>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -555,7 +556,8 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
             lat: dailyRouteDest.latitude,
             lng: dailyRouteDest.longitude
           },
-          isActive: true
+          isActive: true,
+          genderPreference: dailyRouteGenderPreference
         })
       });
 
@@ -1284,6 +1286,29 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user }) => {
                       ))}
                     </div>
                   )}
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4 block ml-1">Commuter Preference</label>
+                  <div className="flex gap-3">
+                    {[
+                      { id: 'Any', label: 'Mixed', icon: 'groups' },
+                      { id: 'Male only', label: 'Male Only', icon: 'male' },
+                      { id: 'Female only', label: 'Female Only', icon: 'female' }
+                    ].map(opt => (
+                      <button
+                        key={opt.id}
+                        onClick={() => setDailyRouteGenderPreference(opt.id as any)}
+                        className={`flex-1 flex flex-col items-center justify-center py-3 rounded-2xl border transition-all ${dailyRouteGenderPreference === opt.id
+                          ? 'bg-leaf-600 border-leaf-600 text-white shadow-lg'
+                          : 'bg-gray-50 dark:bg-zinc-900 border-transparent text-gray-400 dark:text-zinc-500 hover:border-leaf-500/50'
+                          }`}
+                      >
+                        <span className="material-icons mb-1">{opt.icon}</span>
+                        <span className="text-[10px] font-black uppercase tracking-widest">{opt.label}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
