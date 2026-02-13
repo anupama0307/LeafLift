@@ -238,6 +238,20 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
       setPoolJoinRequests((prev) => [...prev, payload]);
     };
 
+    const handlePoolRiderJoined = (payload: any) => {
+      if (!payload?.rideId) return;
+      // Refresh active ride to get updated pooledRiders
+      if (activeRide?._id === payload.rideId) {
+        fetch(`${API_BASE_URL}/api/rides/${payload.rideId}`)
+          .then(res => res.json())
+          .then(data => {
+            setActiveRide(data);
+            setCurrentFare(data.currentFare || data.fare);
+          });
+        alert(`✅ ${payload.newRider?.name || 'A rider'} joined your pool! New fare: ₹${payload.perPersonFare}`);
+      }
+    };
+
     const handleNewNotification = (notification: any) => {
       setNotifications(prev => [notification, ...prev]);
     };
@@ -284,6 +298,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
     socket.on('nearby:rider:update', handleNearbyRiderUpdate);
     socket.on('nearby:rider:remove', handleNearbyRiderRemove);
     socket.on('pool:join-request', handlePoolJoinRequest);
+    socket.on('pool:rider-joined', handlePoolRiderJoined);
     socket.on('ride:stop-reached', handleStopReached);
     socket.on('ride:stop-skipped', handleStopSkipped);
     socket.on('ride:canceled', handleRideCanceled);
@@ -298,6 +313,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
       socket.off('chat:message', handleChatMessage);
       socket.off('nearby:rider:update', handleNearbyRiderUpdate);
       socket.off('nearby:rider:remove', handleNearbyRiderRemove);
+      socket.off('pool:rider-joined', handlePoolRiderJoined);
       socket.off('pool:join-request', handlePoolJoinRequest);
       socket.off('ride:stop-reached', handleStopReached);
       socket.off('ride:stop-skipped', handleStopSkipped);
@@ -1088,6 +1104,35 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
               <span className="material-icons-outlined">chat</span>
             </button>
           </div>
+
+          {/* Pooled Riders */}
+          {activeRide?.isPooled && activeRide?.pooledRiders && activeRide.pooledRiders.length > 0 && (
+            <div className="mb-4 p-3 bg-green-50 dark:bg-green-900/20 rounded-xl border border-green-200 dark:border-green-800">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="material-icons-outlined text-green-600 dark:text-green-400 text-sm">group</span>
+                <span className="text-xs font-bold text-green-700 dark:text-green-400 uppercase tracking-wider">
+                  Pool Riders ({activeRide.pooledRiders.length + 1})
+                </span>
+              </div>
+              <div className="space-y-2">
+                {activeRide.pooledRiders.map((rider: any, idx: number) => (
+                  <div key={idx} className="flex items-center gap-2 p-2 bg-white dark:bg-zinc-800 rounded-lg">
+                    <div className="w-8 h-8 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center shrink-0">
+                      <span className="material-icons-outlined text-green-600 dark:text-green-400 text-sm">person</span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-bold text-gray-900 dark:text-white truncate">
+                        {rider.firstName} {rider.lastName}
+                      </div>
+                      <div className="text-[10px] text-gray-500 dark:text-gray-400 truncate">
+                        {rider.pickup?.address?.split(',')[0]} → {rider.dropoff?.address?.split(',')[0]}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {currentFare !== null && (
             <div className="flex items-center justify-between mb-3">

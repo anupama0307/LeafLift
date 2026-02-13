@@ -50,6 +50,10 @@ const RideSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    routePolyline: {
+        type: String,
+        default: ''
+    },
     co2Emissions: {
         type: Number,
         default: 0
@@ -64,6 +68,18 @@ const RideSchema = new mongoose.Schema({
     },
     pooledRiders: [{
         userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        firstName: String,
+        lastName: String,
+        pickup: {
+            address: String,
+            lat: Number,
+            lng: Number
+        },
+        dropoff: {
+            address: String,
+            lat: Number,
+            lng: Number
+        },
         fareAdjustment: { type: Number, default: 0 },
         joinedAt: { type: Date, default: Date.now }
     }],

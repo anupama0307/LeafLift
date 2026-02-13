@@ -149,6 +149,13 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         }
     }, [initialVehicleCategory]);
 
+    // ─── Auto-switch to Solo for BIKE/AUTO (no pooling) ───
+    useEffect(() => {
+        if ((selectedCategory === 'BIKE' || selectedCategory === 'AUTO') && rideMode === 'Pooled') {
+            setRideMode('Solo');
+        }
+    }, [selectedCategory, rideMode]);
+
     // ─── Socket setup ───
     useEffect(() => {
         const userStr = localStorage.getItem('leaflift_user');
@@ -311,6 +318,13 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             if (payload?.driverId) {
                 removeNearbyDriverMarker(payload.driverId);
                 nearbyDriverPositionsRef.current.delete(payload.driverId);
+            }
+        });
+
+        socket.on('pool:rider-joined', (payload: any) => {
+            if (payload?.rideId && activeRideId === payload.rideId) {
+                alert(`✅ ${payload.newRider?.name || 'A rider'} joined your pool! New fare per person: ₹${payload.perPersonFare}`);
+                setCurrentFare(payload.perPersonFare);
             }
         });
 
@@ -1041,7 +1055,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
 
         const fetchPooledRides = async () => {
             try {
-                const url = `${API_BASE_URL}/api/rides/pooled-in-progress?lat=${pickupCoords.lat}&lng=${pickupCoords.lng}&destLat=${dropoffCoords.lat}&destLng=${dropoffCoords.lng}&vehicleCategory=${selectedCategory}&radius=3`;
+                const url = `${API_BASE_URL}/api/rides/pooled-in-progress?lat=${pickupCoords.lat}&lng=${pickupCoords.lng}&destLat=${dropoffCoords.lat}&destLng=${dropoffCoords.lng}&vehicleCategory=${selectedCategory}&bufferKm=0.5`;
                 const resp = await fetch(url);
                 if (resp.ok) {
                     const data = await resp.json();
@@ -1511,6 +1525,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             const co2Solo = route ? calculateCO2(route.distance, selectedCategory) : 0;
                             const co2Pool = route ? calculateCO2(route.distance, 'pool') : 0;
                             const co2Saved = co2Solo - co2Pool;
+                            const canPool = selectedCategory === 'CAR' || selectedCategory === 'BIG_CAR';
                             return (
                                 <>
                                     <div className="flex gap-2 mt-3">
@@ -1523,17 +1538,19 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                         >
                                             Solo {rideMode === 'Solo' && route ? `• ₹${soloPrice}` : ''}
                                         </button>
-                                        <button
-                                            onClick={() => setRideMode('Pooled')}
-                                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Pooled'
-                                                ? 'bg-green-500 text-white'
-                                                : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
-                                                }`}
-                                        >
-                                            🌱 Pool {rideMode === 'Pooled' && route ? `• ₹${poolPrice}` : ''}
-                                        </button>
+                                        {canPool && (
+                                            <button
+                                                onClick={() => setRideMode('Pooled')}
+                                                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Pooled'
+                                                    ? 'bg-green-500 text-white'
+                                                    : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
+                                                    }`}
+                                            >
+                                                🌱 Pool {rideMode === 'Pooled' && route ? `• ₹${poolPrice}` : ''}
+                                            </button>
+                                        )}
                                     </div>
-                                    {route && fareSaved > 0 && (
+                                    {route && fareSaved > 0 && canPool && (
                                         <div className={`mt-2 p-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all ${rideMode === 'Pooled'
                                             ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
                                             : 'bg-gray-50 dark:bg-zinc-800 text-gray-500 dark:text-gray-400'
@@ -1636,31 +1653,61 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
 
                     {/* In-Progress Pooled Rides */}
                     {rideMode === 'Pooled' && inProgressPooledRides.length > 0 && (
-                        <div className="px-4 py-2">
-                            <h3 className="text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">
-                                🚗 Join Ongoing Pool Rides
+                        <div className="px-4 py-3 mb-4">
+                            <h3 className="text-sm font-bold text-gray-700 dark:text-gray-300 mb-3">
+                                🚗 Join Ongoing Pool Rides ({inProgressPooledRides.length})
                             </h3>
-                            <div className="space-y-2">
+                            <div className="space-y-3 max-h-[calc(100vh-400px)] min-h-[300px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-gray-200 dark:scrollbar-thumb-gray-600 dark:scrollbar-track-gray-800">
                                 {inProgressPooledRides.map((ride) => (
                                     <div
                                         key={ride._id}
                                         className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800"
                                     >
-                                        <div className="flex items-center justify-between">
-                                            <div className="flex-1">
-                                                <div className="flex items-center gap-2">
+                                        <div className="flex items-stretch gap-3">
+                                            <div className="flex-1 min-w-0">
+                                                {/* Vehicle & Driver Info */}
+                                                <div className="flex items-center gap-2 mb-2">
                                                     <span className="material-icons text-green-600 dark:text-green-400" style={{ fontSize: '18px' }}>
                                                         {ride.vehicleCategory === 'BIG_CAR' ? 'airport_shuttle' : 'directions_car'}
                                                     </span>
-                                                    <span className="text-sm font-bold text-gray-800 dark:text-gray-200">
-                                                        {ride.vehicleCategory === 'BIG_CAR' ? 'SUV' : 'Car'}
-                                                    </span>
+                                                    <div className="flex-1">
+                                                        <span className="text-sm font-bold text-gray-800 dark:text-gray-200">
+                                                            {ride.driver?.firstName || 'Driver'} {ride.driver?.lastName || ''}
+                                                        </span>
+                                                        {ride.driver?.rating && (
+                                                            <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">
+                                                                ⭐ {ride.driver.rating.toFixed(1)}
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                 </div>
-                                                <div className="flex items-center gap-3 mt-1.5">
+
+                                                {/* Current Riders */}
+                                                {ride.riders && ride.riders.length > 0 && (
+                                                    <div className="mb-2 p-2 bg-white dark:bg-zinc-800 rounded border border-gray-200 dark:border-zinc-700">
+                                                        <div className="text-[10px] font-bold text-gray-500 dark:text-gray-400 mb-1">
+                                                            CURRENT RIDERS:
+                                                        </div>
+                                                        <div className="flex flex-wrap gap-1.5">
+                                                            {ride.riders.map((rider, idx) => (
+                                                                <div key={idx} className="flex items-center gap-1 px-2 py-0.5 bg-gray-100 dark:bg-zinc-700 rounded-full">
+                                                                    <span className="material-icons-outlined text-gray-600 dark:text-gray-300" style={{ fontSize: '12px' }}>person</span>
+                                                                    <span className="text-[10px] font-semibold text-gray-700 dark:text-gray-300">
+                                                                        {rider.name}
+                                                                        {rider.isOriginal && <span className="text-green-500 ml-0.5">★</span>}
+                                                                    </span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {/* Seats & Status */}
+                                                <div className="flex items-center gap-3 mb-2">
                                                     <div className="flex items-center gap-1">
                                                         <span className="material-icons-outlined text-gray-500 dark:text-gray-400" style={{ fontSize: '14px' }}>group</span>
                                                         <span className="text-xs font-bold text-gray-700 dark:text-gray-300">
-                                                            {ride.currentPassengers || ride.passengers || 1} in car
+                                                            {ride.currentPassengers} in car
                                                         </span>
                                                     </div>
                                                     <div className="flex items-center gap-1">
@@ -1670,19 +1717,48 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                         </span>
                                                     </div>
                                                 </div>
-                                                <div className="flex items-center gap-0.5 mt-1">
+
+                                                {/* Seat Visualization */}
+                                                <div className="flex items-center gap-0.5 mb-2">
                                                     {Array.from({ length: ride.maxPassengers || 4 }).map((_, i) => (
                                                         <span
                                                             key={i}
                                                             className="material-icons-outlined"
-                                                            style={{ fontSize: '14px', color: i < (ride.currentPassengers || ride.passengers || 1) ? '#16a34a' : '#d1d5db' }}
+                                                            style={{ fontSize: '14px', color: i < (ride.currentPassengers || 1) ? '#16a34a' : '#d1d5db' }}
                                                         >person</span>
                                                     ))}
                                                 </div>
-                                                <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
-                                                    {ride.status === 'ACCEPTED' ? '📍 Picking up' : '🚗 En route'}
+
+                                                {/* Fare & Savings */}
+                                                {ride.reducedFare && (
+                                                    <div className="p-2 bg-gradient-to-r from-green-100 to-emerald-50 dark:from-green-900/30 dark:to-emerald-900/20 rounded border border-green-300 dark:border-green-700">
+                                                        <div className="flex items-center justify-between">
+                                                            <div>
+                                                                <div className="text-xs text-gray-500 dark:text-gray-400 line-through">
+                                                                    ₹{ride.originalFare}
+                                                                </div>
+                                                                <div className="text-lg font-bold text-green-700 dark:text-green-400">
+                                                                    ₹{ride.reducedFare}
+                                                                </div>
+                                                            </div>
+                                                            <div className="text-right">
+                                                                <div className="text-xs font-bold text-green-600 dark:text-green-400">
+                                                                    Save ₹{ride.savingsAmount}
+                                                                </div>
+                                                                <div className="text-[10px] text-green-500">
+                                                                    {ride.savingsPercent}% off
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-2">
+                                                    {ride.status === 'ACCEPTED' ? '📍 Driver heading to pickup' : '🚗 Ride in progress'}
                                                 </p>
                                             </div>
+
+                                            {/* Join Button */}
                                             <button
                                                 onClick={async () => {
                                                     const userStr = localStorage.getItem('leaflift_user');
@@ -1699,16 +1775,23 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                                 passengers
                                                             })
                                                         });
+                                                        const data = await resp.json();
                                                         if (resp.ok) {
-                                                            alert('Pool request sent to driver!');
+                                                            alert(`✅ ${data.message}\n💰 Your fare: ₹${data.perPersonFare}\n👥 Total passengers: ${data.totalPassengers}`);
+                                                            // Remove this ride from available list
+                                                            setInProgressPooledRides(prev => prev.filter(r => r._id !== ride._id));
+                                                        } else {
+                                                            alert(`❌ ${data.message || 'Could not join ride'}`);
                                                         }
                                                     } catch (error) {
                                                         console.error('Join pool error:', error);
+                                                        alert('❌ Error joining pool. Please try again.');
                                                     }
                                                 }}
-                                                className="px-3 py-1.5 bg-green-500 text-white text-xs font-bold rounded-lg hover:bg-green-600"
+                                                className="flex flex-col items-center justify-center px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 active:scale-95 transition-all shadow-md shrink-0"
                                             >
-                                                Join
+                                                <span className="text-xs font-bold">Join</span>
+                                                <span className="text-lg font-black">₹{ride.reducedFare}</span>
                                             </button>
                                         </div>
                                     </div>
@@ -1765,7 +1848,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
 
                     {/* Vehicle Categories */}
                     <div className="px-4 py-2">
-                        {VEHICLE_CATEGORIES.filter(cat => !(rideMode === 'Pooled' && cat.id === 'BIKE')).map(cat => {
+                        {VEHICLE_CATEGORIES.map(cat => {
                             const price = categoryPrices.get(cat.id) || 0;
                             const route = availableRoutes[selectedRouteIndex];
                             const soloPrice = route ? Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate) : 0;
