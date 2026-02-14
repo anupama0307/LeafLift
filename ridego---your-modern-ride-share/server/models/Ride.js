@@ -66,6 +66,26 @@ const RideSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    poolGroupId: {
+        type: String,
+        default: null
+    },
+    // Sequential stops for pooled rides (pickup A → pickup B → dropoff A → dropoff B)
+    poolStops: [{
+        type: { type: String, enum: ['PICKUP', 'DROPOFF'] },
+        riderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        riderName: String,
+        rideId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ride' },
+        address: String,
+        lat: Number,
+        lng: Number,
+        order: Number,
+        status: { type: String, enum: ['PENDING', 'REACHED', 'COMPLETED'], default: 'PENDING' },
+        reachedAt: Date,
+        otp: String,
+        otpVerified: { type: Boolean, default: false }
+    }],
+    currentPoolStopIndex: { type: Number, default: 0 },
     pooledRiders: [{
         userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         firstName: String,

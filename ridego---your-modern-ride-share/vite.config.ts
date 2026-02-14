@@ -7,7 +7,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     server: {
-      port: 3005,
+      port: parseInt(env.VITE_DEV_PORT || '3005', 10),
       host: '0.0.0.0',
       headers: {
         'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
@@ -15,7 +15,7 @@ export default defineConfig(({ mode }) => {
       proxy: {
         // Proxy API requests to backend
         '/api': {
-          target: 'http://localhost:5001',
+          target: env.VITE_API_BASE_URL || 'http://localhost:5000',
           changeOrigin: true,
           secure: false,
         }

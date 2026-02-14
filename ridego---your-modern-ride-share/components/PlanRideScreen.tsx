@@ -67,6 +67,14 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [inProgressPooledRides, setInProgressPooledRides] = useState<any[]>([]);
     const [matchedDrivers, setMatchedDrivers] = useState<DriverDetails[]>([]);
     const [isNoDriversFound, setIsNoDriversFound] = useState(false);
+    const [poolMatchInfo, setPoolMatchInfo] = useState<{
+        poolGroupId: string;
+        matchedRider: { name: string; pickup: any; dropoff: any };
+        originalFare: number;
+        poolFare: number;
+    } | null>(null);
+    const [poolStopUpdates, setPoolStopUpdates] = useState<any[]>([]);
+    const poolMatchedRef = useRef(false);
 
     // ─── Live ETA State ───
     const [liveEtaText, setLiveEtaText] = useState<string | null>(null);
@@ -328,6 +336,27 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             }
         });
 
+        socket.on('pool:matched', (payload: any) => {
+            console.log('🤝 Pool match received:', payload);
+            if (payload?.matchedRider) {
+                poolMatchedRef.current = true;
+                setPoolMatchInfo({
+                    poolGroupId: payload.poolGroupId,
+                    matchedRider: payload.matchedRider,
+                    originalFare: payload.originalFare || 0,
+                    poolFare: payload.poolFare || 0
+                });
+                if (payload.poolFare) {
+                    setCurrentFare(payload.poolFare);
+                }
+            }
+        });
+
+        socket.on('pool:stop-update', (payload: any) => {
+            console.log('📍 Pool stop update:', payload);
+            setPoolStopUpdates(prev => [...prev, payload]);
+        });
+
         return () => { socket.removeAllListeners(); };
     }, []);
 
@@ -336,16 +365,21 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         let timer: NodeJS.Timeout;
         if (rideStatus === 'SEARCHING') {
             setIsNoDriversFound(false);
+            poolMatchedRef.current = false;
+            // Pooled rides get longer timeout (60s) since rider matching + driver search takes more time
+            const timeoutMs = rideMode === 'Pooled' ? 60000 : 15000;
             timer = setTimeout(() => {
-                if (rideStatus === 'SEARCHING') {
+                if (rideStatus === 'SEARCHING' && !poolMatchedRef.current) {
                     setIsNoDriversFound(true);
                 }
-            }, 15000); // 15 seconds timeout
+                // If pool matched but no driver yet, don't show 'no drivers' — keep waiting
+            }, timeoutMs);
         } else {
             setIsNoDriversFound(false);
+            setPoolMatchInfo(null);
         }
         return () => clearTimeout(timer);
-    }, [rideStatus]);
+    }, [rideStatus, rideMode]);
 
     // ─── Join ride room & load messages ───
     useEffect(() => {
@@ -1042,7 +1076,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         }
     }, [rideMode]);
 
-    // ─── Fetch in-progress pooled rides for joining ───
+    // ─── Fetch matching pooled rides (rider-to-rider) ───
     useEffect(() => {
         if (!pickupCoords || !dropoffCoords || rideMode !== 'Pooled') {
             setInProgressPooledRides([]);
@@ -1055,7 +1089,10 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
 
         const fetchPooledRides = async () => {
             try {
-                const url = `${API_BASE_URL}/api/rides/pooled-in-progress?lat=${pickupCoords.lat}&lng=${pickupCoords.lng}&destLat=${dropoffCoords.lat}&destLng=${dropoffCoords.lng}&vehicleCategory=${selectedCategory}&bufferKm=0.5`;
+                const userStr = localStorage.getItem('leaflift_user');
+                const currentUser = userStr ? JSON.parse(userStr) : null;
+                const excludeParam = currentUser?._id ? `&excludeUserId=${currentUser._id}` : '';
+                const url = `${API_BASE_URL}/api/rides/pooled-in-progress?lat=${pickupCoords.lat}&lng=${pickupCoords.lng}&destLat=${dropoffCoords.lat}&destLng=${dropoffCoords.lng}&vehicleCategory=${selectedCategory}&bufferKm=0.5${excludeParam}`;
                 const resp = await fetch(url);
                 if (resp.ok) {
                     const data = await resp.json();
@@ -1618,11 +1655,10 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                     ].map(pref => (
                                         <label
                                             key={pref.key}
-                                            className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition-all ${
-                                                safetyPrefs[pref.key]
-                                                    ? 'border-green-400 bg-green-50 dark:bg-green-900/20 dark:border-green-700'
-                                                    : 'border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50'
-                                            }`}
+                                            className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition-all ${safetyPrefs[pref.key]
+                                                ? 'border-green-400 bg-green-50 dark:bg-green-900/20 dark:border-green-700'
+                                                : 'border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50'
+                                                }`}
                                         >
                                             <input
                                                 type="checkbox"
@@ -1630,11 +1666,10 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                 onChange={() => setSafetyPrefs(prev => ({ ...prev, [pref.key]: !prev[pref.key] }))}
                                                 className="sr-only"
                                             />
-                                            <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-all ${
-                                                safetyPrefs[pref.key]
-                                                    ? 'bg-green-500 border-green-500'
-                                                    : 'border-gray-300 dark:border-zinc-600'
-                                            }`}>
+                                            <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-all ${safetyPrefs[pref.key]
+                                                ? 'bg-green-500 border-green-500'
+                                                : 'border-gray-300 dark:border-zinc-600'
+                                                }`}>
                                                 {safetyPrefs[pref.key] && (
                                                     <span className="material-icons-outlined text-white" style={{ fontSize: '14px' }}>check</span>
                                                 )}
@@ -1651,251 +1686,178 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         )}
 
 
-                    {/* In-Progress Pooled Rides */}
-                    {rideMode === 'Pooled' && inProgressPooledRides.length > 0 && (
-                        <div className="px-4 py-3 mb-4">
-                            <h3 className="text-sm font-bold text-gray-700 dark:text-gray-300 mb-3">
-                                🚗 Join Ongoing Pool Rides ({inProgressPooledRides.length})
-                            </h3>
-                            <div className="space-y-3 max-h-[calc(100vh-400px)] min-h-[300px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-gray-200 dark:scrollbar-thumb-gray-600 dark:scrollbar-track-gray-800">
-                                {inProgressPooledRides.map((ride) => (
-                                    <div
-                                        key={ride._id}
-                                        className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800"
-                                    >
-                                        <div className="flex items-stretch gap-3">
-                                            <div className="flex-1 min-w-0">
-                                                {/* Vehicle & Driver Info */}
-                                                <div className="flex items-center gap-2 mb-2">
-                                                    <span className="material-icons text-green-600 dark:text-green-400" style={{ fontSize: '18px' }}>
-                                                        {ride.vehicleCategory === 'BIG_CAR' ? 'airport_shuttle' : 'directions_car'}
-                                                    </span>
-                                                    <div className="flex-1">
-                                                        <span className="text-sm font-bold text-gray-800 dark:text-gray-200">
-                                                            {ride.driver?.firstName || 'Driver'} {ride.driver?.lastName || ''}
+                        {/* Matched Pooled Riders (Rider-to-Rider) */}
+                        {rideMode === 'Pooled' && inProgressPooledRides.length > 0 && (
+                            <div className="px-4 py-3 mb-4">
+                                <h3 className="text-sm font-bold text-gray-700 dark:text-gray-300 mb-3">
+                                    🤝 Riders Going Your Way ({inProgressPooledRides.length})
+                                </h3>
+                                <div className="space-y-3 max-h-[calc(100vh-400px)] min-h-[200px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-gray-200 dark:scrollbar-thumb-gray-600 dark:scrollbar-track-gray-800">
+                                    {inProgressPooledRides.map((ride: any) => (
+                                        <div
+                                            key={ride._id}
+                                            className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800"
+                                        >
+                                            <div className="flex items-stretch gap-3">
+                                                <div className="flex-1 min-w-0">
+                                                    {/* Matched Rider Info */}
+                                                    <div className="flex items-center gap-2 mb-2">
+                                                        <span className="material-icons text-blue-600 dark:text-blue-400" style={{ fontSize: '18px' }}>
+                                                            person
                                                         </span>
-                                                        {ride.driver?.rating && (
-                                                            <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">
-                                                                ⭐ {ride.driver.rating.toFixed(1)}
+                                                        <div className="flex-1">
+                                                            <span className="text-sm font-bold text-gray-800 dark:text-gray-200">
+                                                                {ride.rider?.name || 'Rider'}
                                                             </span>
-                                                        )}
+                                                            {ride.rider?.rating && (
+                                                                <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">
+                                                                    ⭐ {typeof ride.rider.rating === 'number' ? ride.rider.rating.toFixed(1) : ride.rider.rating}
+                                                                </span>
+                                                            )}
+                                                        </div>
                                                     </div>
-                                                </div>
 
-                                                {/* Current Riders */}
-                                                {ride.riders && ride.riders.length > 0 && (
+                                                    {/* Route Info */}
                                                     <div className="mb-2 p-2 bg-white dark:bg-zinc-800 rounded border border-gray-200 dark:border-zinc-700">
-                                                        <div className="text-[10px] font-bold text-gray-500 dark:text-gray-400 mb-1">
-                                                            CURRENT RIDERS:
+                                                        <div className="flex items-start gap-2 mb-1">
+                                                            <span className="material-icons text-green-500" style={{ fontSize: '14px', marginTop: '2px' }}>trip_origin</span>
+                                                            <span className="text-[11px] text-gray-600 dark:text-gray-400 line-clamp-1">
+                                                                {ride.pickup?.address || 'Pickup nearby'}
+                                                            </span>
                                                         </div>
-                                                        <div className="flex flex-wrap gap-1.5">
-                                                            {ride.riders.map((rider, idx) => (
-                                                                <div key={idx} className="flex items-center gap-1 px-2 py-0.5 bg-gray-100 dark:bg-zinc-700 rounded-full">
-                                                                    <span className="material-icons-outlined text-gray-600 dark:text-gray-300" style={{ fontSize: '12px' }}>person</span>
-                                                                    <span className="text-[10px] font-semibold text-gray-700 dark:text-gray-300">
-                                                                        {rider.name}
-                                                                        {rider.isOriginal && <span className="text-green-500 ml-0.5">★</span>}
-                                                                    </span>
-                                                                </div>
-                                                            ))}
+                                                        <div className="flex items-start gap-2">
+                                                            <span className="material-icons text-red-500" style={{ fontSize: '14px', marginTop: '2px' }}>location_on</span>
+                                                            <span className="text-[11px] text-gray-600 dark:text-gray-400 line-clamp-1">
+                                                                {ride.dropoff?.address || 'Same direction'}
+                                                            </span>
                                                         </div>
                                                     </div>
-                                                )}
 
-                                                {/* Seats & Status */}
-                                                <div className="flex items-center gap-3 mb-2">
-                                                    <div className="flex items-center gap-1">
-                                                        <span className="material-icons-outlined text-gray-500 dark:text-gray-400" style={{ fontSize: '14px' }}>group</span>
-                                                        <span className="text-xs font-bold text-gray-700 dark:text-gray-300">
-                                                            {ride.currentPassengers} in car
+                                                    {/* Match Quality */}
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-[10px] px-2 py-0.5 bg-blue-100 dark:bg-blue-800 text-blue-700 dark:text-blue-300 rounded-full font-bold">
+                                                            {ride.matchDetails?.matchType === 'geometric' ? '📐 Route Match' : '📍 Nearby'}
                                                         </span>
-                                                    </div>
-                                                    <div className="flex items-center gap-1">
-                                                        <span className="material-icons-outlined text-green-500" style={{ fontSize: '14px' }}>event_seat</span>
-                                                        <span className="text-xs font-bold text-green-600 dark:text-green-400">
-                                                            {ride.availableSeats} seat{ride.availableSeats > 1 ? 's' : ''} free
+                                                        <span className="text-[10px] text-gray-500 dark:text-gray-400">
+                                                            {ride.vehicleCategory || 'CAR'}
                                                         </span>
                                                     </div>
                                                 </div>
 
-                                                {/* Seat Visualization */}
-                                                <div className="flex items-center gap-0.5 mb-2">
-                                                    {Array.from({ length: ride.maxPassengers || 4 }).map((_, i) => (
-                                                        <span
-                                                            key={i}
-                                                            className="material-icons-outlined"
-                                                            style={{ fontSize: '14px', color: i < (ride.currentPassengers || 1) ? '#16a34a' : '#d1d5db' }}
-                                                        >person</span>
-                                                    ))}
-                                                </div>
+                                                {/* Pool Together Button */}
+                                                <button
+                                                    onClick={async () => {
+                                                        // Book a pooled ride — the server will auto-match with this rider
+                                                        handleConfirmRide();
+                                                    }}
+                                                    className="flex flex-col items-center justify-center px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 active:scale-95 transition-all shadow-md shrink-0"
+                                                >
+                                                    <span className="text-xs font-bold">Pool</span>
+                                                    <span className="text-[10px] mt-0.5">Together</span>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
 
-                                                {/* Fare & Savings */}
-                                                {ride.reducedFare && (
-                                                    <div className="p-2 bg-gradient-to-r from-green-100 to-emerald-50 dark:from-green-900/30 dark:to-emerald-900/20 rounded border border-green-300 dark:border-green-700">
-                                                        <div className="flex items-center justify-between">
-                                                            <div>
-                                                                <div className="text-xs text-gray-500 dark:text-gray-400 line-through">
-                                                                    ₹{ride.originalFare}
-                                                                </div>
-                                                                <div className="text-lg font-bold text-green-700 dark:text-green-400">
-                                                                    ₹{ride.reducedFare}
-                                                                </div>
-                                                            </div>
-                                                            <div className="text-right">
-                                                                <div className="text-xs font-bold text-green-600 dark:text-green-400">
-                                                                    Save ₹{ride.savingsAmount}
-                                                                </div>
-                                                                <div className="text-[10px] text-green-500">
-                                                                    {ride.savingsPercent}% off
-                                                                </div>
-                                                            </div>
+
+                        {matchedDrivers.length > 0 && (
+                            <div className="mb-6 px-4">
+                                <div className="flex justify-between items-center mb-4 px-1">
+                                    <h3 className="text-[10px] font-black uppercase tracking-[.25em] text-gray-400">Available Drivers</h3>
+                                    <span className="text-[10px] font-black text-leaf-500 uppercase tracking-widest">{matchedDrivers.length} Found</span>
+                                </div>
+                                <div className="space-y-4">
+                                    {matchedDrivers.map((driver) => (
+                                        <div key={driver.id} className="bg-[#fbfbfb] dark:bg-zinc-900/50 border border-gray-100 dark:border-zinc-800 p-5 rounded-[32px] transition-all hover:border-leaf-500/30 group shadow-sm">
+                                            <div className="flex items-center gap-4 mb-4">
+                                                <div className="relative">
+                                                    <img src={driver.photoUrl || `https://i.pravatar.cc/150?u=${driver.id}`} alt={driver.name} className="w-14 h-14 rounded-2xl object-cover border border-gray-100 dark:border-zinc-800 shadow-md" />
+                                                    <div className="absolute -bottom-1 -right-1 bg-leaf-500 size-5 flex items-center justify-center rounded-lg border-2 border-white dark:border-zinc-900 shadow-sm">
+                                                        <span className="material-icons-outlined text-white text-[10px] font-black">verified</span>
+                                                    </div>
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex justify-between items-start">
+                                                        <div className="text-lg font-black dark:text-white truncate pr-2">{driver.name}</div>
+                                                        <div className="flex items-center gap-1 bg-yellow-400/10 px-2 py-0.5 rounded-full border border-yellow-400/20">
+                                                            <span className="material-icons-outlined text-yellow-500 text-xs">star</span>
+                                                            <span className="text-[10px] font-black text-yellow-600 dark:text-yellow-400">{driver.rating}</span>
                                                         </div>
                                                     </div>
-                                                )}
-
-                                                <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-2">
-                                                    {ride.status === 'ACCEPTED' ? '📍 Driver heading to pickup' : '🚗 Ride in progress'}
-                                                </p>
-                                            </div>
-
-                                            {/* Join Button */}
-                                            <button
-                                                onClick={async () => {
-                                                    const userStr = localStorage.getItem('leaflift_user');
-                                                    const user = userStr ? JSON.parse(userStr) : null;
-                                                    if (!user?._id) return;
-                                                    try {
-                                                        const resp = await fetch(`${API_BASE_URL}/api/rides/${ride._id}/pool/join`, {
-                                                            method: 'POST',
-                                                            headers: { 'Content-Type': 'application/json' },
-                                                            body: JSON.stringify({
-                                                                userId: user._id,
-                                                                pickup: { address: pickup, lat: pickupCoords?.lat, lng: pickupCoords?.lng },
-                                                                dropoff: { address: destination, lat: dropoffCoords?.lat, lng: dropoffCoords?.lng },
-                                                                passengers
-                                                            })
-                                                        });
-                                                        const data = await resp.json();
-                                                        if (resp.ok) {
-                                                            alert(`✅ ${data.message}\n💰 Your fare: ₹${data.perPersonFare}\n👥 Total passengers: ${data.totalPassengers}`);
-                                                            // Remove this ride from available list
-                                                            setInProgressPooledRides(prev => prev.filter(r => r._id !== ride._id));
-                                                        } else {
-                                                            alert(`❌ ${data.message || 'Could not join ride'}`);
-                                                        }
-                                                    } catch (error) {
-                                                        console.error('Join pool error:', error);
-                                                        alert('❌ Error joining pool. Please try again.');
-                                                    }
-                                                }}
-                                                className="flex flex-col items-center justify-center px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 active:scale-95 transition-all shadow-md shrink-0"
-                                            >
-                                                <span className="text-xs font-bold">Join</span>
-                                                <span className="text-lg font-black">₹{ride.reducedFare}</span>
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-
-                    {matchedDrivers.length > 0 && (
-                        <div className="mb-6 px-4">
-                            <div className="flex justify-between items-center mb-4 px-1">
-                                <h3 className="text-[10px] font-black uppercase tracking-[.25em] text-gray-400">Recommended Partners</h3>
-                                <span className="text-[10px] font-black text-leaf-500 uppercase tracking-widest">{matchedDrivers.length} Found</span>
-                            </div>
-                            <div className="space-y-4">
-                                {matchedDrivers.map((driver) => (
-                                    <div key={driver.id} className="bg-[#fbfbfb] dark:bg-zinc-900/50 border border-gray-100 dark:border-zinc-800 p-5 rounded-[32px] transition-all hover:border-leaf-500/30 group shadow-sm">
-                                        <div className="flex items-center gap-4 mb-4">
-                                            <div className="relative">
-                                                <img src={driver.photoUrl || `https://i.pravatar.cc/150?u=${driver.id}`} alt={driver.name} className="w-14 h-14 rounded-2xl object-cover border border-gray-100 dark:border-zinc-800 shadow-md" />
-                                                <div className="absolute -bottom-1 -right-1 bg-leaf-500 size-5 flex items-center justify-center rounded-lg border-2 border-white dark:border-zinc-900 shadow-sm">
-                                                    <span className="material-icons-outlined text-white text-[10px] font-black">verified</span>
+                                                    <div className="text-xs font-bold text-gray-400 dark:text-zinc-500 mt-0.5">{driver.vehicle} • {driver.vehicleNumber}</div>
                                                 </div>
                                             </div>
-                                            <div className="flex-1 min-w-0">
-                                                <div className="flex justify-between items-start">
-                                                    <div className="text-lg font-black dark:text-white truncate pr-2">{driver.name}</div>
-                                                    <div className="flex items-center gap-1 bg-yellow-400/10 px-2 py-0.5 rounded-full border border-yellow-400/20">
-                                                        <span className="material-icons-outlined text-yellow-500 text-xs">star</span>
-                                                        <span className="text-[10px] font-black text-yellow-600 dark:text-yellow-400">{driver.rating}</span>
-                                                    </div>
+                                            <div className="flex items-center gap-3">
+                                                <div className="flex-1 p-3 bg-gray-50 dark:bg-zinc-800 rounded-2xl flex items-center gap-2">
+                                                    <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400 text-sm">nature_people</span>
+                                                    <span className="text-[10px] font-black text-gray-500 uppercase tracking-tight">Eco-friendly Choice</span>
                                                 </div>
-                                                <div className="text-xs font-bold text-gray-400 dark:text-zinc-500 mt-0.5">{driver.vehicle} • {driver.vehicleNumber}</div>
+                                                <button
+                                                    className="px-8 py-3 bg-black dark:bg-white text-white dark:text-black text-xs font-black rounded-2xl uppercase tracking-widest shadow-xl shadow-black/10 active:scale-95 transition-all group-hover:bg-leaf-600 group-hover:text-white"
+                                                    onClick={() => handleRequestJoin(driver.id)}
+                                                >
+                                                    Invite
+                                                </button>
                                             </div>
                                         </div>
-                                        <div className="flex items-center gap-3">
-                                            <div className="flex-1 p-3 bg-gray-50 dark:bg-zinc-800 rounded-2xl flex items-center gap-2">
-                                                <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400 text-sm">nature_people</span>
-                                                <span className="text-[10px] font-black text-gray-500 uppercase tracking-tight">Eco-friendly Choice</span>
-                                            </div>
-                                            <button
-                                                className="px-8 py-3 bg-black dark:bg-white text-white dark:text-black text-xs font-black rounded-2xl uppercase tracking-widest shadow-xl shadow-black/10 active:scale-95 transition-all group-hover:bg-leaf-600 group-hover:text-white"
-                                                onClick={() => handleRequestJoin(driver.id)}
-                                            >
-                                                Invite
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
+                                    ))}
+                                </div>
                             </div>
-                        </div>
-                    )}
+                        )}
 
-                    {/* Vehicle Categories */}
-                    <div className="px-4 py-2">
-                        {VEHICLE_CATEGORIES.map(cat => {
-                            const price = categoryPrices.get(cat.id) || 0;
-                            const route = availableRoutes[selectedRouteIndex];
-                            const soloPrice = route ? Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate) : 0;
-                            const co2 = route ? calculateCO2(route.distance, cat.id) : 0;
-                            const co2Pool = route ? calculateCO2(route.distance, 'pool') : 0;
-                            const etaMin = route ? Math.round(route.duration / 60) : 0;
+                        {/* Vehicle Categories */}
+                        <div className="px-4 py-2">
+                            {VEHICLE_CATEGORIES.map(cat => {
+                                const price = categoryPrices.get(cat.id) || 0;
+                                const route = availableRoutes[selectedRouteIndex];
+                                const soloPrice = route ? Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate) : 0;
+                                const co2 = route ? calculateCO2(route.distance, cat.id) : 0;
+                                const co2Pool = route ? calculateCO2(route.distance, 'pool') : 0;
+                                const etaMin = route ? Math.round(route.duration / 60) : 0;
 
-                            return (
-                                <button
-                                    key={cat.id}
-                                    onClick={() => setSelectedCategory(cat.id)}
-                                    className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 mb-3 transition-all ${selectedCategory === cat.id
-                                        ? 'border-black dark:border-white bg-gray-50 dark:bg-zinc-800'
-                                        : 'border-transparent hover:bg-gray-50 dark:hover:bg-zinc-800'
-                                        }`}
-                                >
-                                    <div className="w-14 h-14 rounded-2xl bg-gray-100 dark:bg-zinc-700 flex items-center justify-center">
-                                        <span className="material-icons-outlined text-2xl text-gray-700 dark:text-white">
-                                            {cat.icon}
-                                        </span>
-                                    </div>
-                                    <div className="flex-1 text-left">
-                                        <div className="font-bold text-base dark:text-white">{cat.label}</div>
-                                        <div className="text-xs text-gray-500 dark:text-gray-400">
-                                            {etaMin} min • {cat.capacity} seats
+                                return (
+                                    <button
+                                        key={cat.id}
+                                        onClick={() => setSelectedCategory(cat.id)}
+                                        className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 mb-3 transition-all ${selectedCategory === cat.id
+                                            ? 'border-black dark:border-white bg-gray-50 dark:bg-zinc-800'
+                                            : 'border-transparent hover:bg-gray-50 dark:hover:bg-zinc-800'
+                                            }`}
+                                    >
+                                        <div className="w-14 h-14 rounded-2xl bg-gray-100 dark:bg-zinc-700 flex items-center justify-center">
+                                            <span className="material-icons-outlined text-2xl text-gray-700 dark:text-white">
+                                                {cat.icon}
+                                            </span>
                                         </div>
-                                        {rideMode === 'Pooled' ? (
-                                            <div className="mt-1 inline-flex items-center gap-1 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-200 text-xs font-semibold px-2 py-0.5 rounded-full">
-                                                🌱 Save {co2 - co2Pool}g CO₂
+                                        <div className="flex-1 text-left">
+                                            <div className="font-bold text-base dark:text-white">{cat.label}</div>
+                                            <div className="text-xs text-gray-500 dark:text-gray-400">
+                                                {etaMin} min • {cat.capacity} seats
                                             </div>
-                                        ) : (
-                                            <div className="mt-1 text-xs text-gray-400">~{co2}g CO₂</div>
-                                        )}
-                                    </div>
-                                    <div className="text-right">
-                                        <div className="font-bold text-lg dark:text-white">₹{price}</div>
-                                        {rideMode === 'Pooled' && soloPrice > price && (
-                                            <div className="text-xs text-gray-400 line-through">₹{soloPrice}</div>
-                                        )}
-                                        {selectedCategory === cat.id && (
-                                            <div className="text-green-500 text-xs mt-1">✓</div>
-                                        )}
-                                    </div>
-                                </button>
-                            );
-                        })}
-                    </div>
+                                            {rideMode === 'Pooled' ? (
+                                                <div className="mt-1 inline-flex items-center gap-1 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-200 text-xs font-semibold px-2 py-0.5 rounded-full">
+                                                    🌱 Save {co2 - co2Pool}g CO₂
+                                                </div>
+                                            ) : (
+                                                <div className="mt-1 text-xs text-gray-400">~{co2}g CO₂</div>
+                                            )}
+                                        </div>
+                                        <div className="text-right">
+                                            <div className="font-bold text-lg dark:text-white">₹{price}</div>
+                                            {rideMode === 'Pooled' && soloPrice > price && (
+                                                <div className="text-xs text-gray-400 line-through">₹{soloPrice}</div>
+                                            )}
+                                            {selectedCategory === cat.id && (
+                                                <div className="text-green-500 text-xs mt-1">✓</div>
+                                            )}
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
                     </div>{/* end scrollable area */}
 
                     {/* Footer */}
@@ -1942,20 +1904,86 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-8"></div>
                         {!isNoDriversFound ? (
                             <div className="flex flex-col items-center text-center pb-8">
-                                <div className="relative mb-8">
-                                    <div className="size-24 bg-green-50 dark:bg-green-900/10 rounded-full flex items-center justify-center">
-                                        <span className="material-icons-outlined text-4xl text-green-500">radar</span>
-                                    </div>
-                                    <div className="absolute inset-0 border-4 border-green-500/20 rounded-full animate-ping"></div>
-                                </div>
-                                <h3 className="text-2xl font-black mb-2 dark:text-white">Finding your ride</h3>
-                                <p className="text-sm text-gray-500 dark:text-gray-400 font-medium max-w-[240px]">
-                                    We're connecting you with active drivers in your area.
-                                </p>
-                                {currentFare !== null && (
-                                    <div className="mt-6 bg-leaf-600 text-white px-6 py-2 rounded-2xl text-xs font-black uppercase tracking-widest shadow-lg shadow-leaf-500/20">
-                                        Estimate ₹{currentFare}
-                                    </div>
+                                {/* Pool Matched State */}
+                                {poolMatchInfo ? (
+                                    <>
+                                        <div className="relative mb-6">
+                                            <div className="size-20 bg-leaf-50 dark:bg-leaf-900/20 rounded-full flex items-center justify-center">
+                                                <span className="material-icons-outlined text-3xl text-leaf-600 dark:text-leaf-400">group</span>
+                                            </div>
+                                            <div className="absolute inset-0 border-4 border-leaf-400/30 rounded-full animate-ping"></div>
+                                            <div className="absolute -bottom-1 -right-1 bg-leaf-500 size-6 flex items-center justify-center rounded-full border-2 border-white dark:border-zinc-900">
+                                                <span className="material-icons-outlined text-white text-xs">check</span>
+                                            </div>
+                                        </div>
+                                        <h3 className="text-2xl font-black mb-1 dark:text-white">Pool Matched!</h3>
+                                        <p className="text-sm text-leaf-600 dark:text-leaf-400 font-bold mb-4">
+                                            Waiting for a driver to accept your pool ride...
+                                        </p>
+
+                                        {/* Matched Rider Card */}
+                                        <div className="w-full bg-[#fbfbfb] dark:bg-zinc-900/50 border border-gray-100 dark:border-zinc-800 rounded-2xl p-4 mb-4">
+                                            <div className="flex items-center gap-3 mb-3">
+                                                <div className="size-10 bg-leaf-100 dark:bg-leaf-900/30 rounded-xl flex items-center justify-center">
+                                                    <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400">person</span>
+                                                </div>
+                                                <div className="flex-1 text-left">
+                                                    <div className="text-sm font-black text-gray-900 dark:text-white">{poolMatchInfo.matchedRider.name}</div>
+                                                    <div className="text-[10px] font-black text-leaf-600 dark:text-leaf-400 uppercase tracking-widest">Pool Partner</div>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-2.5 ml-1">
+                                                <div className="flex flex-col items-center gap-0.5 shrink-0">
+                                                    <div className="size-1.5 bg-leaf-500 rounded-full"></div>
+                                                    <div className="w-0.5 h-3 bg-gray-200 dark:bg-zinc-700"></div>
+                                                    <div className="size-1.5 bg-red-500 rounded-full"></div>
+                                                </div>
+                                                <div className="flex-1 min-w-0 text-left">
+                                                    <p className="text-[11px] font-bold text-gray-700 dark:text-gray-300 truncate">{poolMatchInfo.matchedRider.pickup?.address || 'Nearby'}</p>
+                                                    <p className="text-[11px] font-bold text-gray-700 dark:text-gray-300 truncate">{poolMatchInfo.matchedRider.dropoff?.address || 'Same direction'}</p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Pool Fare */}
+                                        {poolMatchInfo.poolFare > 0 && (
+                                            <div className="flex items-center gap-2 bg-leaf-50 dark:bg-leaf-900/15 border border-leaf-200 dark:border-leaf-800 rounded-xl px-4 py-2.5 mb-2">
+                                                <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400 text-sm">savings</span>
+                                                <span className="text-xs font-black text-gray-400 dark:text-gray-500 line-through">₹{poolMatchInfo.originalFare}</span>
+                                                <span className="text-lg font-black text-leaf-600 dark:text-leaf-400">₹{poolMatchInfo.poolFare}</span>
+                                                <span className="text-[10px] font-black text-leaf-600 dark:text-leaf-400 uppercase tracking-widest">per person</span>
+                                            </div>
+                                        )}
+
+                                        {/* Animated waiting indicator */}
+                                        <div className="flex items-center gap-2 mt-3 text-leaf-600 dark:text-leaf-400">
+                                            <div className="flex gap-1">
+                                                <div className="w-2 h-2 bg-leaf-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                                                <div className="w-2 h-2 bg-leaf-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                                                <div className="w-2 h-2 bg-leaf-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                                            </div>
+                                            <span className="text-xs font-bold">Connecting to drivers</span>
+                                        </div>
+                                    </>
+                                ) : (
+                                    /* Normal Searching State */
+                                    <>
+                                        <div className="relative mb-8">
+                                            <div className="size-24 bg-green-50 dark:bg-green-900/10 rounded-full flex items-center justify-center">
+                                                <span className="material-icons-outlined text-4xl text-green-500">radar</span>
+                                            </div>
+                                            <div className="absolute inset-0 border-4 border-green-500/20 rounded-full animate-ping"></div>
+                                        </div>
+                                        <h3 className="text-2xl font-black mb-2 dark:text-white">Finding your ride</h3>
+                                        <p className="text-sm text-gray-500 dark:text-gray-400 font-medium max-w-[240px]">
+                                            We're connecting you with active drivers in your area.
+                                        </p>
+                                        {currentFare !== null && (
+                                            <div className="mt-6 bg-leaf-600 text-white px-6 py-2 rounded-2xl text-xs font-black uppercase tracking-widest shadow-lg shadow-leaf-500/20">
+                                                Estimate ₹{currentFare}
+                                            </div>
+                                        )}
+                                    </>
                                 )}
                                 <button
                                     onClick={handleResetRide}
@@ -2128,6 +2156,68 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         </div>
                     )}
 
+                    {/* ── Pool Ride Progress Tracker ── */}
+                    {poolStopUpdates.length > 0 && (() => {
+                        const latestUpdate = poolStopUpdates[poolStopUpdates.length - 1];
+                        const stops = latestUpdate?.stops || [];
+                        const currentIdx = latestUpdate?.currentStopIndex || 0;
+                        if (stops.length === 0) return null;
+                        return (
+                            <div className="mb-5">
+                                <div className="flex items-center justify-between mb-3">
+                                    <div className="flex items-center gap-2">
+                                        <div className="size-7 bg-leaf-100 dark:bg-leaf-900/30 rounded-lg flex items-center justify-center">
+                                            <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400" style={{ fontSize: '14px' }}>route</span>
+                                        </div>
+                                        <div>
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Pool Progress</p>
+                                            <p className="text-xs font-black dark:text-white">{stops.filter((s: any) => s.status === 'COMPLETED').length}/{stops.length} stops</p>
+                                        </div>
+                                    </div>
+                                    <div className="bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400 px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-widest">
+                                        Step {Math.min(currentIdx + 1, stops.length)}/{stops.length}
+                                    </div>
+                                </div>
+                                {latestUpdate?.message && (
+                                    <div className="mb-3 px-3 py-2 bg-leaf-50 dark:bg-leaf-900/15 rounded-xl text-xs font-black text-leaf-700 dark:text-leaf-400 border border-leaf-200 dark:border-leaf-800/50">
+                                        {latestUpdate.message}
+                                    </div>
+                                )}
+                                <div className="space-y-2">
+                                    {stops.map((stop: any, idx: number) => {
+                                        const isDone = stop.status === 'COMPLETED';
+                                        const isActive = idx === currentIdx && !isDone;
+                                        return (
+                                            <div key={idx} className={`flex items-center gap-3 p-3 rounded-[16px] transition-all ${isDone ? 'bg-gray-50 dark:bg-zinc-800/40 opacity-60' :
+                                                    isActive ? 'bg-white dark:bg-zinc-900 ring-2 ring-leaf-500 shadow-md shadow-leaf-500/10' :
+                                                        'bg-[#fbfbfb] dark:bg-zinc-900/50 border border-gray-100 dark:border-zinc-800'
+                                                }`}>
+                                                <div className={`size-7 rounded-lg flex items-center justify-center text-[10px] font-black shrink-0 ${isDone ? 'bg-leaf-500 text-white' :
+                                                        isActive ? 'bg-black dark:bg-white text-white dark:text-black' :
+                                                            'bg-gray-200 dark:bg-zinc-700 text-gray-400 dark:text-gray-500'
+                                                    }`}>
+                                                    {isDone ? '✓' : idx + 1}
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <span className={`text-[10px] font-black uppercase tracking-widest ${isDone ? 'text-leaf-600 dark:text-leaf-400' :
+                                                            stop.type === 'PICKUP' ? 'text-leaf-600 dark:text-leaf-400' : 'text-orange-500 dark:text-orange-400'
+                                                        }`}>
+                                                        {stop.type === 'PICKUP' ? 'Pickup' : 'Dropoff'}
+                                                    </span>
+                                                    <span className={`text-xs font-black ml-1.5 ${isDone ? 'text-gray-500 dark:text-gray-400' : 'text-gray-900 dark:text-white'}`}>
+                                                        {stop.riderName}
+                                                    </span>
+                                                </div>
+                                                {isDone && <span className="text-[10px] text-leaf-500 font-black">Done</span>}
+                                                {isActive && <span className="flex items-center gap-1"><span className="size-1.5 bg-leaf-500 rounded-full animate-pulse"></span><span className="text-[10px] text-leaf-600 dark:text-leaf-400 font-black">Now</span></span>}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        );
+                    })()}
+
                     {/* ── Multi-Stop Progress Tracker ── */}
                     {activeRideStops.length > 0 && rideStatus === 'IN_PROGRESS' && (
                         <div className="mb-4 p-3 bg-gray-50 dark:bg-zinc-800/50 rounded-2xl">
@@ -2138,20 +2228,18 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             <div className="space-y-2">
                                 {activeRideStops.map((stop, idx) => (
                                     <div key={idx} className="flex items-center gap-2.5">
-                                        <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black shrink-0 ${
-                                            stop.status === 'REACHED' ? 'bg-green-500 text-white' :
+                                        <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black shrink-0 ${stop.status === 'REACHED' ? 'bg-green-500 text-white' :
                                             stop.status === 'SKIPPED' ? 'bg-gray-300 dark:bg-zinc-600 text-gray-500 dark:text-zinc-400 line-through' :
-                                            idx === currentStopIndex ? 'bg-amber-500 text-white animate-pulse' :
-                                            'bg-gray-200 dark:bg-zinc-700 text-gray-500 dark:text-zinc-400'
-                                        }`}>
+                                                idx === currentStopIndex ? 'bg-amber-500 text-white animate-pulse' :
+                                                    'bg-gray-200 dark:bg-zinc-700 text-gray-500 dark:text-zinc-400'
+                                            }`}>
                                             {stop.status === 'REACHED' ? '✓' : stop.status === 'SKIPPED' ? '—' : idx + 1}
                                         </div>
-                                        <span className={`text-xs font-semibold flex-1 truncate ${
-                                            stop.status === 'REACHED' ? 'text-green-600 dark:text-green-400' :
+                                        <span className={`text-xs font-semibold flex-1 truncate ${stop.status === 'REACHED' ? 'text-green-600 dark:text-green-400' :
                                             stop.status === 'SKIPPED' ? 'text-gray-400 dark:text-zinc-500 line-through' :
-                                            idx === currentStopIndex ? 'text-amber-600 dark:text-amber-400' :
-                                            'text-gray-500 dark:text-gray-400'
-                                        }`}>
+                                                idx === currentStopIndex ? 'text-amber-600 dark:text-amber-400' :
+                                                    'text-gray-500 dark:text-gray-400'
+                                            }`}>
                                             {stop.address}
                                         </span>
                                         {stop.status === 'REACHED' && (
@@ -2413,11 +2501,10 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 <button
                                     key={reason}
                                     onClick={() => setRiderCancelReason(reason)}
-                                    className={`w-full text-left px-4 py-3 rounded-xl border-2 text-sm font-semibold transition-all ${
-                                        riderCancelReason === reason
-                                            ? 'border-red-500 bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400'
-                                            : 'border-gray-100 dark:border-zinc-700 text-gray-600 dark:text-zinc-400 hover:bg-gray-50 dark:hover:bg-zinc-800'
-                                    }`}
+                                    className={`w-full text-left px-4 py-3 rounded-xl border-2 text-sm font-semibold transition-all ${riderCancelReason === reason
+                                        ? 'border-red-500 bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400'
+                                        : 'border-gray-100 dark:border-zinc-700 text-gray-600 dark:text-zinc-400 hover:bg-gray-50 dark:hover:bg-zinc-800'
+                                        }`}
                                 >
                                     {reason}
                                 </button>
@@ -2437,11 +2524,10 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                     handleRiderCancelRide();
                                 }}
                                 disabled={!riderCancelReason || isCanceling}
-                                className={`flex-1 py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${
-                                    riderCancelReason && !isCanceling
-                                        ? 'bg-red-500 text-white shadow-lg'
-                                        : 'bg-gray-200 dark:bg-zinc-700 text-gray-400 dark:text-zinc-500 cursor-not-allowed'
-                                }`}
+                                className={`flex-1 py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${riderCancelReason && !isCanceling
+                                    ? 'bg-red-500 text-white shadow-lg'
+                                    : 'bg-gray-200 dark:bg-zinc-700 text-gray-400 dark:text-zinc-500 cursor-not-allowed'
+                                    }`}
                             >
                                 {isCanceling ? (
                                     <>

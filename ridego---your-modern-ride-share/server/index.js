@@ -35,16 +35,24 @@ const emailTransporter = nodemailer.createTransport({
 });
 const Ride = require('./models/Ride');
 const Notification = require('./models/Notification');
-const { findMatchingRides } = require('./utils/poolMatcher');
+const { findMatchingRides, isRiderOnRoute } = require('./utils/poolMatcher');
+const crypto = require('crypto');
 
 const app = express();
-const PORT = process.env.PORT || 5001;
-const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:3005';
+let PORT = parseInt(process.env.PORT, 10) || 5001;
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
     cors: {
-        origin: CORS_ORIGIN,
-        methods: ['GET', 'POST', 'PUT']
+        origin: (origin, callback) => {
+            // Allow any localhost origin (any port), plus no-origin requests (e.g. Postman, curl)
+            if (!origin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+                callback(null, true);
+            } else {
+                callback(new Error('Not allowed by CORS'));
+            }
+        },
+        methods: ['GET', 'POST', 'PUT'],
+        credentials: true
     }
 });
 
@@ -111,11 +119,11 @@ io.on('connection', (socket) => {
     socket.on('driver:location', ({ driverId, lat, lng }) => {
         if (!driverId || typeof lat !== 'number' || typeof lng !== 'number') return;
         const entry = onlineDrivers.get(driverId) || { socketIds: new Set(), location: null, lastUpdate: 0 };
-        
+
         // Throttle: max 1 update per second to prevent flooding
         const now = Date.now();
         if (now - (entry.lastUpdate || 0) < 1000) return;
-        
+
         entry.location = { lat, lng, updatedAt: new Date() };
         entry.lastUpdate = now;
         onlineDrivers.set(driverId, entry);
@@ -174,7 +182,7 @@ io.on('connection', (socket) => {
 const OLA_API_KEY = process.env.OLA_MAPS_API_KEY;
 
 // ✅ OLA Maps Autocomplete Proxy
-app.get('/api/ola/autocomplete', async(req, res) => {
+app.get('/api/ola/autocomplete', async (req, res) => {
     try {
         const { input, location } = req.query;
 
@@ -207,7 +215,7 @@ app.get('/api/ola/autocomplete', async(req, res) => {
 });
 
 // ✅ OLA Maps Directions Proxy (with multi-stop waypoints support)
-app.post('/api/ola/directions', async(req, res) => {
+app.post('/api/ola/directions', async (req, res) => {
     try {
         const { origin, destination, alternatives, waypoints } = req.body;
 
@@ -240,7 +248,7 @@ app.post('/api/ola/directions', async(req, res) => {
 });
 
 // ✅ OLA Maps Reverse Geocode Proxy
-app.get('/api/ola/reverse-geocode', async(req, res) => {
+app.get('/api/ola/reverse-geocode', async (req, res) => {
     try {
         const { latlng } = req.query;
 
@@ -283,7 +291,7 @@ if (MONGODB_URI) {
 }
 
 // User Routes
-app.post('/api/login', async(req, res) => {
+app.post('/api/login', async (req, res) => {
     try {
         const { email, phone, role } = req.body;
         let user;
@@ -299,7 +307,7 @@ app.post('/api/login', async(req, res) => {
     }
 });
 
-app.post('/api/signup', async(req, res) => {
+app.post('/api/signup', async (req, res) => {
     try {
         const {
             role,
@@ -356,7 +364,7 @@ app.post('/api/signup', async(req, res) => {
 });
 
 // --- Email OTP Endpoints ---
-app.post('/api/send-otp', async(req, res) => {
+app.post('/api/send-otp', async (req, res) => {
     try {
         const { email } = req.body;
         if (!email) return res.status(400).json({ message: 'Email is required' });
@@ -397,7 +405,7 @@ app.post('/api/send-otp', async(req, res) => {
     }
 });
 
-app.post('/api/verify-otp', async(req, res) => {
+app.post('/api/verify-otp', async (req, res) => {
     try {
         const { email, otp } = req.body;
         if (!email || !otp) return res.status(400).json({ message: 'Email and OTP are required' });
@@ -418,7 +426,7 @@ app.post('/api/verify-otp', async(req, res) => {
     }
 });
 
-app.get('/api/users', async(req, res) => {
+app.get('/api/users', async (req, res) => {
     try {
         const users = await User.find();
         res.json(users);
@@ -428,7 +436,7 @@ app.get('/api/users', async(req, res) => {
 });
 
 // Get single user by ID
-app.get('/api/users/:userId', async(req, res) => {
+app.get('/api/users/:userId', async (req, res) => {
     try {
         const user = await User.findById(req.params.userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
@@ -439,7 +447,7 @@ app.get('/api/users/:userId', async(req, res) => {
 });
 
 // Update user profile
-app.put('/api/users/:userId', async(req, res) => {
+app.put('/api/users/:userId', async (req, res) => {
     try {
         const allowedFields = ['firstName', 'lastName', 'email', 'phone', 'dob', 'gender', 'photoUrl', 'license', 'aadhar', 'vehicleMake', 'vehicleModel', 'vehicleNumber'];
         const updates = {};
@@ -456,7 +464,7 @@ app.put('/api/users/:userId', async(req, res) => {
 });
 
 // ── Driver Daily Route ──
-app.post('/api/driver/route', async(req, res) => {
+app.post('/api/driver/route', async (req, res) => {
     console.log('📬 Received route update request:', JSON.stringify(req.body, null, 2));
     try {
         const { userId, source, destination, isActive } = req.body;
@@ -500,7 +508,7 @@ app.post('/api/driver/route', async(req, res) => {
     }
 });
 
-app.get('/api/rider/match-driver', async(req, res) => {
+app.get('/api/rider/match-driver', async (req, res) => {
     try {
         const { pickupLat, pickupLng, dropoffLat, dropoffLng } = req.query;
         if (!pickupLat || !pickupLng || !dropoffLat || !dropoffLng) {
@@ -547,7 +555,7 @@ app.get('/api/rider/match-driver', async(req, res) => {
 });
 
 // ── Notifications ──
-app.get('/api/notifications/:userId', async(req, res) => {
+app.get('/api/notifications/:userId', async (req, res) => {
     try {
         const notifications = await Notification.find({ userId: req.params.userId }).sort({ createdAt: -1 }).limit(20);
         res.json(notifications);
@@ -556,7 +564,7 @@ app.get('/api/notifications/:userId', async(req, res) => {
     }
 });
 
-app.post('/api/notifications/:id/read', async(req, res) => {
+app.post('/api/notifications/:id/read', async (req, res) => {
     try {
         await Notification.findByIdAndUpdate(req.params.id, { isRead: true });
         res.json({ ok: true });
@@ -565,7 +573,7 @@ app.post('/api/notifications/:id/read', async(req, res) => {
     }
 });
 
-app.get('/api/notifications/sent/:userId', async(req, res) => {
+app.get('/api/notifications/sent/:userId', async (req, res) => {
     try {
         const notifications = await Notification.find({ fromId: req.params.userId }).sort({ createdAt: -1 }).limit(20);
         res.json(notifications);
@@ -575,7 +583,7 @@ app.get('/api/notifications/sent/:userId', async(req, res) => {
 });
 
 // ── Daily Route Join Request ──
-app.post('/api/rider/request-daily-join', async(req, res) => {
+app.post('/api/rider/request-daily-join', async (req, res) => {
     console.log('📬 Daily join request received:', JSON.stringify(req.body, null, 2));
     try {
         const { riderId, driverId, pickup, dropoff } = req.body;
@@ -619,9 +627,9 @@ app.post('/api/rider/request-daily-join', async(req, res) => {
 });
 
 // Ride Routes
-app.post('/api/rides', async(req, res) => {
+app.post('/api/rides', async (req, res) => {
     try {
-        const payload = {...req.body };
+        const payload = { ...req.body };
 
         if (!payload.userId) {
             return res.status(400).json({ message: 'userId is required' });
@@ -636,48 +644,224 @@ app.post('/api/rides', async(req, res) => {
             payload.currentFare = payload.fare;
         }
 
+        // ─── For pooled rides: fetch route polyline from OLA Maps ───
+        if (payload.isPooled && payload.pickup?.lat && payload.pickup?.lng && payload.dropoff?.lat && payload.dropoff?.lng) {
+            try {
+                const origin = `${payload.pickup.lat},${payload.pickup.lng}`;
+                const destination = `${payload.dropoff.lat},${payload.dropoff.lng}`;
+                const url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&alternatives=false&steps=false&overview=full&language=en&api_key=${OLA_API_KEY}`;
+                const routeResp = await axios.post(url);
+                if (routeResp.data?.routes?.[0]?.overview_polyline) {
+                    payload.routePolyline = routeResp.data.routes[0].overview_polyline;
+                    console.log(`✅ Pool ride polyline fetched for rider ${payload.userId}`);
+                }
+            } catch (err) {
+                console.warn('⚠️  Could not fetch polyline for pool ride:', err.message);
+            }
+        }
+
         const ride = new Ride(payload);
         await ride.save();
 
-        // Location-filtered broadcast: only send to drivers within 6 km of pickup
-        const RIDE_BROADCAST_RADIUS_KM = 6;
-        const ridePayload = {
-            rideId: ride._id,
-            pickup: ride.pickup,
-            dropoff: ride.dropoff,
-            fare: ride.fare,
-            currentFare: ride.currentFare,
-            isPooled: ride.isPooled,
-            routeIndex: ride.routeIndex,
-            bookingTime: ride.bookingTime
-        };
+        // ─── Pool Matching: find other SEARCHING pooled rides with compatible routes ───
+        let poolMatch = null;
+        if (ride.isPooled && ride.routePolyline && ride.pickup?.lat && ride.dropoff?.lat) {
+            try {
+                // Find other SEARCHING pooled rides in the same vehicle category
+                const candidateRides = await Ride.find({
+                    _id: { $ne: ride._id },
+                    status: 'SEARCHING',
+                    isPooled: true,
+                    vehicleCategory: ride.vehicleCategory,
+                    routePolyline: { $exists: true, $ne: '' },
+                    'pickup.lat': { $exists: true },
+                    'dropoff.lat': { $exists: true }
+                }).populate('userId', 'firstName lastName email phone');
 
-        if (ride.pickup && typeof ride.pickup.lat === 'number' && typeof ride.pickup.lng === 'number') {
-            let sentCount = 0;
-            for (const [driverId, entry] of onlineDrivers.entries()) {
-                if (!entry.location || typeof entry.location.lat !== 'number') continue;
-                const dist = getDistanceKm(entry.location.lat, entry.location.lng, ride.pickup.lat, ride.pickup.lng);
-                if (dist !== null && dist <= RIDE_BROADCAST_RADIUS_KM) {
-                    for (const sid of entry.socketIds) {
-                        io.to(sid).emit('ride:request', ridePayload);
+                const riderPickup = { lat: ride.pickup.lat, lng: ride.pickup.lng };
+                const riderDropoff = { lat: ride.dropoff.lat, lng: ride.dropoff.lng };
+
+                for (const candidate of candidateRides) {
+                    // Check if this new rider's pickup/dropoff lies on the candidate's route
+                    const matchOnCandidate = isRiderOnRoute(
+                        candidate.routePolyline, riderPickup, riderDropoff, 0.5
+                    );
+                    // Also check if candidate's pickup/dropoff lies on this new rider's route
+                    const candidatePickup = { lat: candidate.pickup.lat, lng: candidate.pickup.lng };
+                    const candidateDropoff = { lat: candidate.dropoff.lat, lng: candidate.dropoff.lng };
+                    const matchOnNew = isRiderOnRoute(
+                        ride.routePolyline, candidatePickup, candidateDropoff, 0.5
+                    );
+
+                    if (matchOnCandidate.match || matchOnNew.match) {
+                        poolMatch = candidate;
+                        break;
                     }
-                    sentCount++;
                 }
+
+                if (poolMatch) {
+                    // Generate a shared pool group ID
+                    const groupId = poolMatch.poolGroupId || crypto.randomUUID();
+
+                    // ─── Fare Splitting: 35% discount for each rider ───
+                    const newRiderPoolFare = Math.round((ride.currentFare || ride.fare) * 0.65);
+                    const existingRiderPoolFare = Math.round((poolMatch.currentFare || poolMatch.fare) * 0.65);
+
+                    // Update both rides with group ID and pool fares
+                    ride.poolGroupId = groupId;
+                    ride.currentFare = newRiderPoolFare;
+                    await ride.save();
+
+                    if (!poolMatch.poolGroupId) {
+                        poolMatch.poolGroupId = groupId;
+                    }
+                    poolMatch.currentFare = existingRiderPoolFare;
+                    await poolMatch.save();
+
+                    console.log(`🤝 Pool match found! Group ${groupId}: Rider ${ride.userId} ↔ Rider ${poolMatch.userId._id || poolMatch.userId}`);
+                    console.log(`💰 Pool fares: ₹${newRiderPoolFare} + ₹${existingRiderPoolFare} (was ₹${ride.fare} + ₹${poolMatch.fare})`);
+
+                    // Fetch the new rider's info for the notification
+                    const newRider = await User.findById(ride.userId).select('firstName lastName');
+
+                    // Notify the existing rider about the match
+                    const existingRiderId = poolMatch.userId._id || poolMatch.userId;
+                    io.to(`user:${existingRiderId}`).emit('pool:matched', {
+                        poolGroupId: groupId,
+                        matchedRider: {
+                            name: `${newRider?.firstName || 'Rider'} ${newRider?.lastName || ''}`.trim(),
+                            pickup: ride.pickup,
+                            dropoff: ride.dropoff
+                        },
+                        rideId: poolMatch._id,
+                        originalFare: poolMatch.fare,
+                        poolFare: existingRiderPoolFare,
+                        message: `${newRider?.firstName || 'A rider'} wants to pool with you!`
+                    });
+
+                    // Notify the new rider about the match
+                    const matchedRiderName = `${poolMatch.userId.firstName || 'Rider'} ${poolMatch.userId.lastName || ''}`.trim();
+                    io.to(`user:${ride.userId}`).emit('pool:matched', {
+                        poolGroupId: groupId,
+                        matchedRider: {
+                            name: matchedRiderName,
+                            pickup: poolMatch.pickup,
+                            dropoff: poolMatch.dropoff
+                        },
+                        rideId: ride._id,
+                        originalFare: ride.fare,
+                        poolFare: newRiderPoolFare,
+                        message: `Matched with ${matchedRiderName} for pooling!`
+                    });
+                }
+            } catch (err) {
+                console.error('⚠️  Pool matching error:', err);
             }
-            console.log(`ride:request sent to ${sentCount} nearby drivers (within ${RIDE_BROADCAST_RADIUS_KM}km)`);
-        } else {
-            // Fallback: no pickup coords, broadcast to all
-            io.to('drivers:online').emit('ride:request', ridePayload);
         }
 
-        res.status(201).json(ride);
+        // ─── Broadcast ride request to nearby drivers ───
+        const RIDE_BROADCAST_RADIUS_KM = 6;
+
+        // If pool match was found, remove the first rider's individual request
+        // and broadcast ONE consolidated pool request
+        if (poolMatch) {
+            // Remove BOTH riders' individual requests from all drivers
+            // The first rider's request was already broadcast earlier when they created their ride
+            // The second rider's request might have been briefly broadcast too
+            io.to('drivers:online').emit('nearby:rider:remove', { rideId: poolMatch._id.toString() });
+            io.to('drivers:online').emit('nearby:rider:remove', { rideId: ride._id.toString() });
+
+            // Fetch rider names
+            const riderA = poolMatch.userId;
+            const riderB = await User.findById(ride.userId).select('firstName lastName');
+
+            // Build ONE consolidated pool request payload
+            const poolPayload = {
+                rideId: ride._id.toString(), // Use the newer ride as the primary, stringified
+                pickup: ride.pickup, // Use first pickup (closest) for map marker
+                dropoff: ride.dropoff,
+                fare: (ride.currentFare || ride.fare) + (poolMatch.currentFare || poolMatch.fare), // Combined fare for driver
+                currentFare: (ride.currentFare || ride.fare) + (poolMatch.currentFare || poolMatch.fare),
+                isPooled: true,
+                poolGroupId: ride.poolGroupId,
+                routeIndex: ride.routeIndex,
+                bookingTime: ride.bookingTime,
+                poolGroupRiders: [
+                    {
+                        name: `${riderA.firstName || 'Rider'} ${riderA.lastName || ''}`.trim(),
+                        pickup: poolMatch.pickup,
+                        dropoff: poolMatch.dropoff,
+                        rideId: poolMatch._id.toString()
+                    },
+                    {
+                        name: `${riderB?.firstName || 'Rider'} ${riderB?.lastName || ''}`.trim(),
+                        pickup: ride.pickup,
+                        dropoff: ride.dropoff,
+                        rideId: ride._id.toString()
+                    }
+                ]
+            };
+
+            // Small delay to ensure remove events are processed before the new consolidated request
+            await new Promise(resolve => setTimeout(resolve, 50));
+
+            // Broadcast to nearby drivers
+            if (ride.pickup && typeof ride.pickup.lat === 'number' && typeof ride.pickup.lng === 'number') {
+                let sentCount = 0;
+                for (const [driverId, entry] of onlineDrivers.entries()) {
+                    if (!entry.location || typeof entry.location.lat !== 'number') continue;
+                    const dist = getDistanceKm(entry.location.lat, entry.location.lng, ride.pickup.lat, ride.pickup.lng);
+                    if (dist !== null && dist <= RIDE_BROADCAST_RADIUS_KM) {
+                        for (const sid of entry.socketIds) {
+                            io.to(sid).emit('ride:request', poolPayload);
+                        }
+                        sentCount++;
+                    }
+                }
+                console.log(`🤝 Pool ride:request sent to ${sentCount} nearby drivers (${poolPayload.poolGroupRiders.length} riders, ₹${poolPayload.fare})`);
+            } else {
+                io.to('drivers:online').emit('ride:request', poolPayload);
+            }
+        } else {
+            // No pool match — broadcast normal individual request
+            const ridePayload = {
+                rideId: ride._id,
+                pickup: ride.pickup,
+                dropoff: ride.dropoff,
+                fare: ride.fare,
+                currentFare: ride.currentFare,
+                isPooled: ride.isPooled,
+                poolGroupId: ride.poolGroupId || null,
+                routeIndex: ride.routeIndex,
+                bookingTime: ride.bookingTime
+            };
+
+            if (ride.pickup && typeof ride.pickup.lat === 'number' && typeof ride.pickup.lng === 'number') {
+                let sentCount = 0;
+                for (const [driverId, entry] of onlineDrivers.entries()) {
+                    if (!entry.location || typeof entry.location.lat !== 'number') continue;
+                    const dist = getDistanceKm(entry.location.lat, entry.location.lng, ride.pickup.lat, ride.pickup.lng);
+                    if (dist !== null && dist <= RIDE_BROADCAST_RADIUS_KM) {
+                        for (const sid of entry.socketIds) {
+                            io.to(sid).emit('ride:request', ridePayload);
+                        }
+                        sentCount++;
+                    }
+                }
+                console.log(`ride:request sent to ${sentCount} nearby drivers (within ${RIDE_BROADCAST_RADIUS_KM}km)`);
+            } else {
+                io.to('drivers:online').emit('ride:request', ridePayload);
+            }
+        }
+
+        res.status(201).json({ ...ride.toObject(), poolGroupId: ride.poolGroupId });
     } catch (error) {
         console.error('Create ride error:', error);
         res.status(500).json({ message: 'Error creating ride' });
     }
 });
 
-app.get('/api/rides/user/:userId', async(req, res) => {
+app.get('/api/rides/user/:userId', async (req, res) => {
     try {
         const rides = await Ride.find({ userId: req.params.userId }).sort({ bookingTime: -1, createdAt: -1 });
         res.json(rides);
@@ -686,7 +870,7 @@ app.get('/api/rides/user/:userId', async(req, res) => {
     }
 });
 
-app.get('/api/rides/driver/:driverId', async(req, res) => {
+app.get('/api/rides/driver/:driverId', async (req, res) => {
     try {
         const rides = await Ride.find({ driverId: req.params.driverId }).sort({ bookingTime: -1, createdAt: -1 });
         res.json(rides);
@@ -696,7 +880,7 @@ app.get('/api/rides/driver/:driverId', async(req, res) => {
 });
 
 // Nearby ride requests for drivers
-app.get('/api/rides/nearby', async(req, res) => {
+app.get('/api/rides/nearby', async (req, res) => {
     try {
         const { lat, lng, radius = 6 } = req.query;
         // Only return rides created in the last 15 minutes to avoid stale requests
@@ -733,7 +917,7 @@ app.get('/api/rides/nearby', async(req, res) => {
 });
 
 // ── Driver search by location (uses OLA geocoding) ──
-app.get('/api/rides/nearby-by-location', async(req, res) => {
+app.get('/api/rides/nearby-by-location', async (req, res) => {
     try {
         const { location, radius = 6 } = req.query;
         if (!location) return res.status(400).json({ message: 'location query required' });
@@ -772,10 +956,10 @@ app.get('/api/rides/nearby-by-location', async(req, res) => {
     }
 });
 
-// ── Find in-progress pooled rides for joining ──
-app.get('/api/rides/pooled-in-progress', async(req, res) => {
+// ── Find matching SEARCHING pooled rides (rider-to-rider matching) ──
+app.get('/api/rides/pooled-in-progress', async (req, res) => {
     try {
-        const { lat, lng, destLat, destLng, vehicleCategory, bufferKm = 0.5 } = req.query;
+        const { lat, lng, destLat, destLng, vehicleCategory, bufferKm = 0.5, excludeUserId } = req.query;
 
         if (!lat || !lng || !destLat || !destLng) {
             return res.status(400).json({ message: 'lat, lng, destLat, destLng required' });
@@ -787,235 +971,115 @@ app.get('/api/rides/pooled-in-progress', async(req, res) => {
         const destLngNum = Number(destLng);
         const bufferKmNum = Number(bufferKm) || 0.5;
 
-        // Find rides that are ACCEPTED or IN_PROGRESS, pooled, and have capacity
-        const rides = await Ride.find({
-            status: { $in: ['ACCEPTED', 'IN_PROGRESS'] },
+        // Find other SEARCHING pooled rides (rider-to-rider matching)
+        const query = {
+            status: 'SEARCHING',
             isPooled: true,
-            vehicleCategory: vehicleCategory || { $in: ['CAR', 'BIG_CAR'] }
-        }).populate('driverId', 'firstName lastName rating vehicleMake vehicleModel')
-          .populate('userId', 'firstName lastName');
+            routePolyline: { $exists: true, $ne: '' },
+            vehicleCategory: vehicleCategory || { $in: ['CAR', 'BIG_CAR'] },
+            'pickup.lat': { $exists: true },
+            'dropoff.lat': { $exists: true }
+        };
 
-        // Check capacity and filter out full rides, also exclude rides where driver is the only rider
-        const availableRides = rides.filter((ride) => {
-            const currentPassengers = ride.passengers + (ride.pooledRiders ? ride.pooledRiders.length : 0);
-            const maxPass = ride.maxPassengers || 4;
-            
-            // Exclude rides where driver is the only rider (no real passengers to pool with)
-            const driverIsOnlyRider = ride.userId && ride.driverId && 
-                                     ride.userId._id.toString() === ride.driverId._id.toString() &&
-                                     (!ride.pooledRiders || ride.pooledRiders.length === 0);
-            
-            return currentPassengers < maxPass && !driverIsOnlyRider;
-        });
+        // Exclude the current rider's own rides
+        if (excludeUserId) {
+            query.userId = { $ne: excludeUserId };
+        }
 
-        // Use pool matching algorithm for rides with polylines, proximity match for others
+        const rides = await Ride.find(query)
+            .populate('userId', 'firstName lastName email rating');
+
         const riderPickup = { lat: latNum, lng: lngNum };
         const riderDropoff = { lat: destLatNum, lng: destLngNum };
-        
-        // Separate rides with and without polylines
-        const ridesWithPolyline = availableRides.filter(r => r.routePolyline && r.routePolyline.length > 0);
-        const ridesWithoutPolyline = availableRides.filter(r => !r.routePolyline || r.routePolyline.length === 0);
-        
-        // Match rides with polylines using geometric algorithm
-        const geometricMatchesRaw = ridesWithPolyline.length > 0 ? 
-            findMatchingRides(ridesWithPolyline, riderPickup, riderDropoff, bufferKmNum) : [];
-        
-        // Transform geometric matches to standard format
-        const geometricMatches = geometricMatchesRaw.map(match => ({
-            rideId: match.ride._id.toString(),
-            driver: match.ride.driverId ? {
-                firstName: match.ride.driverId.firstName,
-                lastName: match.ride.driverId.lastName,
-                rating: match.ride.driverId.rating || 4.8,
-                vehicleMake: match.ride.driverId.vehicleMake,
-                vehicleModel: match.ride.driverId.vehicleModel
-            } : {},
-            matchDetails: {
-                ...match.matchDetails,
-                matchType: 'geometric'
+
+        // Match using geometric algorithm
+        const matched = [];
+        for (const ride of rides) {
+            const result = isRiderOnRoute(ride.routePolyline, riderPickup, riderDropoff, bufferKmNum);
+            if (result.match) {
+                const riderInfo = ride.userId || {};
+                matched.push({
+                    _id: ride._id,
+                    rideId: ride._id,
+                    poolGroupId: ride.poolGroupId,
+                    vehicleCategory: ride.vehicleCategory,
+                    rider: {
+                        name: `${riderInfo.firstName || 'Rider'} ${riderInfo.lastName || ''}`.trim(),
+                        rating: riderInfo.rating || 4.8
+                    },
+                    pickup: ride.pickup,
+                    dropoff: ride.dropoff,
+                    fare: ride.fare,
+                    matchDetails: {
+                        pickupDistance: result.pickupDistance,
+                        dropoffDistance: result.dropoffDistance,
+                        matchType: 'geometric'
+                    }
+                });
             }
-        }));
-        
-        // For rides without polylines, use simple proximity matching (within 3km)
-        const proximityMatches = ridesWithoutPolyline.filter(ride => {
-            if (!ride.pickup?.lat || !ride.dropoff?.lat) return false;
+        }
+
+        // Also add proximity-based matches for rides without polylines
+        const ridesWithoutPolyline = await Ride.find({
+            status: 'SEARCHING',
+            isPooled: true,
+            vehicleCategory: vehicleCategory || { $in: ['CAR', 'BIG_CAR'] },
+            $or: [
+                { routePolyline: { $exists: false } },
+                { routePolyline: '' }
+            ],
+            'pickup.lat': { $exists: true },
+            'dropoff.lat': { $exists: true },
+            ...(excludeUserId ? { userId: { $ne: excludeUserId } } : {})
+        }).populate('userId', 'firstName lastName email rating');
+
+        for (const ride of ridesWithoutPolyline) {
             const pickupDist = getDistanceKm(latNum, lngNum, ride.pickup.lat, ride.pickup.lng);
             const dropoffDist = getDistanceKm(destLatNum, destLngNum, ride.dropoff.lat, ride.dropoff.lng);
-            return pickupDist !== null && pickupDist <= 3 && dropoffDist !== null && dropoffDist <= 3;
-        }).map(ride => ({
-            rideId: ride._id.toString(),
-            driver: ride.driverId ? {
-                firstName: ride.driverId.firstName,
-                lastName: ride.driverId.lastName,
-                rating: ride.driverId.rating || 4.8,
-                vehicleMake: ride.driverId.vehicleMake,
-                vehicleModel: ride.driverId.vehicleModel
-            } : {},
-            matchDetails: {
-                pickupDistance: getDistanceKm(latNum, lngNum, ride.pickup.lat, ride.pickup.lng),
-                dropoffDistance: getDistanceKm(destLatNum, destLngNum, ride.dropoff.lat, ride.dropoff.lng),
-                matchType: 'proximity',
-                pickupDistanceMeters: Math.round(getDistanceKm(latNum, lngNum, ride.pickup.lat, ride.pickup.lng) * 1000),
-                dropoffDistanceMeters: Math.round(getDistanceKm(destLatNum, destLngNum, ride.dropoff.lat, ride.dropoff.lng) * 1000)
-            }
-        }));
-        
-        // Combine both types of matches
-        const matches = [...geometricMatches, ...proximityMatches];
-
-        // Enrich with passenger info and calculate reduced fare
-        const enriched = matches.map(match => {
-            const ride = availableRides.find(r => r._id.toString() === match.rideId);
-            if (!ride) {
-                console.error(`⚠️ Ride not found for match: ${match.rideId}`);
-                return null;
-            }
-            const currentPassengers = ride.passengers + (ride.pooledRiders ? ride.pooledRiders.length : 0);
-            const availableSeats = (ride.maxPassengers || 4) - currentPassengers;
-            
-            // Calculate reduced fare based on number of passengers sharing
-            const baseFare = ride.fare || ride.currentFare || 0;
-            const totalPassengers = currentPassengers + 1; // Including the new rider
-            const reducedFare = Math.round(baseFare / totalPassengers);
-            
-            // Get current riders info
-            const riders = [];
-            if (ride.userId) {
-                riders.push({
-                    name: `${ride.userId.firstName || 'Rider'} ${ride.userId.lastName || ''}`.trim(),
-                    isOriginal: true
+            if (pickupDist !== null && pickupDist <= 3 && dropoffDist !== null && dropoffDist <= 3) {
+                const riderInfo = ride.userId || {};
+                matched.push({
+                    _id: ride._id,
+                    rideId: ride._id,
+                    poolGroupId: ride.poolGroupId,
+                    vehicleCategory: ride.vehicleCategory,
+                    rider: {
+                        name: `${riderInfo.firstName || 'Rider'} ${riderInfo.lastName || ''}`.trim(),
+                        rating: riderInfo.rating || 4.8
+                    },
+                    pickup: ride.pickup,
+                    dropoff: ride.dropoff,
+                    fare: ride.fare,
+                    matchDetails: {
+                        pickupDistance: pickupDist,
+                        dropoffDistance: dropoffDist,
+                        matchType: 'proximity'
+                    }
                 });
             }
-            if (ride.pooledRiders && ride.pooledRiders.length > 0) {
-                ride.pooledRiders.forEach(pr => {
-                    riders.push({
-                        name: pr.firstName || 'Pooled Rider',
-                        isOriginal: false
-                    });
-                });
-            }
+        }
 
-            return {
-                _id: ride._id,
-                rideId: ride._id,
-                status: ride.status,
-                vehicleCategory: ride.vehicleCategory,
-                currentPassengers,
-                availableSeats,
-                maxPassengers: ride.maxPassengers || 4,
-                originalFare: baseFare,
-                reducedFare,
-                savingsAmount: baseFare - reducedFare,
-                savingsPercent: Math.round(((baseFare - reducedFare) / baseFare) * 100),
-                driver: match.driver,
-                riders,
-                pickup: ride.pickup,
-                dropoff: ride.dropoff,
-                matchDetails: match.matchDetails
-            };
-        }).filter(match => match !== null);
-
-        res.json(enriched);
+        res.json(matched);
     } catch (error) {
         console.error('Error fetching pooled rides:', error);
         res.status(500).json({ message: 'Error fetching pooled rides' });
     }
 });
 
-// ─── Pool Match: Find rides where rider's route matches driver's encoded polyline ───
-app.post('/api/rides/pool-match', async(req, res) => {
+// ── Get all rides in a pool group ──
+app.get('/api/rides/pool-group/:poolGroupId', async (req, res) => {
     try {
-        const { pickupLat, pickupLng, dropoffLat, dropoffLng, bufferKm = 0.5 } = req.body;
-
-        // Validate input
-        if (typeof pickupLat !== 'number' || typeof pickupLng !== 'number' ||
-            typeof dropoffLat !== 'number' || typeof dropoffLng !== 'number') {
-            return res.status(400).json({
-                message: 'Invalid input: pickupLat, pickupLng, dropoffLat, dropoffLng must be numbers'
-            });
-        }
-
-        const bufferKmNum = Number(bufferKm) || 0.5;
-
-        // Find all active pooled rides with routePolyline
-        const activeRides = await Ride.find({
-            status: { $in: ['ACCEPTED', 'IN_PROGRESS'] },
-            isPooled: true,
-            routePolyline: { $exists: true, $ne: '' }
-        }).populate('driverId', 'firstName lastName phone photoUrl rating vehicleMake vehicleModel vehicleNumber');
-
-        // Filter rides with available capacity
-        const ridesWithCapacity = activeRides.filter(ride => {
-            const currentPassengers = ride.passengers + (ride.pooledRiders ? ride.pooledRiders.length : 0);
-            const maxPass = ride.maxPassengers || 4;
-            return currentPassengers < maxPass;
-        });
-
-        // Check if pickup is actually within general vicinity first (optimization)
-        const nearbyRides = ridesWithCapacity.filter(ride => {
-            if (!ride.pickup || typeof ride.pickup.lat !== 'number') return false;
-            const dist = getDistanceKm(pickupLat, pickupLng, ride.pickup.lat, ride.pickup.lng);
-            return dist !== null && dist <= 10; // 10km general vicinity
-        });
-
-        if (nearbyRides.length === 0) {
-            return res.json({ matches: [] });
-        }
-
-        // Run the pool matching algorithm
-        const riderPickup = { lat: pickupLat, lng: pickupLng };
-        const riderDropoff = { lat: dropoffLat, lng: dropoffLng };
-
-        const matches = findMatchingRides(
-            nearbyRides,
-            riderPickup,
-            riderDropoff,
-            bufferKmNum
-        );
-
-        // Enrich match results with ride details
-        const enrichedMatches = matches.map(match => ({
-            rideId: match.ride._id,
-            driverId: match.ride.driverId,
-            driver: match.ride.driverId ? {
-                firstName: match.ride.driverId.firstName,
-                lastName: match.ride.driverId.lastName,
-                rating: match.ride.driverId.rating,
-                photoUrl: match.ride.driverId.photoUrl,
-                vehicleMake: match.ride.driverId.vehicleMake,
-                vehicleModel: match.ride.driverId.vehicleModel,
-                vehicleNumber: match.ride.driverId.vehicleNumber
-            } : null,
-            pickup: match.ride.pickup,
-            dropoff: match.ride.dropoff,
-            currentPassengers: match.ride.passengers + (match.ride.pooledRiders ? match.ride.pooledRiders.length : 0),
-            availableSeats: (match.ride.maxPassengers || 4) - (match.ride.passengers + (match.ride.pooledRiders ? match.ride.pooledRiders.length : 0)),
-            fare: match.ride.fare,
-            currentFare: match.ride.currentFare,
-            vehicleCategory: match.ride.vehicleCategory,
-            status: match.ride.status,
-            matchDetails: {
-                pickupSegment: match.matchDetails.pickupSegment,
-                dropoffSegment: match.matchDetails.dropoffSegment,
-                pickupDistance: match.matchDetails.pickupDistance,
-                dropoffDistance: match.matchDetails.dropoffDistance,
-                pickupDistanceMeters: Math.round(match.matchDetails.pickupDistance * 1000),
-                dropoffDistanceMeters: Math.round(match.matchDetails.dropoffDistance * 1000)
-            }
-        }));
-
-        res.json({
-            matches: enrichedMatches,
-            totalMatches: enrichedMatches.length,
-            bufferKm: bufferKmNum
-        });
+        const rides = await Ride.find({ poolGroupId: req.params.poolGroupId })
+            .populate('userId', 'firstName lastName email phone rating')
+            .populate('driverId', 'firstName lastName rating vehicleMake vehicleModel vehicleNumber');
+        res.json(rides);
     } catch (error) {
-        console.error('Error in pool-match:', error);
-        res.status(500).json({ message: 'Error matching pooled rides', error: error.message });
+        console.error('Error fetching pool group:', error);
+        res.status(500).json({ message: 'Error fetching pool group' });
     }
 });
 
-app.get('/api/rides/:rideId', async(req, res) => {
+app.get('/api/rides/:rideId', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
         if (!ride) return res.status(404).json({ message: 'Ride not found' });
@@ -1025,7 +1089,7 @@ app.get('/api/rides/:rideId', async(req, res) => {
     }
 });
 
-app.put('/api/rides/:rideId/status', async(req, res) => {
+app.put('/api/rides/:rideId/status', async (req, res) => {
     try {
         const { status } = req.body;
         const ride = await Ride.findByIdAndUpdate(
@@ -1038,7 +1102,7 @@ app.put('/api/rides/:rideId/status', async(req, res) => {
 });
 
 // ─── Cancel Ride (Driver or Rider) with Auto Re-Search ───
-app.post('/api/rides/:rideId/cancel', async(req, res) => {
+app.post('/api/rides/:rideId/cancel', async (req, res) => {
     try {
         const { canceledBy, cancelReason } = req.body;
         if (!canceledBy || !['RIDER', 'DRIVER'].includes(canceledBy)) {
@@ -1227,7 +1291,7 @@ app.post('/api/rides/:rideId/cancel', async(req, res) => {
 });
 
 // Driver presence
-app.post('/api/drivers/online', async(req, res) => {
+app.post('/api/drivers/online', async (req, res) => {
     const { driverId, location } = req.body;
     if (!driverId) return res.status(400).json({ message: 'driverId required' });
 
@@ -1238,14 +1302,14 @@ app.post('/api/drivers/online', async(req, res) => {
     res.json({ ok: true, onlineDrivers: onlineDrivers.size });
 });
 
-app.post('/api/drivers/offline', async(req, res) => {
+app.post('/api/drivers/offline', async (req, res) => {
     const { driverId } = req.body;
     if (driverId) onlineDrivers.delete(driverId);
     res.json({ ok: true });
 });
 
 // Accept ride
-app.post('/api/rides/:rideId/accept', async(req, res) => {
+app.post('/api/rides/:rideId/accept', async (req, res) => {
     try {
         const { driverId, driverLocation } = req.body;
         const ride = await Ride.findById(req.params.rideId);
@@ -1289,20 +1353,20 @@ app.post('/api/rides/:rideId/accept', async(req, res) => {
             try {
                 console.log('Fetching route polyline for pooled ride:', ride._id);
                 const OLA_API_KEY = process.env.OLA_MAPS_API_KEY || process.env.VITE_OLA_MAPS_API_KEY;
-                
+
                 if (!OLA_API_KEY) {
                     console.warn('OLA_MAPS_API_KEY not found, skipping polyline fetch');
                 } else {
                     const origin = `${driverLocation.lat},${driverLocation.lng}`;
                     const destination = `${ride.dropoff.lat},${ride.dropoff.lng}`;
                     const url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&alternatives=false&steps=false&overview=full&language=en&api_key=${OLA_API_KEY}`;
-                    
+
                     console.log(`🗺️  Calling OLA API: ${origin} → ${destination}`);
                     const routeResponse = await axios.post(url, null, {
                         headers: { 'X-Request-Id': `ride-${ride._id}-${Date.now()}` },
                         timeout: 5000
                     });
-                    
+
                     if (routeResponse.data?.routes?.[0]?.overview_polyline) {
                         ride.routePolyline = routeResponse.data.routes[0].overview_polyline;
                         console.log('✅ Route polyline stored:', ride.routePolyline.substring(0, 50) + '...');
@@ -1317,6 +1381,128 @@ app.post('/api/rides/:rideId/accept', async(req, res) => {
         }
 
         await ride.save();
+
+        // ─── Pool Group: accept all rides + build sequential stops ───
+        let poolGroupRides = [];
+        let poolStops = [];
+        if (ride.isPooled && ride.poolGroupId) {
+            poolGroupRides = await Ride.find({
+                poolGroupId: ride.poolGroupId,
+                _id: { $ne: ride._id },
+                status: 'SEARCHING'
+            });
+
+            // Collect all riders (including the primary ride)
+            const allPoolRides = [ride, ...poolGroupRides];
+            const allRiders = [];
+
+            for (const r of allPoolRides) {
+                const riderInfo = await User.findById(r.userId).select('firstName lastName phone');
+                allRiders.push({
+                    ride: r,
+                    user: riderInfo,
+                    name: riderInfo ? [riderInfo.firstName, riderInfo.lastName].filter(Boolean).join(' ') || 'Rider' : 'Rider'
+                });
+            }
+
+            // ─── Compute optimal stop order ───
+            // Strategy: pickup closest rider first, then next, then dropoffs by distance
+            const driverLoc = driverLocation || { lat: ride.pickup.lat, lng: ride.pickup.lng };
+
+            // Sort riders by distance from driver for pickup order
+            const sortedForPickup = [...allRiders].sort((a, b) => {
+                const distA = getDistanceKm(driverLoc.lat, driverLoc.lng, a.ride.pickup.lat, a.ride.pickup.lng) || 999;
+                const distB = getDistanceKm(driverLoc.lat, driverLoc.lng, b.ride.pickup.lat, b.ride.pickup.lng) || 999;
+                return distA - distB;
+            });
+
+            // Build stops: all pickups first (by proximity), then all dropoffs
+            let order = 0;
+            for (const r of sortedForPickup) {
+                poolStops.push({
+                    type: 'PICKUP',
+                    riderId: r.ride.userId,
+                    riderName: r.name,
+                    rideId: r.ride._id,
+                    address: r.ride.pickup?.address || 'Pickup',
+                    lat: r.ride.pickup?.lat,
+                    lng: r.ride.pickup?.lng,
+                    order: order++,
+                    status: 'PENDING'
+                });
+            }
+
+            // Sort dropoffs: from last pickup location, find nearest dropoff first
+            let lastLoc = sortedForPickup[sortedForPickup.length - 1]?.ride.pickup || driverLoc;
+            const dropoffRiders = [...sortedForPickup];
+            const orderedDropoffs = [];
+            while (dropoffRiders.length > 0) {
+                let nearest = 0;
+                let nearestDist = Infinity;
+                for (let i = 0; i < dropoffRiders.length; i++) {
+                    const d = getDistanceKm(lastLoc.lat, lastLoc.lng, dropoffRiders[i].ride.dropoff.lat, dropoffRiders[i].ride.dropoff.lng) || 999;
+                    if (d < nearestDist) { nearestDist = d; nearest = i; }
+                }
+                orderedDropoffs.push(dropoffRiders.splice(nearest, 1)[0]);
+                lastLoc = orderedDropoffs[orderedDropoffs.length - 1].ride.dropoff;
+            }
+
+            for (const r of orderedDropoffs) {
+                poolStops.push({
+                    type: 'DROPOFF',
+                    riderId: r.ride.userId,
+                    riderName: r.name,
+                    rideId: r.ride._id,
+                    address: r.ride.dropoff?.address || 'Dropoff',
+                    lat: r.ride.dropoff?.lat,
+                    lng: r.ride.dropoff?.lng,
+                    order: order++,
+                    status: 'PENDING'
+                });
+            }
+
+            // Save poolStops on the primary ride (the one driver accepted)
+            ride.poolStops = poolStops;
+            ride.currentPoolStopIndex = 0;
+            await ride.save();
+
+            // Accept all other group rides and notify their riders
+            for (const groupRide of poolGroupRides) {
+                groupRide.driverId = driverId;
+                groupRide.status = 'ACCEPTED';
+                groupRide.etaToPickup = ride.etaToPickup;
+                groupRide.contact = {
+                    riderMasked: maskPhone((await User.findById(groupRide.userId))?.phone),
+                    driverMasked: maskPhone(driver && driver.phone)
+                };
+                if (ride.routePolyline) groupRide.routePolyline = ride.routePolyline;
+                await groupRide.save();
+
+                const groupRider = await User.findById(groupRide.userId);
+                const groupPayload = {
+                    ride: groupRide,
+                    driver: driver ? {
+                        id: driver._id,
+                        name: [driver.firstName, driver.lastName].filter(Boolean).join(' ') || 'Driver',
+                        rating: driver.rating || 4.8,
+                        vehicle: [driver.vehicleMake || 'Car', driver.vehicleModel || ''].filter(Boolean).join(' '),
+                        vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
+                        photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
+                        maskedPhone: maskPhone(driver.phone)
+                    } : null,
+                    rider: groupRider ? {
+                        id: groupRider._id,
+                        name: [groupRider.firstName, groupRider.lastName].filter(Boolean).join(' ') || 'Rider',
+                        maskedPhone: maskPhone(groupRider.phone)
+                    } : null,
+                    poolStops
+                };
+                io.to(`user:${groupRide.userId}`).emit('ride:accepted', groupPayload);
+                console.log(`🤝 Pool group ride ${groupRide._id} accepted for rider ${groupRide.userId}`);
+            }
+
+            console.log(`📍 Pool stops computed: ${poolStops.map(s => `${s.type}:${s.riderName}`).join(' → ')}`);
+        }
 
         const payload = {
             ride,
@@ -1333,7 +1519,14 @@ app.post('/api/rides/:rideId/accept', async(req, res) => {
                 id: rider._id,
                 name: [rider.firstName, rider.lastName].filter(Boolean).join(' ') || rider.email || 'Rider',
                 maskedPhone: maskPhone(rider.phone)
-            } : null
+            } : null,
+            poolStops: poolStops.length > 0 ? poolStops : undefined,
+            poolGroupRides: poolGroupRides.length > 0 ? poolGroupRides.map(r => ({
+                rideId: r._id,
+                userId: r.userId,
+                pickup: r.pickup,
+                dropoff: r.dropoff
+            })) : undefined
         };
 
         io.to(`ride:${ride._id}`).emit('ride:accepted', payload);
@@ -1348,8 +1541,152 @@ app.post('/api/rides/:rideId/accept', async(req, res) => {
     }
 });
 
+// ─── Pool Stop Navigation: driver reached a pool stop ───
+app.post('/api/rides/:rideId/pool-stop-reached', async (req, res) => {
+    try {
+        const { stopIndex } = req.body;
+        const ride = await Ride.findById(req.params.rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+        if (!ride.poolStops || ride.poolStops.length === 0) return res.status(400).json({ message: 'No pool stops on this ride' });
+        if (stopIndex < 0 || stopIndex >= ride.poolStops.length) return res.status(400).json({ message: 'Invalid stop index' });
+
+        const stop = ride.poolStops[stopIndex];
+        stop.status = 'REACHED';
+        stop.reachedAt = new Date();
+
+        if (stop.type === 'PICKUP') {
+            // Generate OTP for this rider's pickup
+            const otp = Math.floor(1000 + Math.random() * 9000).toString();
+            stop.otp = otp;
+            stop.otpVerified = false;
+
+            // Notify the specific rider with their OTP
+            io.to(`user:${stop.riderId}`).emit('ride:otp', {
+                rideId: stop.rideId || ride._id,
+                otp,
+                poolStop: { type: 'PICKUP', riderName: stop.riderName, address: stop.address }
+            });
+        }
+
+        if (stop.type === 'DROPOFF') {
+            stop.status = 'COMPLETED';
+            // Mark the individual rider's ride as completed if it's their dropoff
+            if (stop.rideId) {
+                const riderRide = await Ride.findById(stop.rideId);
+                if (riderRide && riderRide.status !== 'COMPLETED') {
+                    riderRide.status = 'COMPLETED';
+                    riderRide.paymentStatus = 'PENDING';
+                    await riderRide.save();
+                    io.to(`user:${stop.riderId}`).emit('ride:status', {
+                        rideId: stop.rideId,
+                        status: 'COMPLETED',
+                        fare: riderRide.currentFare || riderRide.fare
+                    });
+                }
+            }
+        }
+
+        // Advance current stop index
+        ride.currentPoolStopIndex = stopIndex + 1;
+        await ride.save();
+
+        // Check if all stops are complete
+        const allComplete = ride.poolStops.every(s => s.status === 'COMPLETED' || s.status === 'REACHED');
+        const allDropoffsComplete = ride.poolStops.filter(s => s.type === 'DROPOFF').every(s => s.status === 'COMPLETED');
+
+        if (allDropoffsComplete) {
+            ride.status = 'COMPLETED';
+            await ride.save();
+        }
+
+        // Notify all riders in this pool group about progress
+        if (ride.poolGroupId) {
+            const groupRides = await Ride.find({ poolGroupId: ride.poolGroupId });
+            for (const gr of groupRides) {
+                io.to(`user:${gr.userId}`).emit('pool:stop-update', {
+                    poolGroupId: ride.poolGroupId,
+                    currentStopIndex: ride.currentPoolStopIndex,
+                    stops: ride.poolStops,
+                    completedStop: { ...stop.toObject(), index: stopIndex },
+                    allComplete: allDropoffsComplete
+                });
+            }
+        }
+
+        // Also notify the driver
+        if (ride.driverId) {
+            io.to(`user:${ride.driverId}`).emit('pool:stop-update', {
+                poolGroupId: ride.poolGroupId,
+                currentStopIndex: ride.currentPoolStopIndex,
+                stops: ride.poolStops,
+                completedStop: { ...stop.toObject(), index: stopIndex },
+                allComplete: allDropoffsComplete
+            });
+        }
+
+        res.json({
+            ok: true,
+            currentStop: stop,
+            nextStopIndex: ride.currentPoolStopIndex,
+            allComplete: allDropoffsComplete,
+            poolStops: ride.poolStops
+        });
+    } catch (error) {
+        console.error('Pool stop reached error:', error);
+        res.status(500).json({ message: 'Error processing pool stop' });
+    }
+});
+
+// ─── Pool Stop OTP Verification ───
+app.post('/api/rides/:rideId/pool-stop-verify-otp', async (req, res) => {
+    try {
+        const { stopIndex, otp } = req.body;
+        const ride = await Ride.findById(req.params.rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+        if (!ride.poolStops?.[stopIndex]) return res.status(400).json({ message: 'Invalid stop' });
+
+        const stop = ride.poolStops[stopIndex];
+        if (stop.otp !== otp) return res.status(400).json({ message: 'Invalid OTP' });
+
+        stop.otpVerified = true;
+        stop.status = 'COMPLETED';
+
+        // Advance to next stop after OTP is verified
+        ride.currentPoolStopIndex = stopIndex + 1;
+        await ride.save();
+
+        // Notify all riders about progress
+        if (ride.poolGroupId) {
+            const groupRides = await Ride.find({ poolGroupId: ride.poolGroupId });
+            for (const gr of groupRides) {
+                io.to(`user:${gr.userId}`).emit('pool:stop-update', {
+                    poolGroupId: ride.poolGroupId,
+                    currentStopIndex: ride.currentPoolStopIndex,
+                    stops: ride.poolStops,
+                    message: `${stop.riderName} picked up! ✅`
+                });
+            }
+        }
+
+        // Also notify the driver so their UI updates
+        if (ride.driverId) {
+            io.to(`user:${ride.driverId}`).emit('pool:stop-update', {
+                poolGroupId: ride.poolGroupId,
+                currentStopIndex: ride.currentPoolStopIndex,
+                stops: ride.poolStops,
+                message: `${stop.riderName} picked up! ✅`
+            });
+        }
+
+        res.json({ ok: true, stop, poolStops: ride.poolStops, nextStopIndex: ride.currentPoolStopIndex });
+    } catch (error) {
+        console.error('Pool OTP verify error:', error);
+        res.status(500).json({ message: 'Error verifying OTP' });
+    }
+});
+
 // Driver reached pickup -> generate OTP
-app.post('/api/rides/:rideId/reached', async(req, res) => {
+app.post('/api/rides/:rideId/reached', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
         if (!ride) return res.status(404).json({ message: 'Ride not found' });
@@ -1371,7 +1708,7 @@ app.post('/api/rides/:rideId/reached', async(req, res) => {
 });
 
 // Verify OTP and start ride
-app.post('/api/rides/:rideId/verify-otp', async(req, res) => {
+app.post('/api/rides/:rideId/verify-otp', async (req, res) => {
     try {
         const { otp } = req.body;
         const ride = await Ride.findById(req.params.rideId);
@@ -1394,7 +1731,7 @@ app.post('/api/rides/:rideId/verify-otp', async(req, res) => {
 });
 
 // Complete ride
-app.post('/api/rides/:rideId/complete', async(req, res) => {
+app.post('/api/rides/:rideId/complete', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
         if (!ride) return res.status(404).json({ message: 'Ride not found' });
@@ -1438,7 +1775,7 @@ app.post('/api/rides/:rideId/complete', async(req, res) => {
 });
 
 // Update live location
-app.post('/api/rides/:rideId/location', async(req, res) => {
+app.post('/api/rides/:rideId/location', async (req, res) => {
     try {
         const { role, lat, lng } = req.body;
         const ride = await Ride.findById(req.params.rideId);
@@ -1461,7 +1798,7 @@ app.post('/api/rides/:rideId/location', async(req, res) => {
 });
 
 // Chat messages
-app.get('/api/rides/:rideId/messages', async(req, res) => {
+app.get('/api/rides/:rideId/messages', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
         if (!ride) return res.status(404).json({ message: 'Ride not found' });
@@ -1471,7 +1808,7 @@ app.get('/api/rides/:rideId/messages', async(req, res) => {
     }
 });
 
-app.post('/api/rides/:rideId/messages', async(req, res) => {
+app.post('/api/rides/:rideId/messages', async (req, res) => {
     try {
         const { senderId, senderRole, message } = req.body;
         if (!message) return res.status(400).json({ message: 'Message required' });
@@ -1495,7 +1832,7 @@ app.post('/api/rides/:rideId/messages', async(req, res) => {
 });
 
 // Pooling: add rider mid-ride
-app.post('/api/rides/:rideId/pool/add', async(req, res) => {
+app.post('/api/rides/:rideId/pool/add', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
         if (!ride) return res.status(404).json({ message: 'Ride not found' });
@@ -1508,13 +1845,13 @@ app.post('/api/rides/:rideId/pool/add', async(req, res) => {
         const originalFare = ride.fare || 0; // Original full fare
         const currentPassengers = ride.passengers + (ride.pooledRiders ? ride.pooledRiders.length : 0);
         const totalPassengersAfter = currentPassengers + 1; // Including new rider
-        
+
         // New fare per person after split
         const newFarePerPerson = Math.round(originalFare / totalPassengersAfter);
-        
+
         // Update current fare to the new split amount
         ride.currentFare = newFarePerPerson;
-        
+
         // Add the new rider
         if (!ride.pooledRiders) ride.pooledRiders = [];
         ride.pooledRiders.push({
@@ -1526,7 +1863,7 @@ app.post('/api/rides/:rideId/pool/add', async(req, res) => {
             fareAdjustment: -(originalFare - newFarePerPerson), // How much they save
             joinedAt: new Date()
         });
-        
+
         await ride.save();
 
         // Notify all riders in the car about the new rider and updated fare
@@ -1554,7 +1891,7 @@ app.post('/api/rides/:rideId/pool/add', async(req, res) => {
 });
 
 // Join in-progress pooled ride as new rider
-app.post('/api/rides/:rideId/pool/join', async(req, res) => {
+app.post('/api/rides/:rideId/pool/join', async (req, res) => {
     try {
         const { userId, pickup, dropoff, passengers = 1 } = req.body;
         if (!userId) return res.status(400).json({ message: 'userId required' });
@@ -1597,7 +1934,7 @@ app.post('/api/rides/:rideId/pool/join', async(req, res) => {
         const originalFare = pooledRide.fare;
         const totalPassengers = pooledRide.passengers + pooledRide.pooledRiders.length;
         const perPersonFare = Math.round(originalFare / totalPassengers);
-        
+
         // Update current fare to reflect the split
         pooledRide.currentFare = perPersonFare;
 
@@ -1615,8 +1952,8 @@ app.post('/api/rides/:rideId/pool/join', async(req, res) => {
             perPersonFare
         });
 
-        res.json({ 
-            message: 'Successfully joined pool ride!', 
+        res.json({
+            message: 'Successfully joined pool ride!',
             pooledRideId: pooledRide._id,
             perPersonFare,
             totalPassengers
@@ -1628,7 +1965,7 @@ app.post('/api/rides/:rideId/pool/join', async(req, res) => {
 });
 
 // ── Driver requests early completion (rider must confirm) ──
-app.post('/api/rides/:rideId/request-complete', async(req, res) => {
+app.post('/api/rides/:rideId/request-complete', async (req, res) => {
     try {
         const { actualLat, actualLng, actualAddress } = req.body;
         const ride = await Ride.findById(req.params.rideId);
@@ -1678,7 +2015,7 @@ app.post('/api/rides/:rideId/request-complete', async(req, res) => {
 });
 
 // ── Rider confirms early completion ──
-app.post('/api/rides/:rideId/confirm-complete', async(req, res) => {
+app.post('/api/rides/:rideId/confirm-complete', async (req, res) => {
     try {
         const { confirmed } = req.body;
         const ride = await Ride.findById(req.params.rideId);
@@ -1712,7 +2049,7 @@ app.post('/api/rides/:rideId/confirm-complete', async(req, res) => {
 });
 
 // ── Wallet endpoints ──
-app.get('/api/users/:userId/wallet', async(req, res) => {
+app.get('/api/users/:userId/wallet', async (req, res) => {
     try {
         const user = await User.findById(req.params.userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
@@ -1722,7 +2059,7 @@ app.get('/api/users/:userId/wallet', async(req, res) => {
     }
 });
 
-app.post('/api/users/:userId/wallet/add', async(req, res) => {
+app.post('/api/users/:userId/wallet/add', async (req, res) => {
     try {
         const { amount } = req.body;
         if (!amount || amount <= 0) return res.status(400).json({ message: 'Invalid amount' });
@@ -1737,7 +2074,7 @@ app.post('/api/users/:userId/wallet/add', async(req, res) => {
 });
 
 // ── User stats (CO2, trips) ──
-app.get('/api/users/:userId/stats', async(req, res) => {
+app.get('/api/users/:userId/stats', async (req, res) => {
     try {
         const user = await User.findById(req.params.userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
@@ -1754,9 +2091,9 @@ app.get('/api/users/:userId/stats', async(req, res) => {
 });
 
 // ── Scheduled rides ──
-app.post('/api/rides/schedule', async(req, res) => {
+app.post('/api/rides/schedule', async (req, res) => {
     try {
-        const payload = {...req.body, isScheduled: true, status: 'SEARCHING' };
+        const payload = { ...req.body, isScheduled: true, status: 'SEARCHING' };
         if (!payload.userId) return res.status(400).json({ message: 'userId required' });
         if (!payload.scheduledFor) return res.status(400).json({ message: 'scheduledFor required' });
         payload.scheduledFor = new Date(payload.scheduledFor);
@@ -1770,7 +2107,7 @@ app.post('/api/rides/schedule', async(req, res) => {
     }
 });
 
-app.get('/api/rides/scheduled/:userId', async(req, res) => {
+app.get('/api/rides/scheduled/:userId', async (req, res) => {
     try {
         const rides = await Ride.find({
             userId: req.params.userId,
@@ -1784,7 +2121,7 @@ app.get('/api/rides/scheduled/:userId', async(req, res) => {
     }
 });
 
-app.delete('/api/rides/scheduled/:rideId', async(req, res) => {
+app.delete('/api/rides/scheduled/:rideId', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
         if (!ride) return res.status(404).json({ message: 'Ride not found' });
@@ -1797,7 +2134,7 @@ app.delete('/api/rides/scheduled/:rideId', async(req, res) => {
 });
 
 // ── Geospatial clustering: find nearby drivers (optimized Haversine) ──
-app.get('/api/drivers/nearby', async(req, res) => {
+app.get('/api/drivers/nearby', async (req, res) => {
     try {
         const { lat, lng, radius = 6 } = req.query;
         const latNum = Number(lat);
@@ -1824,7 +2161,7 @@ app.get('/api/drivers/nearby', async(req, res) => {
 });
 
 // ── Multi-Stop: Mark stop as reached ──
-app.post('/api/rides/:rideId/stops/:stopIndex/reached', async(req, res) => {
+app.post('/api/rides/:rideId/stops/:stopIndex/reached', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
         if (!ride) return res.status(404).json({ message: 'Ride not found' });
@@ -1858,7 +2195,7 @@ app.post('/api/rides/:rideId/stops/:stopIndex/reached', async(req, res) => {
 });
 
 // ── Multi-Stop: Skip a stop ──
-app.post('/api/rides/:rideId/stops/:stopIndex/skip', async(req, res) => {
+app.post('/api/rides/:rideId/stops/:stopIndex/skip', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
         if (!ride) return res.status(404).json({ message: 'Ride not found' });
@@ -1891,7 +2228,7 @@ app.post('/api/rides/:rideId/stops/:stopIndex/skip', async(req, res) => {
 });
 
 // ── Multi-Stop: Get ride stops info ──
-app.get('/api/rides/:rideId/stops', async(req, res) => {
+app.get('/api/rides/:rideId/stops', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
         if (!ride) return res.status(404).json({ message: 'Ride not found' });
@@ -1908,7 +2245,7 @@ app.get('/api/rides/:rideId/stops', async(req, res) => {
 });
 
 // ── Live ETA for active rides ──
-app.get('/api/rides/:rideId/live-eta', async(req, res) => {
+app.get('/api/rides/:rideId/live-eta', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
         if (!ride) return res.status(404).json({ message: 'Ride not found' });

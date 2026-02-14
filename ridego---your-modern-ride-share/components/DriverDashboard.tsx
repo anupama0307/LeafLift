@@ -69,6 +69,12 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
   const [cancelReason, setCancelReason] = useState('');
   const [isCanceling, setIsCanceling] = useState(false);
 
+  // ─── Pool Stop Navigation State ───
+  const [poolStops, setPoolStops] = useState<any[]>([]);
+  const [currentPoolStopIndex, setCurrentPoolStopIndex] = useState(0);
+  const [poolStopOtp, setPoolStopOtp] = useState('');
+  const [poolStopLoading, setPoolStopLoading] = useState(false);
+
   const mapRef = useRef<any>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const driverMarkerRef = useRef<any>(null);
@@ -150,6 +156,8 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
         dropoff: payload.dropoff,
         fare: payload.currentFare || payload.fare,
         isPooled: payload.isPooled,
+        poolGroupId: payload.poolGroupId || null,
+        poolGroupRiders: payload.poolGroupRiders || null,
         routeIndex: payload.routeIndex
       };
       // Client-side location filter: only show rides within 6 km
@@ -165,7 +173,22 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
       }
       addOrUpdateRequestMarker(request);
       setRequests((prev) => {
-        if (prev.some((r) => r.rideId === payload.rideId)) return prev;
+        const rideIdStr = String(payload.rideId);
+        // Dedupe by rideId (use string comparison to handle ObjectId vs string)
+        if (prev.some((r) => String(r.rideId) === rideIdStr)) return prev;
+
+        if (request.isPooled && request.poolGroupRiders && request.poolGroupRiders.length > 0) {
+          // This is a consolidated pool request — remove any existing individual requests
+          // that belong to riders in this pool (by their individual rideIds)
+          const poolRiderIds = new Set(request.poolGroupRiders.map((r: any) => String(r.rideId)));
+          // Also filter by poolGroupId if present
+          const filtered = prev.filter((r) => {
+            if (request.poolGroupId && r.poolGroupId && String(r.poolGroupId) === String(request.poolGroupId)) return false;
+            if (poolRiderIds.has(String(r.rideId))) return false;
+            return true;
+          });
+          return [request, ...filtered];
+        }
         return [request, ...prev];
       });
     };
@@ -229,8 +252,9 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
 
     const handleNearbyRiderRemove = (payload: any) => {
       if (!payload?.rideId) return;
+      const removeId = String(payload.rideId);
       removeRequestMarker(payload.rideId);
-      setRequests((prev) => prev.filter((r) => r.rideId !== payload.rideId));
+      setRequests((prev) => prev.filter((r) => String(r.rideId) !== removeId));
     };
 
     const handlePoolJoinRequest = (payload: any) => {
@@ -265,6 +289,19 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
       }
     };
 
+    const handlePoolStopUpdate = (payload: any) => {
+      if (payload?.stops) {
+        setPoolStops(payload.stops);
+      }
+      if (payload?.currentStopIndex !== undefined) {
+        setCurrentPoolStopIndex(payload.currentStopIndex);
+      }
+      // If all complete, mark as completed
+      if (payload?.allComplete) {
+        setRideStatus('COMPLETED');
+      }
+    };
+
     const handleStopSkipped = (payload: any) => {
       if (payload?.stopIndex !== undefined) {
         setCurrentStopIdx(payload.stopIndex + 1);
@@ -285,6 +322,10 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
         setCurrentFare(null);
         setRideStops([]);
         setCurrentStopIdx(0);
+        // Reset pool state
+        setPoolStops([]);
+        setCurrentPoolStopIndex(0);
+        setPoolStopOtp('');
       }
     };
 
@@ -302,6 +343,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
     socket.on('ride:stop-reached', handleStopReached);
     socket.on('ride:stop-skipped', handleStopSkipped);
     socket.on('ride:canceled', handleRideCanceled);
+    socket.on('pool:stop-update', handlePoolStopUpdate);
 
     return () => {
       socket.off('ride:request', handleRequest);
@@ -318,6 +360,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
       socket.off('ride:stop-reached', handleStopReached);
       socket.off('ride:stop-skipped', handleStopSkipped);
       socket.off('ride:canceled', handleRideCanceled);
+      socket.off('pool:stop-update', handlePoolStopUpdate);
     };
   }, [user?._id, user?.id]);
 
@@ -674,13 +717,21 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
         setRequests([]);
         requestMarkersRef.current.forEach(m => m.remove());
         requestMarkersRef.current.clear();
+        // Capture pool stops if present
+        if (data.poolStops && data.poolStops.length > 0) {
+          setPoolStops(data.poolStops);
+          setCurrentPoolStopIndex(0);
+        } else if (data.ride?.poolStops && data.ride.poolStops.length > 0) {
+          setPoolStops(data.ride.poolStops);
+          setCurrentPoolStopIndex(data.ride.currentPoolStopIndex || 0);
+        }
         // Join ride room for real-time chat & events
         joinRideRoom(rideId);
         // Load existing chat messages
         fetch(`${API_BASE_URL}/api/rides/${rideId}/messages`)
           .then(r => r.ok ? r.json() : [])
           .then(d => setChatMessages(d || []))
-          .catch(() => {});
+          .catch(() => { });
         // Fetch multi-stop data if any
         fetch(`${API_BASE_URL}/api/rides/${rideId}/stops`)
           .then(r => r.ok ? r.json() : { stops: [], currentStopIndex: 0 })
@@ -690,7 +741,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
               setCurrentStopIdx(d.currentStopIndex || 0);
             }
           })
-          .catch(() => {});
+          .catch(() => { });
       }
     } catch (e) {
       console.error(e);
@@ -701,6 +752,48 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
     if (!activeRide?._id) return;
     await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/reached`, { method: 'POST' });
     setRideStatus('ARRIVED');
+  };
+
+  // ─── Pool Stop Handlers ───
+  const handlePoolStopReached = async (stopIndex: number) => {
+    if (!activeRide?._id) return;
+    setPoolStopLoading(true);
+    try {
+      const resp = await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/pool-stop-reached`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stopIndex })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.poolStops) setPoolStops(data.poolStops);
+        setCurrentPoolStopIndex(data.nextStopIndex || stopIndex + 1);
+      }
+    } catch (e) { console.error(e); }
+    setPoolStopLoading(false);
+  };
+
+  const handlePoolOtpVerify = async (stopIndex: number) => {
+    if (!activeRide?._id || !poolStopOtp) return;
+    setPoolStopLoading(true);
+    try {
+      const resp = await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/pool-stop-verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stopIndex, otp: poolStopOtp })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        // Use server-returned poolStops and nextStopIndex for accuracy
+        if (data.poolStops) setPoolStops(data.poolStops);
+        if (data.nextStopIndex !== undefined) setCurrentPoolStopIndex(data.nextStopIndex);
+        setPoolStopOtp('');
+      } else {
+        const err = await resp.json();
+        alert(err.message || 'Invalid OTP');
+      }
+    } catch (e) { console.error(e); }
+    setPoolStopLoading(false);
   };
 
   const handleStopReached = async (stopIndex: number) => {
@@ -854,6 +947,10 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
     setShowCancelModal(false);
     setCancelReason('');
     setIsCanceling(false);
+    // Reset pool state
+    setPoolStops([]);
+    setCurrentPoolStopIndex(0);
+    setPoolStopOtp('');
     clearRoutePreview();
   };
 
@@ -1024,8 +1121,8 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
                     >
                       <div className="flex justify-between items-center mb-3">
                         <div className="flex items-center gap-2">
-                          <span className="px-2 py-1 bg-black dark:bg-white text-white dark:text-black rounded-lg text-[10px] font-black uppercase tracking-widest">
-                            {req.isPooled ? 'Pool' : 'Solo'}
+                          <span className={`px-2 py-1 ${req.isPooled ? 'bg-leaf-600 dark:bg-leaf-500' : 'bg-black dark:bg-white'} text-white dark:text-${req.isPooled ? 'white' : 'black'} rounded-lg text-[10px] font-black uppercase tracking-widest`}>
+                            {req.isPooled ? (req.poolGroupRiders ? `Pool (${req.poolGroupRiders.length} riders)` : 'Pool') : 'Solo'}
                           </span>
                           <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{req.routeIndex ? `Route #${req.routeIndex}` : 'Direct'}</span>
                         </div>
@@ -1042,11 +1139,51 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
                           <p className="text-sm font-bold dark:text-white truncate">{req.dropoff?.address || 'Drop'}</p>
                         </div>
                       </div>
+
+                      {/* Pool Group Riders — Detailed view */}
+                      {req.isPooled && req.poolGroupRiders && req.poolGroupRiders.length > 0 && (
+                        <div className="mb-4">
+                          <div className="flex items-center gap-2 mb-3">
+                            <div className="size-6 bg-leaf-100 dark:bg-leaf-900/30 rounded-lg flex items-center justify-center">
+                              <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400" style={{ fontSize: '13px' }}>group</span>
+                            </div>
+                            <span className="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-widest">
+                              {req.poolGroupRiders.length} Riders in this pool
+                            </span>
+                          </div>
+                          <div className="space-y-2.5">
+                            {req.poolGroupRiders.map((rider: any, idx: number) => (
+                              <div key={idx} className="p-3 bg-white dark:bg-zinc-800/80 rounded-2xl border border-gray-100 dark:border-zinc-700/60">
+                                {/* Rider name + avatar */}
+                                <div className="flex items-center gap-2.5 mb-2.5">
+                                  <div className="size-8 bg-leaf-100 dark:bg-leaf-900/30 rounded-xl flex items-center justify-center shrink-0">
+                                    <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400" style={{ fontSize: '16px' }}>person</span>
+                                  </div>
+                                  <span className="text-sm font-black text-gray-900 dark:text-white">{rider.name}</span>
+                                </div>
+                                {/* Route: pickup → dropoff */}
+                                <div className="flex items-center gap-2.5 ml-1">
+                                  <div className="flex flex-col items-center gap-0.5 shrink-0">
+                                    <div className="size-1.5 bg-leaf-500 rounded-full"></div>
+                                    <div className="w-0.5 h-3 bg-gray-200 dark:bg-zinc-700"></div>
+                                    <div className="size-1.5 bg-red-500 rounded-full"></div>
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-[11px] font-bold text-gray-700 dark:text-gray-300 truncate">{rider.pickup?.address?.split(',')[0] || 'Pickup'}</p>
+                                    <p className="text-[11px] font-bold text-gray-700 dark:text-gray-300 truncate">{rider.dropoff?.address?.split(',')[0] || 'Dropoff'}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       <button
                         onClick={(e) => { e.stopPropagation(); handleAcceptRide(req.rideId); }}
-                        className="w-full bg-leaf-600 dark:bg-leaf-500 text-white py-3 rounded-2xl font-black text-sm shadow-lg shadow-leaf-500/20 group-hover:scale-[1.02] transition-all"
+                        className="w-full bg-leaf-600 dark:bg-leaf-500 text-white py-3.5 rounded-2xl font-black text-sm shadow-lg shadow-leaf-500/20 group-hover:scale-[1.02] transition-all"
                       >
-                        Accept Ride
+                        {req.isPooled && req.poolGroupRiders ? `Accept Pool Ride (${req.poolGroupRiders.length} riders)` : 'Accept Ride'}
                       </button>
                     </div>
                   ))}
@@ -1055,530 +1192,686 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
             </div>
           )}
         </>
-      )}
+      )
+      }
 
       {/* Shared Ride Overlay */}
-      {activeRide && (
-        <div className="absolute bottom-0 inset-x-0 z-50 bg-white dark:bg-zinc-900 rounded-t-3xl shadow-2xl p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <p className="text-xs uppercase tracking-widest text-gray-400 font-bold">Ride Status</p>
-              <h3 className="text-xl font-black dark:text-white">
-                {rideStatus.replace('_', ' ')}
-              </h3>
+      {
+        activeRide && (
+          <div className="absolute bottom-0 inset-x-0 z-50 bg-white dark:bg-zinc-900 rounded-t-3xl shadow-2xl p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <p className="text-xs uppercase tracking-widest text-gray-400 font-bold">Ride Status</p>
+                <h3 className="text-xl font-black dark:text-white">
+                  {rideStatus.replace('_', ' ')}
+                </h3>
+              </div>
+              {(rideStatus === 'ACCEPTED' || rideStatus === 'ARRIVED') && (
+                <div className="bg-black dark:bg-white text-white dark:text-black px-3 py-1.5 rounded-full text-xs font-bold">
+                  ETA {activeRide.etaToPickup || 'N/A'}
+                </div>
+              )}
             </div>
-            {(rideStatus === 'ACCEPTED' || rideStatus === 'ARRIVED') && (
-              <div className="bg-black dark:bg-white text-white dark:text-black px-3 py-1.5 rounded-full text-xs font-bold">
-                ETA {activeRide.etaToPickup || 'N/A'}
-              </div>
-            )}
-          </div>
 
-          <div className="flex items-center gap-3 mb-4">
-            <img
-              src={riderDetails?.photoUrl || `https://i.pravatar.cc/150?u=${activeRide.userId}`}
-              className="w-12 h-12 rounded-full object-cover"
-              alt=""
-            />
-            <div className="flex-1">
-              <div className="font-bold dark:text-white">{riderDetails?.name || 'Rider'}</div>
-              <div className="text-xs text-gray-500 dark:text-gray-400">
-                {activeRide.pickup?.address?.split(',')[0] || 'Pickup'} → {activeRide.dropoff?.address?.split(',')[0] || 'Drop'}
+            <div className="flex items-center gap-3 mb-4">
+              <img
+                src={riderDetails?.photoUrl || `https://i.pravatar.cc/150?u=${activeRide.userId}`}
+                className="w-12 h-12 rounded-full object-cover"
+                alt=""
+              />
+              <div className="flex-1">
+                <div className="font-bold dark:text-white">{riderDetails?.name || 'Rider'}</div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">
+                  {activeRide.pickup?.address?.split(',')[0] || 'Pickup'} → {activeRide.dropoff?.address?.split(',')[0] || 'Drop'}
+                </div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">
+                  ⭐ {riderDetails?.rating?.toFixed(1) || '4.8'}
+                </div>
               </div>
-              <div className="text-xs text-gray-500 dark:text-gray-400">
-                ⭐ {riderDetails?.rating?.toFixed(1) || '4.8'}
-              </div>
-            </div>
-            <button
-              onClick={() => alert(`Call rider via masked number: ${riderDetails?.maskedPhone || 'Unavailable'}`)}
-              className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
-              title="Call rider"
-            >
-              <span className="material-icons-outlined">phone</span>
-            </button>
-            <button
-              onClick={() => setChatOpen(true)}
-              className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
-              title="Chat"
-            >
-              <span className="material-icons-outlined">chat</span>
-            </button>
-          </div>
-
-          {/* Pooled Riders */}
-          {activeRide?.isPooled && activeRide?.pooledRiders && activeRide.pooledRiders.length > 0 && (
-            <div className="mb-4 p-3 bg-green-50 dark:bg-green-900/20 rounded-xl border border-green-200 dark:border-green-800">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="material-icons-outlined text-green-600 dark:text-green-400 text-sm">group</span>
-                <span className="text-xs font-bold text-green-700 dark:text-green-400 uppercase tracking-wider">
-                  Pool Riders ({activeRide.pooledRiders.length + 1})
-                </span>
-              </div>
-              <div className="space-y-2">
-                {activeRide.pooledRiders.map((rider: any, idx: number) => (
-                  <div key={idx} className="flex items-center gap-2 p-2 bg-white dark:bg-zinc-800 rounded-lg">
-                    <div className="w-8 h-8 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center shrink-0">
-                      <span className="material-icons-outlined text-green-600 dark:text-green-400 text-sm">person</span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs font-bold text-gray-900 dark:text-white truncate">
-                        {rider.firstName} {rider.lastName}
-                      </div>
-                      <div className="text-[10px] text-gray-500 dark:text-gray-400 truncate">
-                        {rider.pickup?.address?.split(',')[0]} → {rider.dropoff?.address?.split(',')[0]}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {currentFare !== null && (
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-sm text-gray-500 dark:text-gray-400">Current Fare</span>
-              <span className="font-bold text-lg dark:text-white">₹{currentFare || activeRide.fare}</span>
-            </div>
-          )}
-
-          {rideStatus === 'ACCEPTED' && (
-            <div className="flex gap-3">
-              <button onClick={handleReached} className="flex-[2] bg-leaf-600 text-white py-3 rounded-xl font-bold shadow-lg active:scale-95 transition-all">
-                Reached Pickup
+              <button
+                onClick={() => alert(`Call rider via masked number: ${riderDetails?.maskedPhone || 'Unavailable'}`)}
+                className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
+                title="Call rider"
+              >
+                <span className="material-icons-outlined">phone</span>
               </button>
               <button
-                onClick={() => setShowCancelModal(true)}
-                className="flex-1 bg-red-50 dark:bg-red-900/20 text-red-500 dark:text-red-400 py-3 rounded-xl font-bold text-sm border border-red-200 dark:border-red-800 active:scale-95 transition-all"
+                onClick={() => setChatOpen(true)}
+                className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
+                title="Chat"
               >
-                Cancel
+                <span className="material-icons-outlined">chat</span>
               </button>
             </div>
-          )}
 
-          {rideStatus === 'ARRIVED' && (
-            <div className="space-y-3">
-            <div className="bg-amber-50 dark:bg-amber-900/20 p-4 rounded-2xl">
-              <p className="text-xs font-bold text-amber-600 dark:text-amber-400 uppercase tracking-widest">
-                Enter rider's OTP
-              </p>
-              <div className="flex gap-3 mt-3">
-                {[0, 1, 2, 3].map(i => (
-                  <input
-                    key={i}
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={1}
-                    value={otpInput[i] || ''}
-                    onChange={(e) => {
-                      const val = e.target.value.replace(/[^0-9]/g, '').slice(-1);
-                      const arr = Array.from({length: 4}, (_, idx) => otpInput[idx] || '');
-                      arr[i] = val;
-                      setOtpInput(arr.join(''));
-                      if (val) {
-                        const next = e.target.nextElementSibling as HTMLInputElement | null;
-                        if (next) next.focus();
-                      }
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Backspace' && !otpInput[i]) {
-                        const prev = (e.target as HTMLInputElement).previousElementSibling as HTMLInputElement | null;
-                        if (prev) prev.focus();
-                      }
-                    }}
-                    className="w-14 h-14 bg-white dark:bg-zinc-800 border-2 border-amber-200 dark:border-amber-700 rounded-xl text-center text-2xl font-black dark:text-white focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-300 transition-all"
-                    placeholder="–"
-                  />
-                ))}
-              </div>
-              <button onClick={handleVerifyOtp} className="w-full bg-black dark:bg-white text-white dark:text-black py-3 rounded-xl font-bold mt-3 active:scale-95 transition-all">
-                Start Trip
-              </button>
-            </div>
-            <button
-              onClick={() => setShowCancelModal(true)}
-              className="w-full bg-red-50 dark:bg-red-900/20 text-red-500 dark:text-red-400 py-2.5 rounded-xl font-bold text-sm border border-red-200 dark:border-red-800 active:scale-95 transition-all"
-            >
-              Cancel Ride
-            </button>
-            </div>
-          )}
+            {/* ─── Pool Stop Navigation ─── */}
+            {poolStops.length > 0 && (
+              <div className="mb-5">
+                {/* Header */}
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <div className="size-8 bg-leaf-100 dark:bg-leaf-900/30 rounded-xl flex items-center justify-center">
+                      <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400" style={{ fontSize: '16px' }}>route</span>
+                    </div>
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Pool Route</p>
+                      <p className="text-sm font-black dark:text-white">{poolStops.filter((s: any) => s.status === 'COMPLETED').length}/{poolStops.length} stops done</p>
+                    </div>
+                  </div>
+                  <div className="bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest">
+                    Step {Math.min(currentPoolStopIndex + 1, poolStops.length)}/{poolStops.length}
+                  </div>
+                </div>
 
-          {rideStatus === 'IN_PROGRESS' && (
-            <div className="space-y-4">
-              <div className="p-4 bg-green-50 dark:bg-green-900/10 rounded-2xl border border-green-100 dark:border-green-800">
-                <p className="text-xs font-bold text-green-700 dark:text-green-400 mb-1">On the way to destination</p>
-                <p className="text-[10px] text-green-600 dark:text-green-500 font-medium">Please drive safely and follow the route.</p>
-              </div>
+                {/* Stop Cards */}
+                <div className="space-y-3">
+                  {poolStops.map((stop: any, idx: number) => {
+                    const isActive = idx === currentPoolStopIndex;
+                    const isDone = stop.status === 'COMPLETED' || (stop.type === 'PICKUP' && stop.status === 'REACHED' && stop.otpVerified);
+                    const isPickupReached = stop.type === 'PICKUP' && stop.status === 'REACHED' && !stop.otpVerified;
 
-              {/* ── Multi-Stop Progress for Driver ── */}
-              {rideStops.length > 0 && (
-                <div className="p-4 bg-gray-50 dark:bg-zinc-800/50 rounded-2xl">
-                  <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
-                    <span className="material-icons-outlined text-amber-500" style={{ fontSize: '14px' }}>pin_drop</span>
-                    Stops ({rideStops.filter(s => s.status === 'REACHED').length}/{rideStops.length} done)
-                  </p>
-                  <div className="space-y-2.5">
-                    {rideStops.map((stop, idx) => (
-                      <div key={idx} className={`flex items-center gap-2.5 p-2 rounded-xl transition-all ${
-                        idx === currentStopIdx && stop.status === 'PENDING' ? 'bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800' : ''
-                      }`}>
-                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-black shrink-0 ${
-                          stop.status === 'REACHED' ? 'bg-green-500 text-white' :
-                          stop.status === 'SKIPPED' ? 'bg-gray-300 dark:bg-zinc-600 text-gray-500' :
-                          idx === currentStopIdx ? 'bg-amber-500 text-white animate-pulse' :
-                          'bg-gray-200 dark:bg-zinc-700 text-gray-500'
+                    return (
+                      <div key={idx} className={`rounded-[20px] transition-all overflow-hidden ${isDone ? 'bg-gray-50 dark:bg-zinc-800/40 opacity-60' :
+                        isActive ? 'bg-white dark:bg-zinc-900 ring-2 ring-leaf-500 shadow-lg shadow-leaf-500/10' :
+                          'bg-[#fbfbfb] dark:bg-zinc-900/50 border border-gray-100 dark:border-zinc-800'
                         }`}>
-                          {stop.status === 'REACHED' ? '✓' : stop.status === 'SKIPPED' ? '—' : idx + 1}
+                        <div className="p-4">
+                          <div className="flex items-center gap-3">
+                            {/* Status icon */}
+                            <div className={`size-10 rounded-2xl flex items-center justify-center shrink-0 ${isDone ? 'bg-leaf-100 dark:bg-leaf-900/30' :
+                              isActive ? (stop.type === 'PICKUP' ? 'bg-leaf-100 dark:bg-leaf-900/30' : 'bg-orange-100 dark:bg-orange-900/20') :
+                                'bg-gray-100 dark:bg-zinc-800'
+                              }`}>
+                              {isDone ? (
+                                <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400" style={{ fontSize: '20px' }}>check_circle</span>
+                              ) : (
+                                <span className={`material-icons-outlined ${isActive ? (stop.type === 'PICKUP' ? 'text-leaf-600 dark:text-leaf-400' : 'text-orange-500') :
+                                  'text-gray-400 dark:text-gray-500'
+                                  }`} style={{ fontSize: '20px' }}>{stop.type === 'PICKUP' ? 'person_pin_circle' : 'flag'}</span>
+                              )}
+                            </div>
+
+                            {/* Stop info */}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-0.5">
+                                <span className={`text-[10px] font-black uppercase tracking-widest ${isDone ? 'text-leaf-600 dark:text-leaf-400' :
+                                  stop.type === 'PICKUP' ? 'text-leaf-600 dark:text-leaf-400' : 'text-orange-500 dark:text-orange-400'
+                                  }`}>
+                                  {stop.type === 'PICKUP' ? 'Pick up' : 'Drop off'}
+                                </span>
+                                {isActive && !isDone && (
+                                  <span className="size-1.5 bg-leaf-500 rounded-full animate-pulse"></span>
+                                )}
+                              </div>
+                              <p className="text-sm font-black text-gray-900 dark:text-white">{stop.riderName}</p>
+                              <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate mt-0.5">{stop.address}</p>
+                            </div>
+
+                            {/* Step indicator */}
+                            <div className={`size-7 rounded-lg flex items-center justify-center text-[11px] font-black shrink-0 ${isDone ? 'bg-leaf-500 text-white' :
+                              isActive ? 'bg-black dark:bg-white text-white dark:text-black' :
+                                'bg-gray-200 dark:bg-zinc-700 text-gray-400 dark:text-gray-500'
+                              }`}>
+                              {isDone ? '✓' : idx + 1}
+                            </div>
+                          </div>
                         </div>
-                        <div className="flex-1 min-w-0">
-                          <span className={`text-xs font-semibold truncate block ${
-                            stop.status === 'REACHED' ? 'text-green-600 dark:text-green-400' :
-                            stop.status === 'SKIPPED' ? 'text-gray-400 line-through' :
-                            idx === currentStopIdx ? 'text-amber-600 dark:text-amber-400' :
-                            'text-gray-500'
-                          }`}>{stop.address}</span>
-                        </div>
-                        {idx === currentStopIdx && stop.status === 'PENDING' && (
-                          <div className="flex gap-1.5 shrink-0">
+
+                        {/* Action: Arrive Button for active stop */}
+                        {isActive && !isDone && !isPickupReached && (
+                          <div className="px-4 pb-4">
                             <button
-                              onClick={() => handleStopReached(idx)}
-                              disabled={stopActionLoading}
-                              className="px-2.5 py-1 bg-green-500 text-white text-[10px] font-bold rounded-lg hover:bg-green-600 disabled:opacity-50 active:scale-95 transition-all"
+                              onClick={() => handlePoolStopReached(idx)}
+                              disabled={poolStopLoading}
+                              className={`w-full py-3.5 rounded-2xl font-black text-sm shadow-lg active:scale-[0.97] transition-all disabled:opacity-50 ${stop.type === 'PICKUP'
+                                ? 'bg-leaf-600 dark:bg-leaf-500 text-white shadow-leaf-500/20'
+                                : 'bg-black dark:bg-white text-white dark:text-black'
+                                }`}
                             >
-                              Reached
-                            </button>
-                            <button
-                              onClick={() => handleStopSkip(idx)}
-                              disabled={stopActionLoading}
-                              className="px-2.5 py-1 bg-gray-200 dark:bg-zinc-700 text-gray-600 dark:text-gray-300 text-[10px] font-bold rounded-lg hover:bg-gray-300 disabled:opacity-50 active:scale-95 transition-all"
-                            >
-                              Skip
+                              {poolStopLoading ? (
+                                <span className="flex items-center justify-center gap-2">
+                                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                                  Processing...
+                                </span>
+                              ) : stop.type === 'PICKUP' ? "I've Arrived at Pickup" : "Reached Dropoff"}
                             </button>
                           </div>
                         )}
-                        {stop.status === 'REACHED' && (
-                          <span className="text-[10px] text-green-500 font-bold">Done</span>
-                        )}
-                        {stop.status === 'SKIPPED' && (
-                          <span className="text-[10px] text-gray-400 font-bold">Skipped</span>
+
+                        {/* Action: OTP Input for reached pickups */}
+                        {isPickupReached && (
+                          <div className="px-4 pb-4">
+                            <div className="bg-leaf-50 dark:bg-leaf-900/10 p-4 rounded-2xl border border-leaf-200 dark:border-leaf-800/50">
+                              <p className="text-[10px] font-black text-leaf-700 dark:text-leaf-400 uppercase tracking-widest mb-3">
+                                Enter {stop.riderName}'s OTP
+                              </p>
+                              <div className="flex gap-2 mb-3">
+                                {[0, 1, 2, 3].map(i => (
+                                  <input
+                                    key={i}
+                                    type="text"
+                                    inputMode="numeric"
+                                    maxLength={1}
+                                    value={poolStopOtp[i] || ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value.replace(/[^0-9]/g, '').slice(-1);
+                                      const arr = Array.from({ length: 4 }, (_, ix) => poolStopOtp[ix] || '');
+                                      arr[i] = val;
+                                      setPoolStopOtp(arr.join(''));
+                                      if (val) {
+                                        const next = e.target.nextElementSibling as HTMLInputElement | null;
+                                        if (next) next.focus();
+                                      }
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Backspace' && !poolStopOtp[i]) {
+                                        const prev = (e.target as HTMLInputElement).previousElementSibling as HTMLInputElement | null;
+                                        if (prev) prev.focus();
+                                      }
+                                    }}
+                                    className="w-14 h-14 bg-white dark:bg-zinc-800 border-2 border-leaf-200 dark:border-leaf-700 rounded-xl text-center text-2xl font-black dark:text-white focus:border-leaf-500 focus:outline-none focus:ring-2 focus:ring-leaf-300 dark:focus:ring-leaf-700 transition-all"
+                                    placeholder="–"
+                                  />
+                                ))}
+                              </div>
+                              <button
+                                onClick={() => handlePoolOtpVerify(idx)}
+                                disabled={poolStopLoading || poolStopOtp.length < 4}
+                                className="w-full bg-black dark:bg-white text-white dark:text-black py-3 rounded-xl font-black text-sm active:scale-[0.97] transition-all disabled:opacity-40"
+                              >
+                                {poolStopLoading ? 'Verifying...' : 'Verify & Start'}
+                              </button>
+                            </div>
+                          </div>
                         )}
                       </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Legacy Pooled Riders display (fallback) */}
+            {activeRide?.isPooled && poolStops.length === 0 && activeRide?.pooledRiders && activeRide.pooledRiders.length > 0 && (
+              <div className="mb-4 p-3 bg-green-50 dark:bg-green-900/20 rounded-xl border border-green-200 dark:border-green-800">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="material-icons-outlined text-green-600 dark:text-green-400 text-sm">group</span>
+                  <span className="text-xs font-bold text-green-700 dark:text-green-400 uppercase tracking-wider">
+                    Pool Riders ({activeRide.pooledRiders.length + 1})
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {activeRide.pooledRiders.map((rider: any, ridx: number) => (
+                    <div key={ridx} className="flex items-center gap-2 p-2 bg-white dark:bg-zinc-800 rounded-lg">
+                      <div className="w-8 h-8 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center shrink-0">
+                        <span className="material-icons-outlined text-green-600 dark:text-green-400 text-sm">person</span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-bold text-gray-900 dark:text-white truncate">
+                          {rider.firstName} {rider.lastName}
+                        </div>
+                        <div className="text-[10px] text-gray-500 dark:text-gray-400 truncate">
+                          {rider.pickup?.address?.split(',')[0]} → {rider.dropoff?.address?.split(',')[0]}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {currentFare !== null && (
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm text-gray-500 dark:text-gray-400">Current Fare</span>
+                <span className="font-bold text-lg dark:text-white">₹{currentFare || activeRide.fare}</span>
+              </div>
+            )}
+
+            {rideStatus === 'ACCEPTED' && poolStops.length === 0 && (
+              <div className="flex gap-3">
+                <button onClick={handleReached} className="flex-[2] bg-leaf-600 text-white py-3 rounded-xl font-bold shadow-lg active:scale-95 transition-all">
+                  Reached Pickup
+                </button>
+                <button
+                  onClick={() => setShowCancelModal(true)}
+                  className="flex-1 bg-red-50 dark:bg-red-900/20 text-red-500 dark:text-red-400 py-3 rounded-xl font-bold text-sm border border-red-200 dark:border-red-800 active:scale-95 transition-all"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+
+            {rideStatus === 'ARRIVED' && poolStops.length === 0 && (
+              <div className="space-y-3">
+                <div className="bg-amber-50 dark:bg-amber-900/20 p-4 rounded-2xl">
+                  <p className="text-xs font-bold text-amber-600 dark:text-amber-400 uppercase tracking-widest">
+                    Enter rider's OTP
+                  </p>
+                  <div className="flex gap-3 mt-3">
+                    {[0, 1, 2, 3].map(i => (
+                      <input
+                        key={i}
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={1}
+                        value={otpInput[i] || ''}
+                        onChange={(e) => {
+                          const val = e.target.value.replace(/[^0-9]/g, '').slice(-1);
+                          const arr = Array.from({ length: 4 }, (_, idx) => otpInput[idx] || '');
+                          arr[i] = val;
+                          setOtpInput(arr.join(''));
+                          if (val) {
+                            const next = e.target.nextElementSibling as HTMLInputElement | null;
+                            if (next) next.focus();
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Backspace' && !otpInput[i]) {
+                            const prev = (e.target as HTMLInputElement).previousElementSibling as HTMLInputElement | null;
+                            if (prev) prev.focus();
+                          }
+                        }}
+                        className="w-14 h-14 bg-white dark:bg-zinc-800 border-2 border-amber-200 dark:border-amber-700 rounded-xl text-center text-2xl font-black dark:text-white focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-300 transition-all"
+                        placeholder="–"
+                      />
                     ))}
-                    <div className="flex items-center gap-2.5 mt-1 pt-2 border-t border-gray-200 dark:border-zinc-700">
-                      <div className="w-7 h-7 rounded-full bg-red-500 flex items-center justify-center shrink-0">
-                        <span className="material-icons-outlined text-white" style={{ fontSize: '13px' }}>flag</span>
+                  </div>
+                  <button onClick={handleVerifyOtp} className="w-full bg-black dark:bg-white text-white dark:text-black py-3 rounded-xl font-bold mt-3 active:scale-95 transition-all">
+                    Start Trip
+                  </button>
+                </div>
+                <button
+                  onClick={() => setShowCancelModal(true)}
+                  className="w-full bg-red-50 dark:bg-red-900/20 text-red-500 dark:text-red-400 py-2.5 rounded-xl font-bold text-sm border border-red-200 dark:border-red-800 active:scale-95 transition-all"
+                >
+                  Cancel Ride
+                </button>
+              </div>
+            )}
+
+            {rideStatus === 'IN_PROGRESS' && poolStops.length === 0 && (
+              <div className="space-y-4">
+                <div className="p-4 bg-green-50 dark:bg-green-900/10 rounded-2xl border border-green-100 dark:border-green-800">
+                  <p className="text-xs font-bold text-green-700 dark:text-green-400 mb-1">On the way to destination</p>
+                  <p className="text-[10px] text-green-600 dark:text-green-500 font-medium">Please drive safely and follow the route.</p>
+                </div>
+
+                {/* ── Multi-Stop Progress for Driver ── */}
+                {rideStops.length > 0 && (
+                  <div className="p-4 bg-gray-50 dark:bg-zinc-800/50 rounded-2xl">
+                    <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+                      <span className="material-icons-outlined text-amber-500" style={{ fontSize: '14px' }}>pin_drop</span>
+                      Stops ({rideStops.filter(s => s.status === 'REACHED').length}/{rideStops.length} done)
+                    </p>
+                    <div className="space-y-2.5">
+                      {rideStops.map((stop, idx) => (
+                        <div key={idx} className={`flex items-center gap-2.5 p-2 rounded-xl transition-all ${idx === currentStopIdx && stop.status === 'PENDING' ? 'bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800' : ''
+                          }`}>
+                          <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-black shrink-0 ${stop.status === 'REACHED' ? 'bg-green-500 text-white' :
+                            stop.status === 'SKIPPED' ? 'bg-gray-300 dark:bg-zinc-600 text-gray-500' :
+                              idx === currentStopIdx ? 'bg-amber-500 text-white animate-pulse' :
+                                'bg-gray-200 dark:bg-zinc-700 text-gray-500'
+                            }`}>
+                            {stop.status === 'REACHED' ? '✓' : stop.status === 'SKIPPED' ? '—' : idx + 1}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <span className={`text-xs font-semibold truncate block ${stop.status === 'REACHED' ? 'text-green-600 dark:text-green-400' :
+                              stop.status === 'SKIPPED' ? 'text-gray-400 line-through' :
+                                idx === currentStopIdx ? 'text-amber-600 dark:text-amber-400' :
+                                  'text-gray-500'
+                              }`}>{stop.address}</span>
+                          </div>
+                          {idx === currentStopIdx && stop.status === 'PENDING' && (
+                            <div className="flex gap-1.5 shrink-0">
+                              <button
+                                onClick={() => handleStopReached(idx)}
+                                disabled={stopActionLoading}
+                                className="px-2.5 py-1 bg-green-500 text-white text-[10px] font-bold rounded-lg hover:bg-green-600 disabled:opacity-50 active:scale-95 transition-all"
+                              >
+                                Reached
+                              </button>
+                              <button
+                                onClick={() => handleStopSkip(idx)}
+                                disabled={stopActionLoading}
+                                className="px-2.5 py-1 bg-gray-200 dark:bg-zinc-700 text-gray-600 dark:text-gray-300 text-[10px] font-bold rounded-lg hover:bg-gray-300 disabled:opacity-50 active:scale-95 transition-all"
+                              >
+                                Skip
+                              </button>
+                            </div>
+                          )}
+                          {stop.status === 'REACHED' && (
+                            <span className="text-[10px] text-green-500 font-bold">Done</span>
+                          )}
+                          {stop.status === 'SKIPPED' && (
+                            <span className="text-[10px] text-gray-400 font-bold">Skipped</span>
+                          )}
+                        </div>
+                      ))}
+                      <div className="flex items-center gap-2.5 mt-1 pt-2 border-t border-gray-200 dark:border-zinc-700">
+                        <div className="w-7 h-7 rounded-full bg-red-500 flex items-center justify-center shrink-0">
+                          <span className="material-icons-outlined text-white" style={{ fontSize: '13px' }}>flag</span>
+                        </div>
+                        <span className="text-xs font-bold text-gray-700 dark:text-gray-300 truncate">
+                          {activeRide?.dropoff?.address || 'Final Destination'}
+                        </span>
                       </div>
-                      <span className="text-xs font-bold text-gray-700 dark:text-gray-300 truncate">
-                        {activeRide?.dropoff?.address || 'Final Destination'}
-                      </span>
                     </div>
                   </div>
+                )}
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={handleCompleteRide}
+                    className="flex-[2] bg-black dark:bg-white text-white dark:text-black py-4 rounded-[28px] font-black text-lg shadow-xl active:scale-95 transition-all"
+                  >
+                    Complete Ride
+                  </button>
+                  <button
+                    onClick={handleRequestEarlyComplete}
+                    disabled={earlyCompleteLoading}
+                    className="flex-1 bg-gray-100 dark:bg-zinc-900 text-gray-500 dark:text-zinc-400 py-4 rounded-[28px] font-black text-xs uppercase tracking-tight disabled:opacity-50"
+                  >
+                    {earlyCompleteLoading ? '...' : 'End Early'}
+                  </button>
                 </div>
-              )}
+              </div>
+            )}
+
+            {rideStatus === 'COMPLETED' && (
+              <>
+                <div className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+                  Ride completed. Fare: ₹{currentFare || activeRide.fare}
+                </div>
+                <button onClick={handleClearRide} className="w-full bg-black dark:bg-white text-white dark:text-black font-bold py-3 rounded-xl">
+                  Done
+                </button>
+              </>
+            )}
+          </div>
+        )
+      }
+
+      {/* Floating Nav - hidden during active ride to avoid overlapping the ride panel */}
+      {
+        !activeRide && (
+          <div className="absolute bottom-8 left-0 right-0 z-40 px-8 flex justify-between pointer-events-none">
+            <button
+              onClick={() => onNavigate?.('ACCOUNT')}
+              className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
+            >
+              <span className="material-icons-outlined">person</span>
+            </button>
+            <button
+              onClick={() => onNavigate?.('INBOX')}
+              className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
+            >
+              <span className="material-icons-outlined">chat_bubble</span>
+            </button>
+          </div>
+        )
+      }
+
+      {/* Modals */}
+      {
+        isRouteModalOpen && (
+          <div className="absolute inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-end justify-center">
+            <div className="bg-white dark:bg-zinc-950 w-full max-w-lg rounded-t-[40px] p-8 animate-in slide-in-from-bottom duration-300 shadow-2xl">
+              <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-8"></div>
+              <h3 className="text-3xl font-black mb-8 dark:text-white leading-tight">Your Daily Commute</h3>
+
+              <div className="space-y-6">
+                <div className="relative">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block ml-1">Home / Start</label>
+                  <div className="relative">
+                    <input
+                      value={routeSearchType === 'source' && routeSearchQuery ? routeSearchQuery : (dailyRouteSource?.structuredFormatting.mainText || '')}
+                      onChange={(e) => handleRouteSearch(e.target.value, 'source')}
+                      placeholder="Search for start location"
+                      className="w-full bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl text-base font-bold dark:text-white pr-12 focus:ring-2 focus:ring-leaf-500 transition-all border border-transparent"
+                    />
+                    <span className="material-icons-outlined absolute right-4 top-4 text-leaf-500">home</span>
+                  </div>
+                  {routeSearchType === 'source' && routeSuggestions.length > 0 && (
+                    <div className="absolute mt-2 w-full bg-white dark:bg-zinc-900 shadow-2xl rounded-2xl z-[110] border border-gray-100 dark:border-zinc-800 max-h-60 overflow-y-auto overflow-x-hidden">
+                      {routeSuggestions.map((place, i) => (
+                        <div key={i} onClick={() => selectRoutePlace(place)} className="p-4 hover:bg-gray-50 dark:hover:bg-zinc-800 border-b border-gray-50 dark:border-zinc-800 last:border-none flex items-center gap-3">
+                          <span className="material-icons-outlined text-gray-400">place</span>
+                          <div className="flex-1 overflow-hidden">
+                            <p className="font-bold text-sm dark:text-white truncate">{place.structuredFormatting.mainText}</p>
+                            <p className="text-xs text-gray-500 truncate">{place.structuredFormatting.secondaryText}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block ml-1">Office / Destination</label>
+                  <div className="relative">
+                    <input
+                      value={routeSearchType === 'dest' && routeSearchQuery ? routeSearchQuery : (dailyRouteDest?.structuredFormatting.mainText || '')}
+                      onChange={(e) => handleRouteSearch(e.target.value, 'dest')}
+                      placeholder="Search for destination"
+                      className="w-full bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl text-base font-bold dark:text-white pr-12 focus:ring-2 focus:ring-leaf-500 transition-all border border-transparent"
+                    />
+                    <span className="material-icons-outlined absolute right-4 top-4 text-leaf-500">work</span>
+                  </div>
+                  {routeSearchType === 'dest' && routeSuggestions.length > 0 && (
+                    <div className="absolute mt-2 w-full bg-white dark:bg-zinc-900 shadow-2xl rounded-2xl z-[110] border border-gray-100 dark:border-zinc-800 max-h-60 overflow-y-auto">
+                      {routeSuggestions.map((place, i) => (
+                        <div key={i} onClick={() => selectRoutePlace(place)} className="p-4 hover:bg-gray-50 dark:hover:bg-zinc-800 border-b border-gray-50 dark:border-zinc-800 last:border-none flex items-center gap-3">
+                          <span className="material-icons-outlined text-gray-400">place</span>
+                          <div className="flex-1 overflow-hidden">
+                            <p className="font-bold text-sm dark:text-white truncate">{place.structuredFormatting.mainText}</p>
+                            <p className="text-xs text-gray-500 truncate">{place.structuredFormatting.secondaryText}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex gap-4 mt-10 mb-6">
+                <button
+                  onClick={() => setIsRouteModalOpen(false)}
+                  className="flex-1 py-4 rounded-2xl font-black text-sm bg-gray-100 dark:bg-zinc-900 text-gray-500"
+                >
+                  Dismiss
+                </button>
+                <button
+                  onClick={handleSaveRoute}
+                  className="flex-[2] py-4 rounded-2xl font-black text-sm bg-leaf-600 dark:bg-leaf-500 text-white shadow-xl shadow-leaf-500/20"
+                >
+                  Save Daily Route
+                </button>
+              </div>
+              <p className="text-center text-[10px] text-gray-400 font-bold uppercase tracking-widest">Publishing your route allows riders to find you.</p>
+            </div>
+          </div>
+        )
+      }
+
+      {
+        isNotificationsOpen && (
+          <div className="absolute inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-end justify-center">
+            <div className="bg-white dark:bg-zinc-950 w-full max-w-lg rounded-t-[40px] p-8 animate-in slide-in-from-bottom duration-300 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+              <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-8 shrink-0" onClick={() => setIsNotificationsOpen(false)}></div>
+              <div className="flex justify-between items-center mb-8 shrink-0">
+                <h3 className="text-3xl font-black dark:text-white">Activity</h3>
+                <button onClick={() => setIsNotificationsOpen(false)} className="size-12 bg-gray-50 dark:bg-zinc-900 rounded-2xl flex items-center justify-center">
+                  <span className="material-icons-outlined dark:text-white">close</span>
+                </button>
+              </div>
+
+              <div className="space-y-4 overflow-y-auto pr-2 pb-10 custom-scrollbar flex-1">
+                {notifications.length === 0 ? (
+                  <div className="text-center py-20 opacity-20">
+                    <span className="material-icons-outlined text-7xl mb-4 block">notifications_none</span>
+                    <p className="font-black text-xl">Quiet for now</p>
+                  </div>
+                ) : (
+                  notifications.map((n) => (
+                    <div
+                      key={n._id}
+                      className={`p-6 rounded-[32px] border transition-all ${n.isRead ? 'bg-transparent border-gray-100 dark:border-zinc-900' : 'bg-green-50/50 dark:bg-green-900/10 border-green-100 dark:border-green-800'}`}
+                      onClick={() => markNotificationRead(n._id)}
+                    >
+                      <div className="flex gap-5">
+                        <div className="size-14 bg-black dark:bg-white rounded-2xl flex items-center justify-center shrink-0 shadow-lg">
+                          <span className="material-icons-outlined text-white dark:text-black text-2xl">
+                            {n.type === 'DAILY_JOIN_REQUEST' ? 'group_add' : 'info'}
+                          </span>
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex justify-between items-start mb-2">
+                            <h4 className="font-black text-black dark:text-white text-lg leading-none">{n.title}</h4>
+                            <span className="text-[10px] text-gray-400 font-bold uppercase tracking-tight">{new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          </div>
+                          <p className="text-sm text-gray-500 dark:text-zinc-400 font-medium leading-relaxed mb-4">{n.message}</p>
+
+                          {n.type === 'DAILY_JOIN_REQUEST' && !n.isRead && (
+                            <div className="flex gap-3">
+                              <button className="flex-1 py-3 bg-black dark:bg-white text-white dark:text-black rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg">Partner Accept</button>
+                              <button className="flex-1 py-3 bg-gray-100 dark:bg-zinc-900 text-gray-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Later</button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {
+        chatOpen && activeRide && (
+          <div
+            className="fixed inset-0 z-[110] bg-black/60 flex items-center justify-center p-4"
+            onClick={() => setChatOpen(false)}
+          >
+            <div
+              className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-3xl overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-zinc-800">
+                <h3 className="font-bold dark:text-white">Ride Chat</h3>
+                <button
+                  onClick={() => setChatOpen(false)}
+                  className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-zinc-800"
+                >
+                  <span className="material-icons-outlined">close</span>
+                </button>
+              </div>
+              <div className="max-h-72 overflow-y-auto p-4 space-y-3">
+                {chatMessages.length === 0 && (
+                  <p className="text-sm text-gray-400 text-center">No messages yet.</p>
+                )}
+                {chatMessages.map((msg, idx) => (
+                  <div
+                    key={`${msg.createdAt}-${idx}`}
+                    className={`flex ${msg.senderRole === 'DRIVER' ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div
+                      className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${msg.senderRole === 'DRIVER'
+                        ? 'bg-black text-white dark:bg-white dark:text-black'
+                        : 'bg-gray-100 dark:bg-zinc-800 dark:text-white'
+                        }`}
+                    >
+                      {msg.message}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <form
+                onSubmit={handleSendChat}
+                className="p-3 border-t border-gray-100 dark:border-zinc-800 flex gap-2"
+              >
+                <input
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  className="flex-1 bg-gray-100 dark:bg-zinc-800 rounded-full px-4 text-sm dark:text-white"
+                  placeholder="Type a message..."
+                />
+                <button
+                  type="submit"
+                  className="bg-black dark:bg-white text-white dark:text-black rounded-full px-4"
+                >
+                  Send
+                </button>
+              </form>
+            </div>
+          </div>
+        )
+      }
+
+      {/* ── Cancel Ride Modal ── */}
+      {
+        showCancelModal && (
+          <div
+            className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4"
+            onClick={() => { setShowCancelModal(false); setCancelReason(''); }}
+          >
+            <div
+              className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-3xl p-6 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-12 h-12 bg-red-50 dark:bg-red-900/20 rounded-2xl flex items-center justify-center">
+                  <span className="material-icons-outlined text-red-500 text-2xl">cancel</span>
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold dark:text-white">Cancel Ride?</h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">A ₹50 penalty will be applied</p>
+                </div>
+              </div>
+
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">Select a reason:</p>
+              <div className="space-y-2 mb-4">
+                {[
+                  'Rider not at pickup location',
+                  'Waited too long',
+                  'Vehicle issue / breakdown',
+                  'Unsafe pickup location',
+                  'Personal emergency'
+                ].map((reason) => (
+                  <button
+                    key={reason}
+                    onClick={() => setCancelReason(reason)}
+                    className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${cancelReason === reason
+                      ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border-2 border-red-300 dark:border-red-700'
+                      : 'bg-gray-50 dark:bg-zinc-800 text-gray-600 dark:text-gray-300 border-2 border-transparent hover:bg-gray-100 dark:hover:bg-zinc-700'
+                      }`}
+                  >
+                    {reason}
+                  </button>
+                ))}
+              </div>
 
               <div className="flex gap-3">
                 <button
-                  onClick={handleCompleteRide}
-                  className="flex-[2] bg-black dark:bg-white text-white dark:text-black py-4 rounded-[28px] font-black text-lg shadow-xl active:scale-95 transition-all"
+                  onClick={() => { setShowCancelModal(false); setCancelReason(''); }}
+                  className="flex-1 py-3 rounded-xl font-bold bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300"
                 >
-                  Complete Ride
+                  Go Back
                 </button>
                 <button
-                  onClick={handleRequestEarlyComplete}
-                  disabled={earlyCompleteLoading}
-                  className="flex-1 bg-gray-100 dark:bg-zinc-900 text-gray-500 dark:text-zinc-400 py-4 rounded-[28px] font-black text-xs uppercase tracking-tight disabled:opacity-50"
+                  onClick={handleCancelRide}
+                  disabled={!cancelReason || isCanceling}
+                  className="flex-1 py-3 rounded-xl font-bold bg-red-500 text-white disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 transition-all"
                 >
-                  {earlyCompleteLoading ? '...' : 'End Early'}
+                  {isCanceling ? 'Canceling...' : 'Cancel Ride'}
                 </button>
               </div>
             </div>
-          )}
-
-          {rideStatus === 'COMPLETED' && (
-            <>
-              <div className="text-sm text-gray-500 dark:text-gray-400 mb-3">
-                Ride completed. Fare: ₹{currentFare || activeRide.fare}
-              </div>
-              <button onClick={handleClearRide} className="w-full bg-black dark:bg-white text-white dark:text-black font-bold py-3 rounded-xl">
-                Done
-              </button>
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Floating Nav - hidden during active ride to avoid overlapping the ride panel */}
-      {!activeRide && (
-        <div className="absolute bottom-8 left-0 right-0 z-40 px-8 flex justify-between pointer-events-none">
-          <button
-            onClick={() => onNavigate?.('ACCOUNT')}
-            className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
-          >
-            <span className="material-icons-outlined">person</span>
-          </button>
-          <button
-            onClick={() => onNavigate?.('INBOX')}
-            className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
-          >
-            <span className="material-icons-outlined">chat_bubble</span>
-          </button>
-        </div>
-      )}
-
-      {/* Modals */}
-      {isRouteModalOpen && (
-        <div className="absolute inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-end justify-center">
-          <div className="bg-white dark:bg-zinc-950 w-full max-w-lg rounded-t-[40px] p-8 animate-in slide-in-from-bottom duration-300 shadow-2xl">
-            <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-8"></div>
-            <h3 className="text-3xl font-black mb-8 dark:text-white leading-tight">Your Daily Commute</h3>
-
-            <div className="space-y-6">
-              <div className="relative">
-                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block ml-1">Home / Start</label>
-                <div className="relative">
-                  <input
-                    value={routeSearchType === 'source' && routeSearchQuery ? routeSearchQuery : (dailyRouteSource?.structuredFormatting.mainText || '')}
-                    onChange={(e) => handleRouteSearch(e.target.value, 'source')}
-                    placeholder="Search for start location"
-                    className="w-full bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl text-base font-bold dark:text-white pr-12 focus:ring-2 focus:ring-leaf-500 transition-all border border-transparent"
-                  />
-                  <span className="material-icons-outlined absolute right-4 top-4 text-leaf-500">home</span>
-                </div>
-                {routeSearchType === 'source' && routeSuggestions.length > 0 && (
-                  <div className="absolute mt-2 w-full bg-white dark:bg-zinc-900 shadow-2xl rounded-2xl z-[110] border border-gray-100 dark:border-zinc-800 max-h-60 overflow-y-auto overflow-x-hidden">
-                    {routeSuggestions.map((place, i) => (
-                      <div key={i} onClick={() => selectRoutePlace(place)} className="p-4 hover:bg-gray-50 dark:hover:bg-zinc-800 border-b border-gray-50 dark:border-zinc-800 last:border-none flex items-center gap-3">
-                        <span className="material-icons-outlined text-gray-400">place</span>
-                        <div className="flex-1 overflow-hidden">
-                          <p className="font-bold text-sm dark:text-white truncate">{place.structuredFormatting.mainText}</p>
-                          <p className="text-xs text-gray-500 truncate">{place.structuredFormatting.secondaryText}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block ml-1">Office / Destination</label>
-                <div className="relative">
-                  <input
-                    value={routeSearchType === 'dest' && routeSearchQuery ? routeSearchQuery : (dailyRouteDest?.structuredFormatting.mainText || '')}
-                    onChange={(e) => handleRouteSearch(e.target.value, 'dest')}
-                    placeholder="Search for destination"
-                    className="w-full bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl text-base font-bold dark:text-white pr-12 focus:ring-2 focus:ring-leaf-500 transition-all border border-transparent"
-                  />
-                  <span className="material-icons-outlined absolute right-4 top-4 text-leaf-500">work</span>
-                </div>
-                {routeSearchType === 'dest' && routeSuggestions.length > 0 && (
-                  <div className="absolute mt-2 w-full bg-white dark:bg-zinc-900 shadow-2xl rounded-2xl z-[110] border border-gray-100 dark:border-zinc-800 max-h-60 overflow-y-auto">
-                    {routeSuggestions.map((place, i) => (
-                      <div key={i} onClick={() => selectRoutePlace(place)} className="p-4 hover:bg-gray-50 dark:hover:bg-zinc-800 border-b border-gray-50 dark:border-zinc-800 last:border-none flex items-center gap-3">
-                        <span className="material-icons-outlined text-gray-400">place</span>
-                        <div className="flex-1 overflow-hidden">
-                          <p className="font-bold text-sm dark:text-white truncate">{place.structuredFormatting.mainText}</p>
-                          <p className="text-xs text-gray-500 truncate">{place.structuredFormatting.secondaryText}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="flex gap-4 mt-10 mb-6">
-              <button
-                onClick={() => setIsRouteModalOpen(false)}
-                className="flex-1 py-4 rounded-2xl font-black text-sm bg-gray-100 dark:bg-zinc-900 text-gray-500"
-              >
-                Dismiss
-              </button>
-              <button
-                onClick={handleSaveRoute}
-                className="flex-[2] py-4 rounded-2xl font-black text-sm bg-leaf-600 dark:bg-leaf-500 text-white shadow-xl shadow-leaf-500/20"
-              >
-                Save Daily Route
-              </button>
-            </div>
-            <p className="text-center text-[10px] text-gray-400 font-bold uppercase tracking-widest">Publishing your route allows riders to find you.</p>
           </div>
-        </div>
-      )}
-
-      {isNotificationsOpen && (
-        <div className="absolute inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-end justify-center">
-          <div className="bg-white dark:bg-zinc-950 w-full max-w-lg rounded-t-[40px] p-8 animate-in slide-in-from-bottom duration-300 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-8 shrink-0" onClick={() => setIsNotificationsOpen(false)}></div>
-            <div className="flex justify-between items-center mb-8 shrink-0">
-              <h3 className="text-3xl font-black dark:text-white">Activity</h3>
-              <button onClick={() => setIsNotificationsOpen(false)} className="size-12 bg-gray-50 dark:bg-zinc-900 rounded-2xl flex items-center justify-center">
-                <span className="material-icons-outlined dark:text-white">close</span>
-              </button>
-            </div>
-
-            <div className="space-y-4 overflow-y-auto pr-2 pb-10 custom-scrollbar flex-1">
-              {notifications.length === 0 ? (
-                <div className="text-center py-20 opacity-20">
-                  <span className="material-icons-outlined text-7xl mb-4 block">notifications_none</span>
-                  <p className="font-black text-xl">Quiet for now</p>
-                </div>
-              ) : (
-                notifications.map((n) => (
-                  <div
-                    key={n._id}
-                    className={`p-6 rounded-[32px] border transition-all ${n.isRead ? 'bg-transparent border-gray-100 dark:border-zinc-900' : 'bg-green-50/50 dark:bg-green-900/10 border-green-100 dark:border-green-800'}`}
-                    onClick={() => markNotificationRead(n._id)}
-                  >
-                    <div className="flex gap-5">
-                      <div className="size-14 bg-black dark:bg-white rounded-2xl flex items-center justify-center shrink-0 shadow-lg">
-                        <span className="material-icons-outlined text-white dark:text-black text-2xl">
-                          {n.type === 'DAILY_JOIN_REQUEST' ? 'group_add' : 'info'}
-                        </span>
-                      </div>
-                      <div className="flex-1">
-                        <div className="flex justify-between items-start mb-2">
-                          <h4 className="font-black text-black dark:text-white text-lg leading-none">{n.title}</h4>
-                          <span className="text-[10px] text-gray-400 font-bold uppercase tracking-tight">{new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                        </div>
-                        <p className="text-sm text-gray-500 dark:text-zinc-400 font-medium leading-relaxed mb-4">{n.message}</p>
-
-                        {n.type === 'DAILY_JOIN_REQUEST' && !n.isRead && (
-                          <div className="flex gap-3">
-                            <button className="flex-1 py-3 bg-black dark:bg-white text-white dark:text-black rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg">Partner Accept</button>
-                            <button className="flex-1 py-3 bg-gray-100 dark:bg-zinc-900 text-gray-500 rounded-xl text-[10px] font-black uppercase tracking-widest">Later</button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {chatOpen && activeRide && (
-        <div
-          className="fixed inset-0 z-[110] bg-black/60 flex items-center justify-center p-4"
-          onClick={() => setChatOpen(false)}
-        >
-          <div
-            className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-3xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-zinc-800">
-              <h3 className="font-bold dark:text-white">Ride Chat</h3>
-              <button
-                onClick={() => setChatOpen(false)}
-                className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-zinc-800"
-              >
-                <span className="material-icons-outlined">close</span>
-              </button>
-            </div>
-            <div className="max-h-72 overflow-y-auto p-4 space-y-3">
-              {chatMessages.length === 0 && (
-                <p className="text-sm text-gray-400 text-center">No messages yet.</p>
-              )}
-              {chatMessages.map((msg, idx) => (
-                <div
-                  key={`${msg.createdAt}-${idx}`}
-                  className={`flex ${msg.senderRole === 'DRIVER' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${msg.senderRole === 'DRIVER'
-                      ? 'bg-black text-white dark:bg-white dark:text-black'
-                      : 'bg-gray-100 dark:bg-zinc-800 dark:text-white'
-                      }`}
-                  >
-                    {msg.message}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <form
-              onSubmit={handleSendChat}
-              className="p-3 border-t border-gray-100 dark:border-zinc-800 flex gap-2"
-            >
-              <input
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                className="flex-1 bg-gray-100 dark:bg-zinc-800 rounded-full px-4 text-sm dark:text-white"
-                placeholder="Type a message..."
-              />
-              <button
-                type="submit"
-                className="bg-black dark:bg-white text-white dark:text-black rounded-full px-4"
-              >
-                Send
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ── Cancel Ride Modal ── */}
-      {showCancelModal && (
-        <div
-          className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4"
-          onClick={() => { setShowCancelModal(false); setCancelReason(''); }}
-        >
-          <div
-            className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-3xl p-6 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-12 h-12 bg-red-50 dark:bg-red-900/20 rounded-2xl flex items-center justify-center">
-                <span className="material-icons-outlined text-red-500 text-2xl">cancel</span>
-              </div>
-              <div>
-                <h3 className="text-lg font-bold dark:text-white">Cancel Ride?</h3>
-                <p className="text-xs text-gray-500 dark:text-gray-400">A ₹50 penalty will be applied</p>
-              </div>
-            </div>
-
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">Select a reason:</p>
-            <div className="space-y-2 mb-4">
-              {[
-                'Rider not at pickup location',
-                'Waited too long',
-                'Vehicle issue / breakdown',
-                'Unsafe pickup location',
-                'Personal emergency'
-              ].map((reason) => (
-                <button
-                  key={reason}
-                  onClick={() => setCancelReason(reason)}
-                  className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                    cancelReason === reason
-                      ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border-2 border-red-300 dark:border-red-700'
-                      : 'bg-gray-50 dark:bg-zinc-800 text-gray-600 dark:text-gray-300 border-2 border-transparent hover:bg-gray-100 dark:hover:bg-zinc-700'
-                  }`}
-                >
-                  {reason}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex gap-3">
-              <button
-                onClick={() => { setShowCancelModal(false); setCancelReason(''); }}
-                className="flex-1 py-3 rounded-xl font-bold bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300"
-              >
-                Go Back
-              </button>
-              <button
-                onClick={handleCancelRide}
-                disabled={!cancelReason || isCanceling}
-                className="flex-1 py-3 rounded-xl font-bold bg-red-500 text-white disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 transition-all"
-              >
-                {isCanceling ? 'Canceling...' : 'Cancel Ride'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+        )
+      }
+    </div >
   );
 };
 
