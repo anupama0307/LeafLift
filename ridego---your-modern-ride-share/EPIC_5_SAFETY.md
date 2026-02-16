@@ -44,3 +44,6 @@ This epic aims to build user trust and prioritize safety as a core platform valu
 - [x] **5.5 Gender-preference pooling** (Implemented Filter UI)
 - [x] **5.6 Accessibility-friendly options** (Implemented Filter Checkbox)
 - [ ] **5.7 Role-based access control** (Pending comprehensive RBAC)
+
+> *Last Updated: Sprint 1 Review*
+
