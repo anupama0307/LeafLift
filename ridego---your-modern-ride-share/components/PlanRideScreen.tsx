@@ -64,9 +64,14 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [maxPassengers, setMaxPassengers] = useState(4);
     const [safetyPrefs, setSafetyPrefs] = useState({ womenOnly: false, verifiedOnly: false, noSmoking: false });
     const [confirmCompleteData, setConfirmCompleteData] = useState<any>(null);
-    const [inProgressPooledRides, setInProgressPooledRides] = useState<any[]>([]);
-    const [matchedDrivers, setMatchedDrivers] = useState<DriverDetails[]>([]);
+
     const [isNoDriversFound, setIsNoDriversFound] = useState(false);
+    const [poolProposal, setPoolProposal] = useState<{
+        proposalId: string;
+        matchedRider: { name: string; gender: string; pickup: any; dropoff: any };
+        originalFare: number;
+        poolFare: number;
+    } | null>(null);
     const [poolMatchInfo, setPoolMatchInfo] = useState<{
         poolGroupId: string;
         matchedRider: { name: string; pickup: any; dropoff: any };
@@ -336,10 +341,28 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             }
         });
 
-        socket.on('pool:matched', (payload: any) => {
-            console.log('🤝 Pool match received:', payload);
+        socket.on('pool:proposal', (payload: any) => {
+            console.log('🤝 Pool proposal received:', payload);
+            if (payload?.matchedRider && payload?.proposalId) {
+                setPoolProposal({
+                    proposalId: payload.proposalId,
+                    matchedRider: {
+                        name: payload.matchedRider.name,
+                        gender: payload.matchedRider.gender || 'Not specified',
+                        pickup: payload.matchedRider.pickup,
+                        dropoff: payload.matchedRider.dropoff
+                    },
+                    originalFare: payload.originalFare || 0,
+                    poolFare: payload.poolFare || 0
+                });
+            }
+        });
+
+        socket.on('pool:confirmed', (payload: any) => {
+            console.log('✅ Pool confirmed:', payload);
+            setPoolProposal(null);
+            poolMatchedRef.current = true;
             if (payload?.matchedRider) {
-                poolMatchedRef.current = true;
                 setPoolMatchInfo({
                     poolGroupId: payload.poolGroupId,
                     matchedRider: payload.matchedRider,
@@ -350,6 +373,18 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                     setCurrentFare(payload.poolFare);
                 }
             }
+        });
+
+        socket.on('pool:rejected', (payload: any) => {
+            console.log('❌ Pool rejected:', payload);
+            setPoolProposal(null);
+            // Stay in SEARCHING state — individual ride re-broadcast happens on server
+        });
+
+        socket.on('pool:timeout', (payload: any) => {
+            console.log('⏰ Pool timeout:', payload);
+            setPoolProposal(null);
+            setIsNoDriversFound(true);
         });
 
         socket.on('pool:stop-update', (payload: any) => {
@@ -905,44 +940,6 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         });
     };
 
-    const fetchMatchingDrivers = async (start: { lat: number; lng: number }, end: { lat: number; lng: number }) => {
-        try {
-            const resp = await fetch(`${API_BASE_URL}/api/rider/match-driver?pickupLat=${start.lat}&pickupLng=${start.lng}&dropoffLat=${end.lat}&dropoffLng=${end.lng}`);
-            if (resp.ok) {
-                const data = await resp.json();
-                setMatchedDrivers(data);
-            }
-        } catch (error) {
-            console.error('Failed to fetch matching drivers', error);
-        }
-    };
-
-    const handleRequestJoin = async (driverId: string) => {
-        if (!user?._id && !user?.id) return;
-        if (!pickupCoords || !dropoffCoords) return;
-
-        try {
-            const resp = await fetch(`${API_BASE_URL}/api/rider/request-daily-join`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    riderId: user._id || user.id,
-                    driverId,
-                    pickup: { address: pickup, ...pickupCoords },
-                    dropoff: { address: destination, ...dropoffCoords }
-                })
-            });
-
-            if (resp.ok) {
-                alert('Join request sent to driver!');
-            } else {
-                alert('Failed to send request');
-            }
-        } catch (error) {
-            console.error('Join request error:', error);
-            alert('Connection error');
-        }
-    };
 
 
     // ─── Calculate route ───
@@ -955,7 +952,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             const wp = waypoints || (stops.length > 0 ? stops.map(s => ({ lat: s.lat, lng: s.lng })) : undefined);
             const routes = await getRoute(start.lat, start.lng, end.lat, end.lng, wp);
             if (routes && routes.length > 0 && mapRef.current) {
-                fetchMatchingDrivers(start, end);
+
                 setAvailableRoutes(routes);
                 setSelectedRouteIndex(0);
                 const route = routes[0];
@@ -1076,35 +1073,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         }
     }, [rideMode]);
 
-    // ─── Fetch matching pooled rides (rider-to-rider) ───
-    useEffect(() => {
-        if (!pickupCoords || !dropoffCoords || rideMode !== 'Pooled') {
-            setInProgressPooledRides([]);
-            return;
-        }
-        if (selectedCategory !== 'CAR' && selectedCategory !== 'BIG_CAR') {
-            setInProgressPooledRides([]);
-            return;
-        }
 
-        const fetchPooledRides = async () => {
-            try {
-                const userStr = localStorage.getItem('leaflift_user');
-                const currentUser = userStr ? JSON.parse(userStr) : null;
-                const excludeParam = currentUser?._id ? `&excludeUserId=${currentUser._id}` : '';
-                const url = `${API_BASE_URL}/api/rides/pooled-in-progress?lat=${pickupCoords.lat}&lng=${pickupCoords.lng}&destLat=${dropoffCoords.lat}&destLng=${dropoffCoords.lng}&vehicleCategory=${selectedCategory}&bufferKm=0.5${excludeParam}`;
-                const resp = await fetch(url);
-                if (resp.ok) {
-                    const data = await resp.json();
-                    setInProgressPooledRides(data);
-                }
-            } catch (error) {
-                console.error('Error fetching pooled rides:', error);
-            }
-        };
-
-        fetchPooledRides();
-    }, [pickupCoords, dropoffCoords, rideMode, selectedCategory]);
 
     // ─── Book ride ───
     const handleConfirmRide = async () => {
@@ -1150,7 +1119,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             co2Saved: rideMode === 'Pooled'
                 ? calculateCO2(selectedRoute?.distance || 0, selectedCategory) - calculateCO2(selectedRoute?.distance || 0, 'pool')
                 : 0,
-            isPooled: rideMode === 'Pooled' && (selectedCategory === 'CAR' || selectedCategory === 'BIG_CAR'),
+            isPooled: rideMode === 'Pooled',
             passengers,
             maxPassengers: rideMode === 'Pooled' ? maxPassengers : passengers,
             ...(rideMode === 'Pooled' ? { safetyPreferences: safetyPrefs } : {}),
@@ -1293,6 +1262,8 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         if (delayAlertTimerRef.current) clearTimeout(delayAlertTimerRef.current);
         setOtpCode(null);
         setCurrentFare(null);
+        setPoolProposal(null);
+        setPoolMatchInfo(null);
         setChatMessages([]);
         setChatOpen(false);
         setMaskedDriverPhone(null);
@@ -1686,127 +1657,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         )}
 
 
-                        {/* Matched Pooled Riders (Rider-to-Rider) */}
-                        {rideMode === 'Pooled' && inProgressPooledRides.length > 0 && (
-                            <div className="px-4 py-3 mb-4">
-                                <h3 className="text-sm font-bold text-gray-700 dark:text-gray-300 mb-3">
-                                    🤝 Riders Going Your Way ({inProgressPooledRides.length})
-                                </h3>
-                                <div className="space-y-3 max-h-[calc(100vh-400px)] min-h-[200px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-gray-200 dark:scrollbar-thumb-gray-600 dark:scrollbar-track-gray-800">
-                                    {inProgressPooledRides.map((ride: any) => (
-                                        <div
-                                            key={ride._id}
-                                            className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800"
-                                        >
-                                            <div className="flex items-stretch gap-3">
-                                                <div className="flex-1 min-w-0">
-                                                    {/* Matched Rider Info */}
-                                                    <div className="flex items-center gap-2 mb-2">
-                                                        <span className="material-icons text-blue-600 dark:text-blue-400" style={{ fontSize: '18px' }}>
-                                                            person
-                                                        </span>
-                                                        <div className="flex-1">
-                                                            <span className="text-sm font-bold text-gray-800 dark:text-gray-200">
-                                                                {ride.rider?.name || 'Rider'}
-                                                            </span>
-                                                            {ride.rider?.rating && (
-                                                                <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">
-                                                                    ⭐ {typeof ride.rider.rating === 'number' ? ride.rider.rating.toFixed(1) : ride.rider.rating}
-                                                                </span>
-                                                            )}
-                                                        </div>
-                                                    </div>
 
-                                                    {/* Route Info */}
-                                                    <div className="mb-2 p-2 bg-white dark:bg-zinc-800 rounded border border-gray-200 dark:border-zinc-700">
-                                                        <div className="flex items-start gap-2 mb-1">
-                                                            <span className="material-icons text-green-500" style={{ fontSize: '14px', marginTop: '2px' }}>trip_origin</span>
-                                                            <span className="text-[11px] text-gray-600 dark:text-gray-400 line-clamp-1">
-                                                                {ride.pickup?.address || 'Pickup nearby'}
-                                                            </span>
-                                                        </div>
-                                                        <div className="flex items-start gap-2">
-                                                            <span className="material-icons text-red-500" style={{ fontSize: '14px', marginTop: '2px' }}>location_on</span>
-                                                            <span className="text-[11px] text-gray-600 dark:text-gray-400 line-clamp-1">
-                                                                {ride.dropoff?.address || 'Same direction'}
-                                                            </span>
-                                                        </div>
-                                                    </div>
-
-                                                    {/* Match Quality */}
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="text-[10px] px-2 py-0.5 bg-blue-100 dark:bg-blue-800 text-blue-700 dark:text-blue-300 rounded-full font-bold">
-                                                            {ride.matchDetails?.matchType === 'geometric' ? '📐 Route Match' : '📍 Nearby'}
-                                                        </span>
-                                                        <span className="text-[10px] text-gray-500 dark:text-gray-400">
-                                                            {ride.vehicleCategory || 'CAR'}
-                                                        </span>
-                                                    </div>
-                                                </div>
-
-                                                {/* Pool Together Button */}
-                                                <button
-                                                    onClick={async () => {
-                                                        // Book a pooled ride — the server will auto-match with this rider
-                                                        handleConfirmRide();
-                                                    }}
-                                                    className="flex flex-col items-center justify-center px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 active:scale-95 transition-all shadow-md shrink-0"
-                                                >
-                                                    <span className="text-xs font-bold">Pool</span>
-                                                    <span className="text-[10px] mt-0.5">Together</span>
-                                                </button>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-
-
-                        {matchedDrivers.length > 0 && (
-                            <div className="mb-6 px-4">
-                                <div className="flex justify-between items-center mb-4 px-1">
-                                    <h3 className="text-[10px] font-black uppercase tracking-[.25em] text-gray-400">Available Drivers</h3>
-                                    <span className="text-[10px] font-black text-leaf-500 uppercase tracking-widest">{matchedDrivers.length} Found</span>
-                                </div>
-                                <div className="space-y-4">
-                                    {matchedDrivers.map((driver) => (
-                                        <div key={driver.id} className="bg-[#fbfbfb] dark:bg-zinc-900/50 border border-gray-100 dark:border-zinc-800 p-5 rounded-[32px] transition-all hover:border-leaf-500/30 group shadow-sm">
-                                            <div className="flex items-center gap-4 mb-4">
-                                                <div className="relative">
-                                                    <img src={driver.photoUrl || `https://i.pravatar.cc/150?u=${driver.id}`} alt={driver.name} className="w-14 h-14 rounded-2xl object-cover border border-gray-100 dark:border-zinc-800 shadow-md" />
-                                                    <div className="absolute -bottom-1 -right-1 bg-leaf-500 size-5 flex items-center justify-center rounded-lg border-2 border-white dark:border-zinc-900 shadow-sm">
-                                                        <span className="material-icons-outlined text-white text-[10px] font-black">verified</span>
-                                                    </div>
-                                                </div>
-                                                <div className="flex-1 min-w-0">
-                                                    <div className="flex justify-between items-start">
-                                                        <div className="text-lg font-black dark:text-white truncate pr-2">{driver.name}</div>
-                                                        <div className="flex items-center gap-1 bg-yellow-400/10 px-2 py-0.5 rounded-full border border-yellow-400/20">
-                                                            <span className="material-icons-outlined text-yellow-500 text-xs">star</span>
-                                                            <span className="text-[10px] font-black text-yellow-600 dark:text-yellow-400">{driver.rating}</span>
-                                                        </div>
-                                                    </div>
-                                                    <div className="text-xs font-bold text-gray-400 dark:text-zinc-500 mt-0.5">{driver.vehicle} • {driver.vehicleNumber}</div>
-                                                </div>
-                                            </div>
-                                            <div className="flex items-center gap-3">
-                                                <div className="flex-1 p-3 bg-gray-50 dark:bg-zinc-800 rounded-2xl flex items-center gap-2">
-                                                    <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400 text-sm">nature_people</span>
-                                                    <span className="text-[10px] font-black text-gray-500 uppercase tracking-tight">Eco-friendly Choice</span>
-                                                </div>
-                                                <button
-                                                    className="px-8 py-3 bg-black dark:bg-white text-white dark:text-black text-xs font-black rounded-2xl uppercase tracking-widest shadow-xl shadow-black/10 active:scale-95 transition-all group-hover:bg-leaf-600 group-hover:text-white"
-                                                    onClick={() => handleRequestJoin(driver.id)}
-                                                >
-                                                    Invite
-                                                </button>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
 
                         {/* Vehicle Categories */}
                         <div className="px-4 py-2">
@@ -1904,8 +1755,94 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-8"></div>
                         {!isNoDriversFound ? (
                             <div className="flex flex-col items-center text-center pb-8">
-                                {/* Pool Matched State */}
-                                {poolMatchInfo ? (
+                                {/* Pool Proposal State — Accept/Reject */}
+                                {poolProposal ? (
+                                    <>
+                                        <div className="relative mb-5">
+                                            <div className="size-20 bg-blue-50 dark:bg-blue-900/20 rounded-full flex items-center justify-center">
+                                                <span className="material-icons-outlined text-3xl text-blue-600 dark:text-blue-400">group_add</span>
+                                            </div>
+                                            <div className="absolute inset-0 border-4 border-blue-400/30 rounded-full animate-ping"></div>
+                                        </div>
+                                        <h3 className="text-xl font-black mb-1 dark:text-white">Pool Match Found!</h3>
+                                        <p className="text-sm text-blue-600 dark:text-blue-400 font-bold mb-4">
+                                            Would you like to share this ride?
+                                        </p>
+
+                                        {/* Matched Rider Card */}
+                                        <div className="w-full bg-[#fbfbfb] dark:bg-zinc-900/50 border border-blue-100 dark:border-blue-800/50 rounded-2xl p-4 mb-4">
+                                            <div className="flex items-center gap-3 mb-3">
+                                                <div className="size-10 bg-blue-100 dark:bg-blue-900/30 rounded-xl flex items-center justify-center">
+                                                    <span className="material-icons-outlined text-blue-600 dark:text-blue-400">person</span>
+                                                </div>
+                                                <div className="flex-1 text-left">
+                                                    <div className="text-sm font-black text-gray-900 dark:text-white">{poolProposal.matchedRider.name}</div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-[10px] font-bold text-gray-500 dark:text-gray-400 capitalize">{poolProposal.matchedRider.gender}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-2.5 ml-1">
+                                                <div className="flex flex-col items-center gap-0.5 shrink-0">
+                                                    <div className="size-1.5 bg-leaf-500 rounded-full"></div>
+                                                    <div className="w-0.5 h-3 bg-gray-200 dark:bg-zinc-700"></div>
+                                                    <div className="size-1.5 bg-red-500 rounded-full"></div>
+                                                </div>
+                                                <div className="flex-1 min-w-0 text-left">
+                                                    <p className="text-[11px] font-bold text-gray-700 dark:text-gray-300 truncate">{poolProposal.matchedRider.pickup?.address || 'Nearby'}</p>
+                                                    <p className="text-[11px] font-bold text-gray-700 dark:text-gray-300 truncate">{poolProposal.matchedRider.dropoff?.address || 'Same direction'}</p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Pool Fare Savings */}
+                                        {poolProposal.poolFare > 0 && (
+                                            <div className="flex items-center gap-2 bg-leaf-50 dark:bg-leaf-900/15 border border-leaf-200 dark:border-leaf-800 rounded-xl px-4 py-2.5 mb-4 w-full justify-center">
+                                                <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400 text-sm">savings</span>
+                                                <span className="text-xs font-black text-gray-400 dark:text-gray-500 line-through">₹{poolProposal.originalFare}</span>
+                                                <span className="text-lg font-black text-leaf-600 dark:text-leaf-400">₹{poolProposal.poolFare}</span>
+                                                <span className="text-[10px] font-black text-leaf-600 dark:text-leaf-400 uppercase tracking-widest">per person</span>
+                                            </div>
+                                        )}
+
+                                        {/* Accept / Reject Buttons */}
+                                        <div className="flex gap-3 w-full">
+                                            <button
+                                                onClick={() => {
+                                                    const socket = socketRef.current;
+                                                    if (socket && poolProposal) {
+                                                        socket.emit('pool:reject', { proposalId: poolProposal.proposalId, riderId: user?._id });
+                                                    }
+                                                }}
+                                                className="flex-1 py-3.5 bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-400 rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20 dark:hover:text-red-400 transition-colors"
+                                            >
+                                                Decline
+                                            </button>
+                                            <button
+                                                onClick={() => {
+                                                    const socket = socketRef.current;
+                                                    if (socket && poolProposal) {
+                                                        socket.emit('pool:accept', { proposalId: poolProposal.proposalId, riderId: user?._id });
+                                                        setPoolProposal(prev => prev ? { ...prev, proposalId: prev.proposalId + ':accepted' } : null);
+                                                    }
+                                                }}
+                                                disabled={poolProposal.proposalId.endsWith(':accepted')}
+                                                className={`flex-1 py-3.5 rounded-2xl font-black text-sm uppercase tracking-widest shadow-lg transition-all active:scale-95 ${poolProposal.proposalId.endsWith(':accepted')
+                                                    ? 'bg-blue-400 text-white cursor-not-allowed opacity-70'
+                                                    : 'bg-blue-600 text-white hover:bg-blue-700 shadow-blue-500/20'
+                                                    }`}
+                                            >
+                                                {poolProposal.proposalId.endsWith(':accepted') ? 'Waiting for rider...' : 'Accept Pool'}
+                                            </button>
+                                        </div>
+
+                                        {/* Timer hint */}
+                                        <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-3">
+                                            This offer expires in 60 seconds
+                                        </p>
+                                    </>
+                                ) : poolMatchInfo ? (
+                                    /* Pool Confirmed — waiting for driver */
                                     <>
                                         <div className="relative mb-6">
                                             <div className="size-20 bg-leaf-50 dark:bg-leaf-900/20 rounded-full flex items-center justify-center">
@@ -2189,18 +2126,18 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                         const isActive = idx === currentIdx && !isDone;
                                         return (
                                             <div key={idx} className={`flex items-center gap-3 p-3 rounded-[16px] transition-all ${isDone ? 'bg-gray-50 dark:bg-zinc-800/40 opacity-60' :
-                                                    isActive ? 'bg-white dark:bg-zinc-900 ring-2 ring-leaf-500 shadow-md shadow-leaf-500/10' :
-                                                        'bg-[#fbfbfb] dark:bg-zinc-900/50 border border-gray-100 dark:border-zinc-800'
+                                                isActive ? 'bg-white dark:bg-zinc-900 ring-2 ring-leaf-500 shadow-md shadow-leaf-500/10' :
+                                                    'bg-[#fbfbfb] dark:bg-zinc-900/50 border border-gray-100 dark:border-zinc-800'
                                                 }`}>
                                                 <div className={`size-7 rounded-lg flex items-center justify-center text-[10px] font-black shrink-0 ${isDone ? 'bg-leaf-500 text-white' :
-                                                        isActive ? 'bg-black dark:bg-white text-white dark:text-black' :
-                                                            'bg-gray-200 dark:bg-zinc-700 text-gray-400 dark:text-gray-500'
+                                                    isActive ? 'bg-black dark:bg-white text-white dark:text-black' :
+                                                        'bg-gray-200 dark:bg-zinc-700 text-gray-400 dark:text-gray-500'
                                                     }`}>
                                                     {isDone ? '✓' : idx + 1}
                                                 </div>
                                                 <div className="flex-1 min-w-0">
                                                     <span className={`text-[10px] font-black uppercase tracking-widest ${isDone ? 'text-leaf-600 dark:text-leaf-400' :
-                                                            stop.type === 'PICKUP' ? 'text-leaf-600 dark:text-leaf-400' : 'text-orange-500 dark:text-orange-400'
+                                                        stop.type === 'PICKUP' ? 'text-leaf-600 dark:text-leaf-400' : 'text-orange-500 dark:text-orange-400'
                                                         }`}>
                                                         {stop.type === 'PICKUP' ? 'Pickup' : 'Dropoff'}
                                                     </span>

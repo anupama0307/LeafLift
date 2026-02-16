@@ -38,6 +38,26 @@ const Notification = require('./models/Notification');
 const { findMatchingRides, isRiderOnRoute } = require('./utils/poolMatcher');
 const crypto = require('crypto');
 
+// ─── Pool Proposal Tracking ───
+// Stores pending pool proposals waiting for both riders to accept
+// Key: proposalId, Value: { rideA, rideB, riderAId, riderBId, riderAAccepted, riderBAccepted, groupId, timeout, riderAFare, riderBFare, createdAt }
+const pendingPoolProposals = new Map();
+
+// 5-minute overall pool search timeout tracking
+// Key: rideId, Value: { timeout, userId }
+const poolSearchTimeouts = new Map();
+
+// Helper: check if a ride is involved in a pending pool proposal
+function isRideInPendingProposal(rideId) {
+    const rideIdStr = String(rideId);
+    for (const proposal of pendingPoolProposals.values()) {
+        if (String(proposal.rideAId) === rideIdStr || String(proposal.rideBId) === rideIdStr) {
+            return true;
+        }
+    }
+    return false;
+}
+
 const app = express();
 let PORT = parseInt(process.env.PORT, 10) || 5001;
 const httpServer = http.createServer(app);
@@ -139,6 +159,12 @@ io.on('connection', (socket) => {
     socket.on('rider:search', ({ rideId, riderId, pickup, dropoff, fare, isPooled }) => {
         if (!rideId || !pickup || !pickup.lat || !pickup.lng) return;
         socket.data.searchRideId = rideId;
+
+        // NEVER broadcast pooled rides to drivers via rider:search
+        // Pooled rides are only sent to drivers after BOTH riders accept the pool proposal
+        // via confirmPoolMatch(). Drivers should never see individual pool rides.
+        if (isPooled) return;
+
         const NEARBY_RADIUS_KM = 6;
         const payload = { rideId, riderId, pickup, dropoff, fare, isPooled };
 
@@ -160,6 +186,54 @@ io.on('connection', (socket) => {
 
     socket.on('rider:search:stop', ({ rideId }) => {
         if (rideId) io.to('drivers:online').emit('nearby:rider:remove', { rideId });
+        // Clear pool search timeout if rider stops searching
+        const pst = poolSearchTimeouts.get(rideId);
+        if (pst) { clearTimeout(pst.timeout); poolSearchTimeouts.delete(rideId); }
+    });
+
+    // ─── Pool Proposal: Rider Accepts ───
+    socket.on('pool:accept', ({ proposalId, riderId }) => {
+        const proposal = pendingPoolProposals.get(proposalId);
+        if (!proposal) return;
+
+        const riderAId = String(proposal.riderAId);
+        const riderBId = String(proposal.riderBId);
+        const rId = String(riderId);
+
+        if (rId === riderAId) proposal.riderAAccepted = true;
+        else if (rId === riderBId) proposal.riderBAccepted = true;
+        else return;
+
+        console.log(`✅ Pool proposal ${proposalId}: rider ${rId} accepted (A:${proposal.riderAAccepted}, B:${proposal.riderBAccepted})`);
+
+        // If BOTH accepted → confirm pool
+        if (proposal.riderAAccepted && proposal.riderBAccepted) {
+            clearTimeout(proposal.timeout);
+            pendingPoolProposals.delete(proposalId);
+            confirmPoolMatch(proposal, io);
+        }
+    });
+
+    // ─── Pool Proposal: Rider Rejects ───
+    socket.on('pool:reject', ({ proposalId, riderId }) => {
+        const proposal = pendingPoolProposals.get(proposalId);
+        if (!proposal) return;
+
+        clearTimeout(proposal.timeout);
+        pendingPoolProposals.delete(proposalId);
+
+        const riderAId = String(proposal.riderAId);
+        const riderBId = String(proposal.riderBId);
+
+        console.log(`❌ Pool proposal ${proposalId}: rider ${riderId} rejected`);
+
+        // Notify both riders that pool was rejected
+        io.to(`user:${riderAId}`).emit('pool:rejected', { proposalId, message: 'Pool match declined. Continuing search...' });
+        io.to(`user:${riderBId}`).emit('pool:rejected', { proposalId, message: 'Pool match declined. Continuing search...' });
+
+        // Both rides continue searching — broadcast individual requests to nearby drivers
+        broadcastIndividualRide(proposal.rideAId, io);
+        broadcastIndividualRide(proposal.rideBId, io);
     });
 
     socket.on('disconnect', () => {
@@ -179,7 +253,158 @@ io.on('connection', (socket) => {
     });
 });
 
+// ─── Helper: Confirm pool match after both riders accept ───
+async function confirmPoolMatch(proposal, io) {
+    try {
+        const { groupId, rideAId, rideBId, riderAId, riderBId, riderAFare, riderBFare } = proposal;
+
+        const rideA = await Ride.findById(rideAId);
+        const rideB = await Ride.findById(rideBId);
+        if (!rideA || !rideB) {
+            console.error('❌ confirmPoolMatch: One or both rides not found');
+            return;
+        }
+
+        // Save pool group ID and fares to DB
+        rideA.poolGroupId = groupId;
+        rideA.currentFare = riderAFare;
+        await rideA.save();
+
+        rideB.poolGroupId = groupId;
+        rideB.currentFare = riderBFare;
+        await rideB.save();
+
+        console.log(`🤝 Pool confirmed! Group ${groupId}: Rider ${riderAId} ↔ Rider ${riderBId}`);
+        console.log(`💰 Pool fares: ₹${riderAFare} + ₹${riderBFare}`);
+
+        // Clear pool search timeouts for both rides
+        for (const rideId of [rideAId.toString(), rideBId.toString()]) {
+            const pst = poolSearchTimeouts.get(rideId);
+            if (pst) { clearTimeout(pst.timeout); poolSearchTimeouts.delete(rideId); }
+        }
+
+        // Notify both riders that pool is confirmed
+        const riderAUser = await User.findById(riderAId).select('firstName lastName');
+        const riderBUser = await User.findById(riderBId).select('firstName lastName');
+
+        io.to(`user:${riderAId}`).emit('pool:confirmed', {
+            poolGroupId: groupId,
+            matchedRider: {
+                name: `${riderBUser?.firstName || 'Rider'} ${riderBUser?.lastName || ''}`.trim(),
+                pickup: rideB.pickup,
+                dropoff: rideB.dropoff
+            },
+            rideId: rideAId,
+            originalFare: rideA.fare,
+            poolFare: riderAFare,
+            message: 'Pool confirmed! Searching for a driver...'
+        });
+
+        io.to(`user:${riderBId}`).emit('pool:confirmed', {
+            poolGroupId: groupId,
+            matchedRider: {
+                name: `${riderAUser?.firstName || 'Rider'} ${riderAUser?.lastName || ''}`.trim(),
+                pickup: rideA.pickup,
+                dropoff: rideA.dropoff
+            },
+            rideId: rideBId,
+            originalFare: rideB.fare,
+            poolFare: riderBFare,
+            message: 'Pool confirmed! Searching for a driver...'
+        });
+
+        // Now broadcast consolidated pool ride request to nearby drivers
+        const RIDE_BROADCAST_RADIUS_KM = 6;
+
+        const poolPayload = {
+            rideId: rideB._id.toString(),
+            pickup: rideB.pickup,
+            dropoff: rideB.dropoff,
+            fare: riderAFare + riderBFare,
+            currentFare: riderAFare + riderBFare,
+            isPooled: true,
+            poolGroupId: groupId,
+            routeIndex: rideB.routeIndex,
+            bookingTime: rideB.bookingTime,
+            poolGroupRiders: [
+                {
+                    name: `${riderAUser?.firstName || 'Rider'} ${riderAUser?.lastName || ''}`.trim(),
+                    pickup: rideA.pickup,
+                    dropoff: rideA.dropoff,
+                    rideId: rideA._id.toString()
+                },
+                {
+                    name: `${riderBUser?.firstName || 'Rider'} ${riderBUser?.lastName || ''}`.trim(),
+                    pickup: rideB.pickup,
+                    dropoff: rideB.dropoff,
+                    rideId: rideB._id.toString()
+                }
+            ]
+        };
+
+        if (rideB.pickup && typeof rideB.pickup.lat === 'number' && typeof rideB.pickup.lng === 'number') {
+            let sentCount = 0;
+            for (const [driverId, entry] of onlineDrivers.entries()) {
+                if (!entry.location || typeof entry.location.lat !== 'number') continue;
+                const dist = getDistanceKm(entry.location.lat, entry.location.lng, rideB.pickup.lat, rideB.pickup.lng);
+                if (dist !== null && dist <= RIDE_BROADCAST_RADIUS_KM) {
+                    for (const sid of entry.socketIds) {
+                        io.to(sid).emit('ride:request', poolPayload);
+                    }
+                    sentCount++;
+                }
+            }
+            console.log(`🤝 Pool ride:request sent to ${sentCount} nearby drivers (${poolPayload.poolGroupRiders.length} riders, ₹${poolPayload.fare})`);
+        } else {
+            io.to('drivers:online').emit('ride:request', poolPayload);
+        }
+    } catch (err) {
+        console.error('❌ confirmPoolMatch error:', err);
+    }
+}
+
+// ─── Helper: Re-broadcast individual ride request to nearby drivers ───
+async function broadcastIndividualRide(rideId, io) {
+    try {
+        const ride = await Ride.findById(rideId);
+        if (!ride || ride.status !== 'SEARCHING') return;
+
+        const RIDE_BROADCAST_RADIUS_KM = 6;
+        const ridePayload = {
+            rideId: ride._id,
+            pickup: ride.pickup,
+            dropoff: ride.dropoff,
+            fare: ride.fare,
+            currentFare: ride.currentFare || ride.fare,
+            isPooled: ride.isPooled,
+            poolGroupId: null,
+            routeIndex: ride.routeIndex,
+            bookingTime: ride.bookingTime
+        };
+
+        if (ride.pickup && typeof ride.pickup.lat === 'number' && typeof ride.pickup.lng === 'number') {
+            let sentCount = 0;
+            for (const [driverId, entry] of onlineDrivers.entries()) {
+                if (!entry.location || typeof entry.location.lat !== 'number') continue;
+                const dist = getDistanceKm(entry.location.lat, entry.location.lng, ride.pickup.lat, ride.pickup.lng);
+                if (dist !== null && dist <= RIDE_BROADCAST_RADIUS_KM) {
+                    for (const sid of entry.socketIds) {
+                        io.to(sid).emit('ride:request', ridePayload);
+                    }
+                    sentCount++;
+                }
+            }
+            console.log(`📡 Re-broadcast ride ${rideId} to ${sentCount} nearby drivers`);
+        } else {
+            io.to('drivers:online').emit('ride:request', ridePayload);
+        }
+    } catch (err) {
+        console.error('❌ broadcastIndividualRide error:', err);
+    }
+}
+
 const OLA_API_KEY = process.env.OLA_MAPS_API_KEY;
+
 
 // ✅ OLA Maps Autocomplete Proxy
 app.get('/api/ola/autocomplete', async (req, res) => {
@@ -284,7 +509,24 @@ app.get('/api/health', (req, res) => {
 const MONGODB_URI = process.env.MONGODB_URI;
 if (MONGODB_URI) {
     mongoose.connect(MONGODB_URI)
-        .then(() => console.log('✅ Connected to MongoDB'))
+        .then(async () => {
+            console.log('✅ Connected to MongoDB');
+            // ─── Startup Cleanup: cancel ALL stale SEARCHING rides ───
+            // When server restarts, any ride still in SEARCHING is stale
+            try {
+                // Cancel ALL old SEARCHING rides on server restart
+                // Any ride still in SEARCHING from a previous server session is stale
+                const result = await Ride.updateMany(
+                    { status: 'SEARCHING' },
+                    { $set: { status: 'CANCELED', canceledBy: 'SYSTEM', cancelReason: 'Server restart cleanup' } }
+                );
+                if (result.modifiedCount > 0) {
+                    console.log(`🧹 Startup cleanup: canceled ${result.modifiedCount} stale SEARCHING rides`);
+                }
+            } catch (cleanupErr) {
+                console.warn('⚠️  Startup cleanup error:', cleanupErr.message);
+            }
+        })
         .catch(err => console.error('❌ MongoDB error:', err));
 } else {
     console.warn('⚠️ MONGODB_URI not set - database features will not work');
@@ -662,74 +904,100 @@ app.post('/api/rides', async (req, res) => {
 
         const ride = new Ride(payload);
         await ride.save();
+        console.log(`📝 Ride created: ${ride._id} | isPooled=${ride.isPooled} | status=${ride.status} | category=${ride.vehicleCategory} | pickup=${ride.pickup?.lat?.toFixed(4)},${ride.pickup?.lng?.toFixed(4)} | dropoff=${ride.dropoff?.lat?.toFixed(4)},${ride.dropoff?.lng?.toFixed(4)}`);
 
-        // ─── Pool Matching: find other SEARCHING pooled rides with compatible routes ───
+        // ─── Pool Matching: find other SEARCHING pooled rides with nearby pickup/dropoff ───
         let poolMatch = null;
-        if (ride.isPooled && ride.routePolyline && ride.pickup?.lat && ride.dropoff?.lat) {
+        const POOL_PICKUP_RADIUS_KM = 10;   // Generous 10km pickup radius
+        const POOL_DROPOFF_RADIUS_KM = 20;  // Generous 20km dropoff radius
+        if (ride.isPooled && ride.pickup?.lat && ride.dropoff?.lat) {
             try {
-                // Find other SEARCHING pooled rides in the same vehicle category
+                // Find ALL other SEARCHING pooled rides (no vehicle category or polyline restriction)
                 const candidateRides = await Ride.find({
                     _id: { $ne: ride._id },
                     status: 'SEARCHING',
                     isPooled: true,
-                    vehicleCategory: ride.vehicleCategory,
-                    routePolyline: { $exists: true, $ne: '' },
                     'pickup.lat': { $exists: true },
                     'dropoff.lat': { $exists: true }
                 }).populate('userId', 'firstName lastName email phone');
 
-                const riderPickup = { lat: ride.pickup.lat, lng: ride.pickup.lng };
-                const riderDropoff = { lat: ride.dropoff.lat, lng: ride.dropoff.lng };
+                console.log(`🔍 Pool matching: found ${candidateRides.length} candidate rides for rider ${ride.userId}`);
 
                 for (const candidate of candidateRides) {
-                    // Check if this new rider's pickup/dropoff lies on the candidate's route
-                    const matchOnCandidate = isRiderOnRoute(
-                        candidate.routePolyline, riderPickup, riderDropoff, 0.5
+                    const pickupDist = getDistanceKm(
+                        ride.pickup.lat, ride.pickup.lng,
+                        candidate.pickup.lat, candidate.pickup.lng
                     );
-                    // Also check if candidate's pickup/dropoff lies on this new rider's route
-                    const candidatePickup = { lat: candidate.pickup.lat, lng: candidate.pickup.lng };
-                    const candidateDropoff = { lat: candidate.dropoff.lat, lng: candidate.dropoff.lng };
-                    const matchOnNew = isRiderOnRoute(
-                        ride.routePolyline, candidatePickup, candidateDropoff, 0.5
+                    const dropoffDist = getDistanceKm(
+                        ride.dropoff.lat, ride.dropoff.lng,
+                        candidate.dropoff.lat, candidate.dropoff.lng
                     );
 
-                    if (matchOnCandidate.match || matchOnNew.match) {
+                    console.log(`  📏 Candidate ${candidate._id}: pickup dist=${pickupDist?.toFixed(2)}km, dropoff dist=${dropoffDist?.toFixed(2)}km`);
+
+                    if (pickupDist !== null && dropoffDist !== null &&
+                        pickupDist <= POOL_PICKUP_RADIUS_KM &&
+                        dropoffDist <= POOL_DROPOFF_RADIUS_KM) {
                         poolMatch = candidate;
+                        console.log(`  ✅ MATCHED! Rider ${ride.userId} ↔ Rider ${candidate.userId._id || candidate.userId}`);
                         break;
                     }
                 }
 
                 if (poolMatch) {
-                    // Generate a shared pool group ID
-                    const groupId = poolMatch.poolGroupId || crypto.randomUUID();
+                    // ─── Pool Proposal (don't auto-confirm — ask both riders first) ───
+                    const proposalId = crypto.randomUUID();
+                    const groupId = crypto.randomUUID();
 
-                    // ─── Fare Splitting: 35% discount for each rider ───
+                    // Calculate proposed pool fares (35% discount)
                     const newRiderPoolFare = Math.round((ride.currentFare || ride.fare) * 0.65);
                     const existingRiderPoolFare = Math.round((poolMatch.currentFare || poolMatch.fare) * 0.65);
 
-                    // Update both rides with group ID and pool fares
-                    ride.poolGroupId = groupId;
-                    ride.currentFare = newRiderPoolFare;
-                    await ride.save();
-
-                    if (!poolMatch.poolGroupId) {
-                        poolMatch.poolGroupId = groupId;
-                    }
-                    poolMatch.currentFare = existingRiderPoolFare;
-                    await poolMatch.save();
-
-                    console.log(`🤝 Pool match found! Group ${groupId}: Rider ${ride.userId} ↔ Rider ${poolMatch.userId._id || poolMatch.userId}`);
-                    console.log(`💰 Pool fares: ₹${newRiderPoolFare} + ₹${existingRiderPoolFare} (was ₹${ride.fare} + ₹${poolMatch.fare})`);
-
-                    // Fetch the new rider's info for the notification
-                    const newRider = await User.findById(ride.userId).select('firstName lastName');
-
-                    // Notify the existing rider about the match
+                    // Fetch both riders' info (including gender)
+                    const newRider = await User.findById(ride.userId).select('firstName lastName gender');
                     const existingRiderId = poolMatch.userId._id || poolMatch.userId;
-                    io.to(`user:${existingRiderId}`).emit('pool:matched', {
-                        poolGroupId: groupId,
+                    const existingRiderUser = poolMatch.userId.firstName ? poolMatch.userId : await User.findById(existingRiderId).select('firstName lastName gender');
+
+                    // Store pending proposal (don't save to DB yet)
+                    const proposal = {
+                        proposalId,
+                        groupId,
+                        rideAId: poolMatch._id,
+                        rideBId: ride._id,
+                        riderAId: existingRiderId,
+                        riderBId: ride.userId,
+                        riderAAccepted: false,
+                        riderBAccepted: false,
+                        riderAFare: existingRiderPoolFare,
+                        riderBFare: newRiderPoolFare,
+                        rideA: poolMatch,
+                        rideB: ride,
+                        createdAt: Date.now(),
+                        timeout: null
+                    };
+
+                    // 60-second auto-reject timeout
+                    proposal.timeout = setTimeout(() => {
+                        pendingPoolProposals.delete(proposalId);
+                        console.log(`⏰ Pool proposal ${proposalId} expired (60s timeout)`);
+                        io.to(`user:${existingRiderId}`).emit('pool:rejected', { proposalId, message: 'Pool match expired. Continuing search...' });
+                        io.to(`user:${ride.userId}`).emit('pool:rejected', { proposalId, message: 'Pool match expired. Continuing search...' });
+                        // Re-broadcast individual rides
+                        broadcastIndividualRide(poolMatch._id, io);
+                        broadcastIndividualRide(ride._id, io);
+                    }, 60000);
+
+                    pendingPoolProposals.set(proposalId, proposal);
+
+                    console.log(`🤝 Pool proposal sent! ${proposalId}: Rider ${ride.userId} ↔ Rider ${existingRiderId}`);
+                    console.log(`💰 Proposed fares: ₹${newRiderPoolFare} + ₹${existingRiderPoolFare} (was ₹${ride.fare} + ₹${poolMatch.fare})`);
+
+                    // Send proposal to existing rider (Rider A)
+                    io.to(`user:${existingRiderId}`).emit('pool:proposal', {
+                        proposalId,
                         matchedRider: {
                             name: `${newRider?.firstName || 'Rider'} ${newRider?.lastName || ''}`.trim(),
+                            gender: newRider?.gender || 'Not specified',
                             pickup: ride.pickup,
                             dropoff: ride.dropoff
                         },
@@ -739,12 +1007,13 @@ app.post('/api/rides', async (req, res) => {
                         message: `${newRider?.firstName || 'A rider'} wants to pool with you!`
                     });
 
-                    // Notify the new rider about the match
-                    const matchedRiderName = `${poolMatch.userId.firstName || 'Rider'} ${poolMatch.userId.lastName || ''}`.trim();
-                    io.to(`user:${ride.userId}`).emit('pool:matched', {
-                        poolGroupId: groupId,
+                    // Send proposal to new rider (Rider B)
+                    const matchedRiderName = `${existingRiderUser?.firstName || 'Rider'} ${existingRiderUser?.lastName || ''}`.trim();
+                    io.to(`user:${ride.userId}`).emit('pool:proposal', {
+                        proposalId,
                         matchedRider: {
                             name: matchedRiderName,
+                            gender: existingRiderUser?.gender || 'Not specified',
                             pickup: poolMatch.pickup,
                             dropoff: poolMatch.dropoff
                         },
@@ -753,6 +1022,22 @@ app.post('/api/rides', async (req, res) => {
                         poolFare: newRiderPoolFare,
                         message: `Matched with ${matchedRiderName} for pooling!`
                     });
+
+                    // Remove both riders' individual requests from drivers while proposal is pending
+                    io.to('drivers:online').emit('nearby:rider:remove', { rideId: poolMatch._id.toString() });
+                    io.to('drivers:online').emit('nearby:rider:remove', { rideId: ride._id.toString() });
+
+                    // Start 5-minute overall pool search timeout for the new rider
+                    if (!poolSearchTimeouts.has(ride._id.toString())) {
+                        const pst = setTimeout(() => {
+                            poolSearchTimeouts.delete(ride._id.toString());
+                            io.to(`user:${ride.userId}`).emit('pool:timeout', {
+                                rideId: ride._id,
+                                message: 'No pool matches found in 5 minutes. Try a solo ride?'
+                            });
+                        }, 5 * 60 * 1000);
+                        poolSearchTimeouts.set(ride._id.toString(), { timeout: pst, userId: ride.userId });
+                    }
                 }
             } catch (err) {
                 console.error('⚠️  Pool matching error:', err);
@@ -762,67 +1047,10 @@ app.post('/api/rides', async (req, res) => {
         // ─── Broadcast ride request to nearby drivers ───
         const RIDE_BROADCAST_RADIUS_KM = 6;
 
-        // If pool match was found, remove the first rider's individual request
-        // and broadcast ONE consolidated pool request
-        if (poolMatch) {
-            // Remove BOTH riders' individual requests from all drivers
-            // The first rider's request was already broadcast earlier when they created their ride
-            // The second rider's request might have been briefly broadcast too
-            io.to('drivers:online').emit('nearby:rider:remove', { rideId: poolMatch._id.toString() });
-            io.to('drivers:online').emit('nearby:rider:remove', { rideId: ride._id.toString() });
-
-            // Fetch rider names
-            const riderA = poolMatch.userId;
-            const riderB = await User.findById(ride.userId).select('firstName lastName');
-
-            // Build ONE consolidated pool request payload
-            const poolPayload = {
-                rideId: ride._id.toString(), // Use the newer ride as the primary, stringified
-                pickup: ride.pickup, // Use first pickup (closest) for map marker
-                dropoff: ride.dropoff,
-                fare: (ride.currentFare || ride.fare) + (poolMatch.currentFare || poolMatch.fare), // Combined fare for driver
-                currentFare: (ride.currentFare || ride.fare) + (poolMatch.currentFare || poolMatch.fare),
-                isPooled: true,
-                poolGroupId: ride.poolGroupId,
-                routeIndex: ride.routeIndex,
-                bookingTime: ride.bookingTime,
-                poolGroupRiders: [
-                    {
-                        name: `${riderA.firstName || 'Rider'} ${riderA.lastName || ''}`.trim(),
-                        pickup: poolMatch.pickup,
-                        dropoff: poolMatch.dropoff,
-                        rideId: poolMatch._id.toString()
-                    },
-                    {
-                        name: `${riderB?.firstName || 'Rider'} ${riderB?.lastName || ''}`.trim(),
-                        pickup: ride.pickup,
-                        dropoff: ride.dropoff,
-                        rideId: ride._id.toString()
-                    }
-                ]
-            };
-
-            // Small delay to ensure remove events are processed before the new consolidated request
-            await new Promise(resolve => setTimeout(resolve, 50));
-
-            // Broadcast to nearby drivers
-            if (ride.pickup && typeof ride.pickup.lat === 'number' && typeof ride.pickup.lng === 'number') {
-                let sentCount = 0;
-                for (const [driverId, entry] of onlineDrivers.entries()) {
-                    if (!entry.location || typeof entry.location.lat !== 'number') continue;
-                    const dist = getDistanceKm(entry.location.lat, entry.location.lng, ride.pickup.lat, ride.pickup.lng);
-                    if (dist !== null && dist <= RIDE_BROADCAST_RADIUS_KM) {
-                        for (const sid of entry.socketIds) {
-                            io.to(sid).emit('ride:request', poolPayload);
-                        }
-                        sentCount++;
-                    }
-                }
-                console.log(`🤝 Pool ride:request sent to ${sentCount} nearby drivers (${poolPayload.poolGroupRiders.length} riders, ₹${poolPayload.fare})`);
-            } else {
-                io.to('drivers:online').emit('ride:request', poolPayload);
-            }
-        } else {
+        // NEVER broadcast pooled rides to drivers directly.
+        // Pooled rides only reach drivers via confirmPoolMatch() after both riders accept.
+        // Solo/non-pooled rides are broadcast immediately.
+        if (!poolMatch && !ride.isPooled) {
             // No pool match — broadcast normal individual request
             const ridePayload = {
                 rideId: ride._id,
@@ -883,8 +1111,8 @@ app.get('/api/rides/driver/:driverId', async (req, res) => {
 app.get('/api/rides/nearby', async (req, res) => {
     try {
         const { lat, lng, radius = 6 } = req.query;
-        // Only return rides created in the last 15 minutes to avoid stale requests
-        const staleThreshold = new Date(Date.now() - 15 * 60 * 1000);
+        // Only return rides created in the last 5 minutes to avoid stale requests
+        const staleThreshold = new Date(Date.now() - 5 * 60 * 1000);
         const rides = await Ride.find({
             status: 'SEARCHING',
             createdAt: { $gte: staleThreshold }
@@ -900,8 +1128,11 @@ app.get('/api/rides/nearby', async (req, res) => {
         const lngNum = lng ? Number(lng) : null;
         const radiusNum = Number(radius) || 6;
 
+        // Filter out rides that are in pending pool proposals (not yet confirmed)
+        const nonPendingRides = rides.filter(ride => !isRideInPendingProposal(ride._id));
+
         if (latNum !== null && lngNum !== null) {
-            const filtered = rides.filter((ride) => {
+            const filtered = nonPendingRides.filter((ride) => {
                 if (!ride.pickup || typeof ride.pickup.lat !== 'number') return false;
                 const dist = getDistanceKm(latNum, lngNum, ride.pickup.lat, ride.pickup.lng);
                 return dist !== null && dist <= radiusNum;
@@ -909,7 +1140,7 @@ app.get('/api/rides/nearby', async (req, res) => {
             return res.json(filtered);
         }
 
-        res.json(rides);
+        res.json(nonPendingRides);
     } catch (error) {
         console.error('Error fetching nearby rides:', error);
         res.status(500).json({ message: 'Error fetching nearby rides', details: error.message });
@@ -943,8 +1174,15 @@ app.get('/api/rides/nearby-by-location', async (req, res) => {
         }
 
         const radiusNum = Number(radius) || 6;
-        const rides = await Ride.find({ status: 'SEARCHING' }).sort({ bookingTime: -1 });
-        const filtered = rides.filter((ride) => {
+        const staleThreshold = new Date(Date.now() - 5 * 60 * 1000);
+        const rides = await Ride.find({
+            status: 'SEARCHING',
+            createdAt: { $gte: staleThreshold }
+        }).sort({ bookingTime: -1 });
+
+        // Filter out rides in pending pool proposals
+        const nonPendingRides = rides.filter(ride => !isRideInPendingProposal(ride._id));
+        const filtered = nonPendingRides.filter((ride) => {
             if (!ride.pickup || typeof ride.pickup.lat !== 'number') return false;
             const dist = getDistanceKm(lat, lng, ride.pickup.lat, ride.pickup.lng);
             return dist !== null && dist <= radiusNum;
@@ -1279,6 +1517,9 @@ app.post('/api/rides/:rideId/cancel', async (req, res) => {
             }
         }
 
+        // Always remove canceled ride from all drivers' request lists
+        io.to('drivers:online').emit('nearby:rider:remove', { rideId: ride._id.toString() });
+
         res.json({
             ride,
             cancellationFee,
@@ -1532,7 +1773,14 @@ app.post('/api/rides/:rideId/accept', async (req, res) => {
         io.to(`ride:${ride._id}`).emit('ride:accepted', payload);
         io.to(`user:${ride.userId}`).emit('ride:accepted', payload);
         io.to(`user:${driverId}`).emit('ride:accepted', payload);
-        io.to('drivers:online').emit('nearby:rider:remove', { rideId: ride._id });
+
+        // Remove this ride and ALL pool group rides from ALL drivers' request lists
+        io.to('drivers:online').emit('nearby:rider:remove', { rideId: ride._id.toString() });
+        if (poolGroupRides && poolGroupRides.length > 0) {
+            for (const groupRide of poolGroupRides) {
+                io.to('drivers:online').emit('nearby:rider:remove', { rideId: groupRide._id.toString() });
+            }
+        }
 
         res.json(payload);
     } catch (error) {
@@ -1566,6 +1814,29 @@ app.post('/api/rides/:rideId/pool-stop-reached', async (req, res) => {
                 otp,
                 poolStop: { type: 'PICKUP', riderName: stop.riderName, address: stop.address }
             });
+
+            // Also send OTP via email
+            try {
+                const riderUser = await User.findById(stop.riderId).select('email firstName');
+                if (riderUser?.email && process.env.OTP_EMAIL_USER && process.env.OTP_EMAIL_PASS) {
+                    await emailTransporter.sendMail({
+                        from: `"LeafLift" <${process.env.OTP_EMAIL_USER}>`,
+                        to: riderUser.email,
+                        subject: 'LeafLift - Your Ride Verification OTP',
+                        html: `<div style="font-family:sans-serif;max-width:400px;margin:auto;padding:24px;border-radius:16px;border:1px solid #e5e7eb">
+                            <h2 style="color:#16a34a;margin:0 0 8px">Your ride is here! 🚗</h2>
+                            <p style="color:#6b7280;margin:0 0 16px">Share this OTP with your driver to start your ride:</p>
+                            <div style="text-align:center;padding:16px;background:#f0fdf4;border-radius:12px">
+                                <span style="font-size:32px;font-weight:bold;letter-spacing:8px;color:#111">${otp}</span>
+                            </div>
+                            <p style="color:#9ca3af;font-size:12px;margin:16px 0 0;text-align:center">This OTP is valid for this ride only.</p>
+                        </div>`
+                    });
+                    console.log(`📧 Ride OTP emailed to pool rider ${riderUser.email}`);
+                }
+            } catch (emailErr) {
+                console.warn('⚠️  Failed to email pool ride OTP:', emailErr.message);
+            }
         }
 
         if (stop.type === 'DROPOFF') {
@@ -1700,6 +1971,29 @@ app.post('/api/rides/:rideId/reached', async (req, res) => {
 
         io.to(`ride:${ride._id}`).emit('ride:otp', { rideId: ride._id, otp });
         io.to(`user:${ride.userId}`).emit('ride:otp', { rideId: ride._id, otp });
+
+        // Also send OTP via email
+        try {
+            const riderUser = await User.findById(ride.userId).select('email firstName');
+            if (riderUser?.email && process.env.OTP_EMAIL_USER && process.env.OTP_EMAIL_PASS) {
+                await emailTransporter.sendMail({
+                    from: `"LeafLift" <${process.env.OTP_EMAIL_USER}>`,
+                    to: riderUser.email,
+                    subject: 'LeafLift - Your Ride Verification OTP',
+                    html: `<div style="font-family:sans-serif;max-width:400px;margin:auto;padding:24px;border-radius:16px;border:1px solid #e5e7eb">
+                        <h2 style="color:#16a34a;margin:0 0 8px">Your driver has arrived! 🚗</h2>
+                        <p style="color:#6b7280;margin:0 0 16px">Share this OTP with your driver to start your ride:</p>
+                        <div style="text-align:center;padding:16px;background:#f0fdf4;border-radius:12px">
+                            <span style="font-size:32px;font-weight:bold;letter-spacing:8px;color:#111">${otp}</span>
+                        </div>
+                        <p style="color:#9ca3af;font-size:12px;margin:16px 0 0;text-align:center">This OTP is valid for this ride only.</p>
+                    </div>`
+                });
+                console.log(`📧 Ride OTP emailed to ${riderUser.email}`);
+            }
+        } catch (emailErr) {
+            console.warn('⚠️  Failed to email ride OTP:', emailErr.message);
+        }
 
         res.json({ ok: true });
     } catch (error) {
