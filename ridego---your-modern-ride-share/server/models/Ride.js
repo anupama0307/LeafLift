@@ -86,10 +86,22 @@ const RideSchema = new mongoose.Schema({
         otpVerified: { type: Boolean, default: false }
     }],
     currentPoolStopIndex: { type: Number, default: 0 },
+    genderPreference: {
+        type: String,
+        enum: ['Any', 'Male only', 'Female only'],
+        default: 'Any'
+    },
+    maxPoolSize: {
+        type: Number,
+        default: 4
+    },
+    accessibilityOptions: [String],
+    safetyOptions: [String],
     pooledRiders: [{
         userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         firstName: String,
         lastName: String,
+        gender: String,
         pickup: {
             address: String,
             lat: Number,
@@ -101,7 +113,8 @@ const RideSchema = new mongoose.Schema({
             lng: Number
         },
         fareAdjustment: { type: Number, default: 0 },
-        joinedAt: { type: Date, default: Date.now }
+        joinedAt: { type: Date, default: Date.now },
+        status: { type: String, enum: ['PENDING_CONSENT', 'APPROVED', 'REJECTED', 'JOINED'], default: 'PENDING_CONSENT' }
     }],
     riderLocation: {
         lat: Number,

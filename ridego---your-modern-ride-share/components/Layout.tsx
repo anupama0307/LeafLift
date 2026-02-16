@@ -38,7 +38,18 @@ const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScre
       {/* Top Bar / Status Bar (Simulated) */}
       {!isSpecialScreen && (
         <div className="flex justify-between items-center px-8 pt-4 pb-2">
-          <span className="text-sm font-semibold">9:41</span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-black dark:text-white">9:41</span>
+            {user?.privacySettings?.locationSharing && (
+              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-leaf-50 dark:bg-leaf-900/30 border border-leaf-100 dark:border-leaf-800/30">
+                <span className="flex h-1.5 w-1.5 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-leaf-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-leaf-500"></span>
+                </span>
+                <span className="text-[10px] font-black uppercase tracking-tighter text-leaf-700 dark:text-leaf-400">Live</span>
+              </div>
+            )}
+          </div>
           <button onClick={toggleDarkMode} className="flex items-center gap-1.5 bg-gray-100 dark:bg-zinc-800 px-3 py-1.5 rounded-full hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors">
             <span className="material-icons-outlined text-base text-leaf-600 dark:text-leaf-400">
               {document.documentElement.classList.contains('dark') ? 'light_mode' : 'dark_mode'}
@@ -55,30 +66,45 @@ const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScre
         {children}
       </div>
 
-      {/* Navigation Bar (Sticky at bottom) */}
+      {/* Premium Navigation Bar (Sticky at bottom) */}
       {!isSpecialScreen && (
-        <div className="bg-white dark:bg-zinc-950 border-t border-gray-100 dark:border-gray-800 flex justify-around items-center pt-3 pb-8 px-4 z-50">
-          {isDriver ? (
-            /* Driver Specific Tabs: Dashboard, Inbox, Account */
-            <>
-              <NavItem screen={AppScreen.DRIVER_DASHBOARD} icon="dashboard" label="Dashboard" />
-              <NavItem screen={AppScreen.INBOX} icon="chat_bubble_outline" label="Inbox" />
-              <NavItem screen={AppScreen.ACCOUNT} icon="person" label="Account" />
-            </>
-          ) : (
-            /* Rider Specific Tabs */
-            <>
-              <NavItem screen={AppScreen.HOME} icon="home" label="Home" />
-              <NavItem screen={AppScreen.ACTIVITY} icon="receipt_long" label="Activity" />
-              <NavItem screen={AppScreen.INBOX} icon="chat_bubble_outline" label="Inbox" />
-              <NavItem screen={AppScreen.ACCOUNT} icon="person" label="Account" />
-            </>
-          )}
-
-          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-32 h-1 bg-gray-100 dark:bg-zinc-800 rounded-full"></div>
+        <div className="fixed bottom-0 inset-x-0 z-[100] p-6 pointer-events-none">
+          <div className="max-w-[430px] mx-auto bg-white/70 dark:bg-zinc-950/70 backdrop-blur-2xl border border-zinc-100 dark:border-zinc-800/50 rounded-[32px] flex justify-around items-center py-4 px-2 shadow-2xl pointer-events-auto">
+            {isDriver ? (
+              <>
+                <NavItem screen={AppScreen.DRIVER_DASHBOARD} icon="dashboard" label="Home" />
+                <NavItem screen={AppScreen.INBOX} icon="chat_bubble_outline" label="Inbox" />
+                <NavItem screen={AppScreen.ACCOUNT} icon="person" label="Account" />
+              </>
+            ) : (
+              <>
+                <NavItem screen={AppScreen.HOME} icon="home" label="Home" />
+                <NavItem screen={AppScreen.ACTIVITY} icon="receipt_long" label="History" />
+                <NavItem screen={AppScreen.INBOX} icon="chat_bubble_outline" label="Inbox" />
+                <NavItem screen={AppScreen.ACCOUNT} icon="person" label="Account" />
+              </>
+            )}
+          </div>
         </div>
       )}
 
+      {/* Special Floating Navigation for Driver Dashboard Mode */}
+      {currentScreen === AppScreen.DRIVER_DASHBOARD && (
+        <div className="absolute bottom-8 left-0 right-0 z-50 px-8 flex justify-between pointer-events-none">
+          <button
+            onClick={() => setCurrentScreen(AppScreen.ACCOUNT)}
+            className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
+          >
+            <span className="material-icons-outlined">person</span>
+          </button>
+          <button
+            onClick={() => setCurrentScreen(AppScreen.INBOX)}
+            className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
+          >
+            <span className="material-icons-outlined">chat_bubble</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 };

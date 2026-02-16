@@ -18,7 +18,7 @@ interface AuthScreenProps {
 type AuthMode = 'WELCOME' | 'SIGNIN' | 'SIGNUP_FORM' | 'EMAIL_OTP' | 'OAUTH_COMPLETE';
 type UserRole = 'RIDER' | 'DRIVER';
 type AuthRole = 'RIDER' | 'DRIVER';
-type AuthStep = 'ROLE' | 'LANDING' | 'OTP' | 'NAME' | 'DOB' | 'GENDER' | 'LICENSE' | 'AADHAR';
+type AuthStep = 'ROLE' | 'LANDING' | 'OTP' | 'NAME' | 'DOB' | 'GENDER' | 'LICENSE' | 'AADHAR' | 'LICENSE_UPLOAD' | 'AADHAR_UPLOAD';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
@@ -42,7 +42,9 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
   const [dob, setDob] = useState('');
   const [gender, setGender] = useState('');
   const [license, setLicense] = useState('');
+  const [licenseUrl, setLicenseUrl] = useState<string | null>(null);
   const [aadhar, setAadhar] = useState('');
+  const [aadharUrl, setAadharUrl] = useState<string | null>(null);
 
   // Email OTP state
   const [emailOtp, setEmailOtp] = useState(['', '', '', '', '', '']);
@@ -290,6 +292,33 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     } catch (err: any) {
       setError(err.message || 'OTP verification failed');
       setIsLoading(false);
+    }
+  };
+
+  const handleNext = () => {
+    if (step === 'NAME') setStep('DOB');
+    else if (step === 'DOB') setStep('GENDER');
+    else if (step === 'GENDER') {
+      if (role === 'DRIVER') setStep('LICENSE');
+      else handleSignup({ role, firstName, lastName, phone, dob, gender });
+    }
+    else if (step === 'LICENSE') setStep('LICENSE_UPLOAD');
+    else if (step === 'LICENSE_UPLOAD') setStep('AADHAR');
+    else if (step === 'AADHAR') setStep('AADHAR_UPLOAD');
+    else if (step === 'AADHAR_UPLOAD') {
+      handleSignup({ role, firstName, lastName, phone, dob, gender, license, licenseUrl, aadhar, aadharUrl });
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, type: 'license' | 'aadhar') => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (type === 'license') setLicenseUrl(reader.result as string);
+        else setAadharUrl(reader.result as string);
+      };
+      reader.readAsDataURL(file);
     }
   };
 
@@ -783,6 +812,80 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
       </div>
     </div>
   );
+
+  const renderDocumentUpload = (uploadStep: AuthStep) => {
+    const isLicense = uploadStep === 'LICENSE_UPLOAD';
+    const currentUrl = isLicense ? licenseUrl : aadharUrl;
+    return (
+      <div className="flex-1 px-6 pt-8 animate-in fade-in slide-in-from-right duration-300">
+        <StepHeader
+          title={`Upload ${isLicense ? 'Driving License' : 'Aadhar Card'}`}
+          subtitle={`Please upload a clear photo of your ${isLicense ? 'license' : 'Aadhar card'} for verification.`}
+        />
+        <div className="flex-1 flex flex-col items-center justify-center mb-8">
+          <input
+            type="file"
+            id="doc-upload"
+            className="hidden"
+            accept="image/*"
+            onChange={(e) => handleFileChange(e, isLicense ? 'license' : 'aadhar')}
+          />
+          <label
+            htmlFor="doc-upload"
+            className={`w-full aspect-[4/3] rounded-[32px] border-2 border-dashed flex flex-col items-center justify-center gap-4 transition-all overflow-hidden ${currentUrl ? 'border-leaf-500 bg-leaf-50/50 dark:bg-leaf-900/10' : 'border-gray-200 dark:border-zinc-800 bg-[#f3f3f3] dark:bg-zinc-900 hover:border-leaf-500'}`}
+          >
+            {currentUrl ? (
+              <img src={currentUrl} className="w-full h-full object-cover" alt="Document Preview" />
+            ) : (
+              <>
+                <div className="size-16 bg-white dark:bg-zinc-800 rounded-2xl flex items-center justify-center shadow-sm">
+                  <span className="material-icons-outlined text-3xl text-leaf-600">cloud_upload</span>
+                </div>
+                <div className="text-center">
+                  <p className="font-bold dark:text-white">Tap to upload photo</p>
+                  <p className="text-xs text-gray-500 font-medium">PNG, JPG or JPEG up to 10MB</p>
+                </div>
+              </>
+            )}
+          </label>
+
+          {currentUrl && (
+            <button
+              onClick={() => isLicense ? setLicenseUrl(null) : setAadharUrl(null)}
+              className="mt-4 text-red-500 font-bold text-sm flex items-center gap-1"
+            >
+              <span className="material-icons-outlined text-sm">delete</span>
+              Remove and retake
+            </button>
+          )}
+        </div>
+
+        <button
+          onClick={handleNext}
+          disabled={!currentUrl || isLoading}
+          className="w-full h-14 bg-black dark:bg-white text-white dark:text-black font-bold rounded-lg text-lg disabled:opacity-50 shadow-lg flex items-center justify-center gap-3 active:scale-95 transition-all overflow-hidden relative"
+        >
+          {isLoading ? (
+            <>
+              <div className="size-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+              <span>Running Background Check...</span>
+            </>
+          ) : (
+            <>
+              <span className="material-icons-outlined text-xl">{isLicense ? 'arrow_forward' : 'verified_user'}</span>
+              {isLicense ? 'Next' : 'Complete & Verify'}
+            </>
+          )}
+        </button>
+        {!isLicense && !isLoading && (
+          <p className="mt-4 text-[10px] text-center text-gray-400 font-bold uppercase tracking-widest leading-relaxed">
+            By completing, you agree to our <span className="text-leaf-500">Identity Verification Protocol</span><br />
+            and background screening process.
+          </p>
+        )}
+      </div>
+    );
+  };
 
   const renderOAuthComplete = () => (
     <div className="flex-1 px-6 pt-4 pb-10 flex flex-col animate-in fade-in duration-300 overflow-y-auto">

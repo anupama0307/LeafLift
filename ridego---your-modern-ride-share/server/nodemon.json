@@ -1,0 +1,15 @@
+{
+    "watch": ["index.js", "models/**/*.js"],
+    "ignore": [
+        "*.log",
+        "*.txt",
+        "*.json",
+        "node_modules/**",
+        "tests/**",
+        ".git/**",
+        "package-lock.json",
+        "package.json"
+    ],
+    "ext": "js",
+    "delay": "1500"
+}

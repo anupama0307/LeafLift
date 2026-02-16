@@ -13,11 +13,18 @@ const userSchema = new mongoose.Schema({
     emailVerified: { type: Boolean, default: false },
     // Driver specific fields
     license: { type: String },
+    licenseUrl: { type: String },
     aadhar: { type: String },
+    aadharUrl: { type: String },
     vehicleMake: { type: String },
     vehicleModel: { type: String },
     vehicleNumber: { type: String },
     rating: { type: Number, default: 4.8 },
+    photoUrl: { type: String },
+    isVerified: { type: Boolean, default: false },
+    verificationStatus: { type: String, enum: ['PENDING', 'APPROVED', 'REJECTED'], default: 'PENDING' },
+    verificationDate: { type: Date },
+    accessibilitySupport: [String], // e.g. ['Wheelchair', 'Hearing Impaired Assistance']
     // Wallet
     walletBalance: { type: Number, default: 0 },
     // Eco stats
@@ -38,7 +45,13 @@ const userSchema = new mongoose.Schema({
             lat: Number,
             lng: Number
         },
-        isActive: { type: Boolean, default: false }
+        isActive: { type: Boolean, default: false },
+        genderPreference: { type: String, enum: ['Any', 'Male only', 'Female only'], default: 'Any' }
+    },
+    privacySettings: {
+        shareStats: { type: Boolean, default: true },
+        publicProfile: { type: Boolean, default: true },
+        locationSharing: { type: Boolean, default: true }
     }
 });
 
