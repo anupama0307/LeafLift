@@ -4,9 +4,8 @@ import { LocationItem, SuggestionItem, ActivityItem, MessageItem } from './types
 export const OLA_CONFIG = {
   API_KEY: import.meta.env.VITE_OLA_MAPS_API_KEY || '',
   PROJECT_ID: import.meta.env.VITE_OLA_PROJECT_ID || '',
-  // Fallback to hardcoded for development only (remove in production)
   get apiKey() {
-    return this.API_KEY || 'rFyGaGJyBi01CoHCBwHolFwt9XzPRG6DpoqsytwU';
+    return this.API_KEY;
   }
 };
 

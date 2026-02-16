@@ -2,6 +2,8 @@
 .env
 .env.local
 .env.*.local
+.env.production
+.env.development
 
 # Logs
 logs
@@ -11,11 +13,21 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+server/server_log.txt
 
 node_modules
 dist
 dist-ssr
 *.local
+package-lock.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+venv/
+.venv/
 
 # Editor directories and files
 .vscode/*
@@ -27,3 +39,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# OS files
+Thumbs.db
+Desktop.ini

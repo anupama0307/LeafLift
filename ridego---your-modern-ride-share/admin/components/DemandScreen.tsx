@@ -1,348 +1,353 @@
-import React, { useEffect, useState } from 'react';
+/// <reference types="vite/client" />
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { io } from 'socket.io-client';
 
-const API = '/api/admin';
+interface RegionDemand { name: string; rides: number; drivers: number; deficit: number; heatLevel: string; lat: number; lng: number; }
+interface PeakHour { hour: number; count: number; isPeak: boolean; }
+interface DriverAlert { id: string; type: string; message: string; severity: string; region: string; timestamp: string; acknowledged: boolean; }
+interface DemandForecast { region: string; predicted: number; confidence: number; trend: string; }
 
-interface PeakHour {
-  hour: number;
-  label: string;
-  rides: number;
-  isPeak: boolean;
-  threshold: number;
-}
-
-interface RegionDemand {
-  region: string;
-  current: number;
-  predicted: number;
-  drivers: number;
-  deficit: number;
-  heatLevel: 'low' | 'medium' | 'high' | 'critical';
-}
-
-interface DriverAlert {
-  zone: string;
-  message: string;
-  driversNotified: number;
-  sentAt: string;
-}
+const OLA_API_KEY = (import.meta.env.VITE_OLA_MAPS_API_KEY as string) || '';
+const REGION_CENTER = { lat: 20.5937, lng: 78.9629 };
 
 const DemandScreen: React.FC = () => {
   const [tab, setTab] = useState<'forecast' | 'peak' | 'allocation'>('forecast');
   const [regions, setRegions] = useState<RegionDemand[]>([]);
-  const [peakHours, setPeakHours] = useState<PeakHour[]>([]);
+  const [peaks, setPeaks] = useState<PeakHour[]>([]);
   const [alerts, setAlerts] = useState<DriverAlert[]>([]);
-  const [selectedRegion, setSelectedRegion] = useState('');
+  const [forecasts, setForecasts] = useState<DemandForecast[]>([]);
   const [loading, setLoading] = useState(true);
-  const [forecastDays, setForecastDays] = useState(7);
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstance = useRef<any>(null);
+  const markersRef = useRef<any[]>([]);
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const [regRes, peakRes, alertRes] = await Promise.all([
-          fetch(`${API}/demand/regions`),
-          fetch(`${API}/peak-hours`),
-          fetch(`${API}/driver-alerts`),
-        ]);
-        if (regRes.ok) setRegions(await regRes.json());
-        if (peakRes.ok) setPeakHours(await peakRes.json());
-        if (alertRes.ok) setAlerts(await alertRes.json());
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
+  const fetchAll = useCallback(async () => {
+    try {
+      const [regRes, peakRes, alertRes] = await Promise.all([
+        fetch('/api/admin/demand/regions'), fetch('/api/admin/peak-hours'), fetch('/api/admin/driver-alerts'),
+      ]);
+      if (regRes.ok) setRegions(await regRes.json());
+      if (peakRes.ok) setPeaks(await peakRes.json());
+      if (alertRes.ok) setAlerts(await alertRes.json());
+      try { const mlRes = await fetch('/api/admin/ml/predict-demand'); if (mlRes.ok) { const d = await mlRes.json(); setForecasts(d.predictions || []); } } catch {}
+    } catch (e) { console.error('Demand fetch error:', e); }
+    finally {
+      // Fallback data when server is unavailable
+      setRegions(prev => prev.length ? prev : [
+        { name: 'Mumbai - Andheri', rides: 48, drivers: 22, deficit: 26, heatLevel: 'critical', lat: 19.1197, lng: 72.8464 },
+        { name: 'Delhi - Connaught Place', rides: 42, drivers: 18, deficit: 24, heatLevel: 'critical', lat: 28.6315, lng: 77.2167 },
+        { name: 'Bangalore - Koramangala', rides: 35, drivers: 20, deficit: 15, heatLevel: 'high', lat: 12.9352, lng: 77.6245 },
+        { name: 'Hyderabad - HITEC City', rides: 28, drivers: 20, deficit: 8, heatLevel: 'medium', lat: 17.4435, lng: 78.3772 },
+        { name: 'Chennai - T. Nagar', rides: 31, drivers: 14, deficit: 17, heatLevel: 'high', lat: 13.0418, lng: 80.2341 },
+        { name: 'Kolkata - Salt Lake', rides: 22, drivers: 25, deficit: -3, heatLevel: 'low', lat: 22.5726, lng: 88.4159 },
+        { name: 'Pune - Hinjewadi', rides: 19, drivers: 16, deficit: 3, heatLevel: 'medium', lat: 18.5912, lng: 73.7389 },
+        { name: 'Jaipur - MI Road', rides: 15, drivers: 18, deficit: -3, heatLevel: 'low', lat: 26.9124, lng: 75.7873 },
+      ]);
+      setPeaks(prev => prev.length ? prev : Array.from({ length: 24 }, (_, i) => {
+        const base = [8,5,3,2,3,7,18,42,65,48,32,28,25,22,27,35,48,68,58,40,30,22,15,10];
+        return { hour: i, count: base[i] + Math.floor(Math.random() * 6), isPeak: [7,8,9,17,18].includes(i) };
+      }));
+      setAlerts(prev => prev.length ? prev : [
+        { id: 'a1', type: 'shortage', message: 'Critical driver shortage in Mumbai Andheri - 26 rides unmatched', severity: 'critical', region: 'Mumbai - Andheri', timestamp: new Date().toISOString(), acknowledged: false },
+        { id: 'a2', type: 'surge', message: 'High demand surge detected in Delhi Connaught Place area', severity: 'high', region: 'Delhi - Connaught Place', timestamp: new Date(Date.now() - 600000).toISOString(), acknowledged: false },
+        { id: 'a3', type: 'weather', message: 'Rain forecast may increase demand by 30% in Bangalore', severity: 'medium', region: 'Bangalore - Koramangala', timestamp: new Date(Date.now() - 1800000).toISOString(), acknowledged: true },
+      ]);
+      setLoading(false);
+    }
   }, []);
 
-  // Fallback data
-  const regionData: RegionDemand[] = regions.length > 0 ? regions : [
-    { region: 'RS Puram', current: 145, predicted: 178, drivers: 28, deficit: 12, heatLevel: 'critical' },
-    { region: 'Gandhipuram', current: 120, predicted: 155, drivers: 35, deficit: 5, heatLevel: 'high' },
-    { region: 'Peelamedu', current: 88, predicted: 96, drivers: 22, deficit: 3, heatLevel: 'medium' },
-    { region: 'Saibaba Colony', current: 72, predicted: 85, drivers: 20, deficit: -2, heatLevel: 'medium' },
-    { region: 'Singanallur', current: 55, predicted: 62, drivers: 18, deficit: -5, heatLevel: 'low' },
-    { region: 'Ukkadam', current: 98, predicted: 130, drivers: 15, deficit: 14, heatLevel: 'critical' },
-    { region: 'Town Hall', current: 110, predicted: 142, drivers: 30, deficit: 8, heatLevel: 'high' },
-    { region: 'Avinashi Road', current: 65, predicted: 70, drivers: 25, deficit: -8, heatLevel: 'low' },
-  ];
+  useEffect(() => {
+    fetchAll();
+    const socket = io({ path: '/socket.io' });
+    socket.on('demand-update', (d: any) => { if (d?.regions) setRegions(d.regions); });
+    const iv = setInterval(fetchAll, 30000);
+    return () => { socket.disconnect(); clearInterval(iv); };
+  }, [fetchAll]);
 
-  const peakData: PeakHour[] = peakHours.length > 0 ? peakHours : Array.from({ length: 24 }, (_, i) => {
-    const rides = [12, 8, 5, 4, 6, 18, 55, 120, 145, 130, 95, 78, 82, 90, 88, 75, 85, 110, 135, 128, 92, 58, 32, 18][i];
-    return { hour: i, label: `${i === 0 ? '12' : i > 12 ? i - 12 : i}${i < 12 ? 'AM' : 'PM'}`, rides, isPeak: rides > 100, threshold: 100 };
-  });
+  const clearMarkers = () => { markersRef.current.forEach(m => m.remove()); markersRef.current = []; };
 
-  const alertData: DriverAlert[] = alerts.length > 0 ? alerts : [
-    { zone: 'RS Puram', message: '🚨 High demand! 12 more drivers needed', driversNotified: 28, sentAt: '2 min ago' },
-    { zone: 'Ukkadam', message: '🚨 Surge active! Extra drivers requested', driversNotified: 15, sentAt: '8 min ago' },
-    { zone: 'Town Hall', message: '⚠️ Demand rising — 8 driver gap', driversNotified: 20, sentAt: '15 min ago' },
-  ];
+  const renderMapMarkers = useCallback((map: any) => {
+    if (!map || !regions.length) return;
+    clearMarkers();
+    const maplibregl = (window as any).maplibregl;
+    if (!maplibregl) return;
 
-  const heatColor = (level: string) => {
-    switch (level) {
-      case 'critical': return 'bg-red-500';
-      case 'high': return 'bg-orange-500';
-      case 'medium': return 'bg-amber-400';
-      default: return 'bg-leaf-400';
-    }
+    regions.forEach(r => {
+      const colors: Record<string, { center: string; mid: string; edge: string }> = {
+        critical: { center: 'rgba(220,38,38,0.7)', mid: 'rgba(220,38,38,0.3)', edge: 'rgba(220,38,38,0)' },
+        high: { center: 'rgba(234,88,12,0.6)', mid: 'rgba(234,88,12,0.25)', edge: 'rgba(234,88,12,0)' },
+        medium: { center: 'rgba(217,119,6,0.5)', mid: 'rgba(217,119,6,0.2)', edge: 'rgba(217,119,6,0)' },
+        low: { center: 'rgba(5,150,105,0.4)', mid: 'rgba(5,150,105,0.15)', edge: 'rgba(5,150,105,0)' },
+      };
+      const c = colors[r.heatLevel] || colors.low;
+      const labelColor = r.heatLevel === 'critical' ? '#DC2626' : r.heatLevel === 'high' ? '#EA580C' : r.heatLevel === 'medium' ? '#D97706' : '#059669';
+
+      // Main blob - sized for India-wide zoom
+      const blobSize = r.heatLevel === 'critical' ? 40 : r.heatLevel === 'high' ? 34 : r.heatLevel === 'medium' ? 28 : 22;
+      const el = document.createElement('div');
+      el.style.cssText = 'width:' + blobSize + 'px;height:' + blobSize + 'px;border-radius:50%;background:radial-gradient(circle,' + c.center + ' 0%,' + c.mid + ' 50%,' + c.edge + ' 100%);pointer-events:auto;cursor:pointer;filter:blur(2px);';
+      const popup = new maplibregl.Popup({ offset: 10, closeButton: false }).setHTML(
+        '<div style="font-family:Inter,system-ui,sans-serif;padding:6px;">' +
+        '<p style="font-weight:700;font-size:13px;margin:0 0 6px;">' + (r.name || 'Unknown') + '</p>' +
+        '<p style="font-size:11px;margin:2px 0;">Rides: <b>' + (r.rides ?? 0) + '</b></p>' +
+        '<p style="font-size:11px;margin:2px 0;">Drivers: <b>' + (r.drivers ?? 0) + '</b></p>' +
+        '<p style="font-size:11px;margin:2px 0;">Deficit: <b style="color:' + (r.deficit > 0 ? '#DC2626' : '#059669') + '">' + (r.deficit ?? 0) + '</b></p>' +
+        '<p style="font-size:10px;margin:5px 0 0;text-transform:uppercase;font-weight:700;color:' + labelColor + '">' + (r.heatLevel || 'low') + '</p>' +
+        '</div>'
+      );
+      const marker = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([r.lng, r.lat]).setPopup(popup).addTo(map);
+      markersRef.current.push(marker);
+
+      // Scatter smaller blobs around the city
+      const scatterCount = r.heatLevel === 'critical' ? 6 : r.heatLevel === 'high' ? 4 : r.heatLevel === 'medium' ? 3 : 2;
+      for (let i = 0; i < scatterCount; i++) {
+        const offsetLat = (Math.random() - 0.5) * 0.4;
+        const offsetLng = (Math.random() - 0.5) * 0.4;
+        const subSize = 10 + Math.random() * 18;
+        const subEl = document.createElement('div');
+        subEl.style.cssText = 'width:' + subSize + 'px;height:' + subSize + 'px;border-radius:50%;background:radial-gradient(circle,' + c.center + ' 0%,' + c.mid + ' 40%,' + c.edge + ' 100%);pointer-events:none;filter:blur(1px);opacity:' + (0.5 + Math.random() * 0.4) + ';';
+        const subMarker = new maplibregl.Marker({ element: subEl, anchor: 'center' }).setLngLat([r.lng + offsetLng, r.lat + offsetLat]).addTo(map);
+        markersRef.current.push(subMarker);
+      }
+    });
+  }, [regions]);
+
+  useEffect(() => {
+    if (tab !== 'forecast' || !mapRef.current) return;
+    const initMap = () => {
+      const maplibregl = (window as any).maplibregl;
+      if (!maplibregl) { setTimeout(initMap, 300); return; }
+      if (!mapRef.current) return;
+      if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; }
+      const isDark = document.documentElement.classList.contains('dark');
+      const mapStyle = isDark
+        ? 'https://api.olamaps.io/tiles/vector/v1/styles/default-dark-standard/style.json'
+        : 'https://api.olamaps.io/tiles/vector/v1/styles/default-light-standard/style.json';
+      const map = new maplibregl.Map({
+        container: mapRef.current!, style: mapStyle,
+        center: [REGION_CENTER.lng, REGION_CENTER.lat], zoom: 4.5,
+        transformRequest: (url: string) => {
+          if (url.includes('olamaps.io')) { const sep = url.includes('?') ? '&' : '?'; return { url: `${url}${sep}api_key=${OLA_API_KEY}` }; }
+          return { url };
+        },
+        attributionControl: false,
+      });
+      map.addControl(new maplibregl.NavigationControl(), 'top-right');
+      mapInstance.current = map;
+      map.on('load', () => renderMapMarkers(map));
+      map.on('error', (e: any) => {
+        if (e.error?.message?.includes('Source layer') || e.error?.message?.includes('does not exist')) return;
+      });
+    };
+    setTimeout(initMap, 100);
+    return () => { if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; } };
+  }, [tab]);
+
+  useEffect(() => { if (mapInstance.current && regions.length) renderMapMarkers(mapInstance.current); }, [regions, renderMapMarkers]);
+
+  const maxPeak = Math.max(...peaks.map(p => p.count), 1) * 1.1;
+  const unackAlerts = alerts.filter(a => !a.acknowledged);
+
+  const handleAck = async (id: string) => {
+    try { const res = await fetch(`/api/admin/driver-alerts/${id}/acknowledge`, { method: 'PATCH' }); if (res.ok) setAlerts(prev => prev.map(a => a.id === id ? { ...a, acknowledged: true } : a)); } catch {}
   };
 
-  const heatBg = (level: string) => {
-    switch (level) {
-      case 'critical': return 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800/30';
-      case 'high': return 'bg-orange-50 dark:bg-orange-950/20 border-orange-200 dark:border-orange-800/30';
-      case 'medium': return 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800/30';
-      default: return 'bg-leaf-50 dark:bg-leaf-950/20 border-leaf-200 dark:border-leaf-800/30';
-    }
-  };
-
-  const maxRides = Math.max(...peakData.map(p => p.rides), 1);
+  if (loading) return <div className="flex items-center justify-center h-64"><div className="size-8 border-3 border-blue-500/20 border-t-blue-500 rounded-full animate-spin"></div></div>;
 
   return (
-    <div className="px-5 py-4 pb-6">
-      <div className="mb-4 slide-up">
-        <h1 className="text-xl font-black text-gray-900 dark:text-white tracking-tight">Demand Intelligence</h1>
-        <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 mt-0.5">Forecast, peak hours & driver allocation</p>
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-bold text-gray-900 dark:text-white">Demand Analytics</h1>
+          <p className="text-xs text-gray-500 dark:text-gray-400">Real-time demand monitoring and forecasting</p>
+        </div>
+        {unackAlerts.length > 0 && (
+          <span className="flex items-center gap-1.5 px-2.5 py-1 bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 rounded-lg text-xs font-semibold">
+            <span className="material-icons text-sm">warning</span>{unackAlerts.length} unresolved alert{unackAlerts.length > 1 ? 's' : ''}
+          </span>
+        )}
       </div>
 
-      {/* Tab Switcher */}
-      <div className="flex gap-2 mb-5 slide-up-d1">
-        {(['forecast', 'peak', 'allocation'] as const).map(t => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${tab === t ? 'bg-leaf-500 text-white shadow-lg shadow-leaf-500/20' : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-400'}`}
-          >
-            {t === 'forecast' ? '📊 Forecast' : t === 'peak' ? '⏰ Peak Hours' : '🚗 Allocation'}
+      {/* Tabs */}
+      <div className="flex gap-1 bg-gray-100 dark:bg-black p-1 rounded-lg w-fit">
+        {[{ key: 'forecast', label: 'Forecast', icon: 'analytics' }, { key: 'peak', label: 'Peak Hours', icon: 'schedule' }, { key: 'allocation', label: 'Allocation', icon: 'group' }].map(t => (
+          <button key={t.key} onClick={() => setTab(t.key as any)}
+            className={`flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${tab === t.key ? 'bg-white dark:bg-black text-blue-600 dark:text-blue-400 shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}>
+            <span className="material-icons" style={{ fontSize: '14px' }}>{t.icon}</span>{t.label}
           </button>
         ))}
       </div>
 
-      {/* === FORECAST TAB === */}
+      {/* Forecast Tab */}
       {tab === 'forecast' && (
         <div className="space-y-4">
-          {/* Forecast Period Selector */}
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800 slide-up-d1">
-            <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Forecast Period</p>
-            <div className="flex gap-2">
-              {[1, 3, 7, 14].map(d => (
-                <button key={d} onClick={() => setForecastDays(d)} className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${forecastDays === d ? 'bg-leaf-500 text-white' : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-400'}`}>
-                  {d}D
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Heatmap Grid */}
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800 slide-up-d2">
-            <div className="flex justify-between items-center mb-4">
-              <div>
-                <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Demand Heatmap</p>
-                <p className="text-[10px] text-gray-400 mt-0.5">Predicted demand by region</p>
+          {/* Map */}
+          <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 overflow-hidden">
+            <div className="p-3 border-b border-gray-200 dark:border-zinc-900 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="material-icons text-sm text-blue-500">map</span>
+                <span className="text-xs font-bold text-gray-900 dark:text-white">Demand Heatmap</span>
               </div>
-              <div className="flex items-center gap-1.5">
-                {['low', 'medium', 'high', 'critical'].map(l => (
-                  <div key={l} className="flex items-center gap-1">
-                    <div className={`size-2 rounded-full ${heatColor(l)}`}></div>
-                    <span className="text-[8px] font-bold text-gray-400 capitalize">{l}</span>
-                  </div>
+              <div className="flex items-center gap-3">
+                {[{ level: 'Low', color: 'bg-emerald-500' }, { level: 'Medium', color: 'bg-amber-500' }, { level: 'High', color: 'bg-orange-500' }, { level: 'Critical', color: 'bg-red-500' }].map(i => (
+                  <span key={i.level} className="flex items-center gap-1"><span className={`size-2 rounded-full ${i.color}`}></span><span className="text-[9px] font-semibold text-gray-400">{i.level}</span></span>
                 ))}
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              {regionData.map((r, i) => (
-                <button
-                  key={r.region}
-                  onClick={() => setSelectedRegion(r.region === selectedRegion ? '' : r.region)}
-                  className={`p-3 rounded-xl border transition-all text-left ${selectedRegion === r.region ? 'ring-2 ring-leaf-500 ' : ''}${heatBg(r.heatLevel)}`}
-                >
-                  <div className="flex items-center gap-1.5 mb-1.5">
-                    <div className={`size-2.5 rounded-full ${heatColor(r.heatLevel)}`}></div>
-                    <span className="text-[11px] font-bold text-gray-900 dark:text-white truncate">{r.region}</span>
-                  </div>
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-lg font-black text-gray-900 dark:text-white">{r.predicted}</span>
-                    <span className="text-[10px] text-gray-400 font-semibold">predicted</span>
-                  </div>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-[10px] font-bold text-gray-500">Now: {r.current}</span>
-                    <span className="text-[10px] font-bold text-gray-500">🚗 {r.drivers}</span>
-                  </div>
-                  {r.deficit > 0 && (
-                    <div className="mt-1.5 px-2 py-0.5 rounded-md bg-red-100 dark:bg-red-900/30 inline-block">
-                      <span className="text-[9px] font-bold text-red-600 dark:text-red-400">⚠ {r.deficit} drivers short</span>
-                    </div>
-                  )}
-                </button>
-              ))}
-            </div>
+            <div ref={mapRef} className="h-72 w-full" />
           </div>
 
-          {/* Selected Region Detail */}
-          {selectedRegion && (
-            <div className="bg-gradient-to-r from-leaf-50 to-emerald-50 dark:from-leaf-950/20 dark:to-emerald-950/20 rounded-2xl p-4 border border-leaf-200/50 dark:border-leaf-800/30 slide-up">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-sm font-extrabold text-gray-900 dark:text-white">{selectedRegion} — Detailed Forecast</p>
-                <button onClick={() => setSelectedRegion('')} className="text-xs text-gray-400 hover:text-gray-600">✕</button>
-              </div>
-              <div className="grid grid-cols-3 gap-3">
-                {(() => {
-                  const r = regionData.find(x => x.region === selectedRegion)!;
+          {/* Region Grid + Forecasts */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Region Grid */}
+            <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
+              <h3 className="text-xs font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                <span className="material-icons text-sm text-indigo-500">grid_view</span>Region Overview
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {regions.map((r) => {
+                  const colors: Record<string, string> = { critical: 'border-red-400 bg-red-50 dark:bg-red-500/10', high: 'border-orange-400 bg-orange-50 dark:bg-orange-500/10', medium: 'border-amber-400 bg-amber-50 dark:bg-amber-500/10', low: 'border-emerald-400 bg-emerald-50 dark:bg-emerald-500/10' };
                   return (
-                    <>
-                      <div className="text-center">
-                        <p className="text-xl font-black text-leaf-600">{r.current}</p>
-                        <p className="text-[9px] font-bold text-gray-500 uppercase">Current</p>
+                    <div key={r.name} className={`p-2.5 rounded-lg border-l-3 ${colors[r.heatLevel] || 'border-gray-400 bg-gray-50 dark:bg-black'}`}>
+                      <p className="text-[10px] font-bold text-gray-900 dark:text-white truncate">{r.name}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-[10px] text-gray-500">{r.rides} rides</span>
+                        <span className="text-[10px] text-gray-400">{r.drivers} drv</span>
                       </div>
-                      <div className="text-center">
-                        <p className="text-xl font-black text-amber-600">{r.predicted}</p>
-                        <p className="text-[9px] font-bold text-gray-500 uppercase">Predicted</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-xl font-black text-blue-600">{r.drivers}</p>
-                        <p className="text-[9px] font-bold text-gray-500 uppercase">Drivers</p>
-                      </div>
-                    </>
+                      {r.deficit > 0 && <p className="text-[9px] text-red-500 font-semibold mt-0.5">-{r.deficit} deficit</p>}
+                    </div>
                   );
-                })()}
+                })}
               </div>
             </div>
-          )}
+            {/* ML Forecasts */}
+            <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
+              <h3 className="text-xs font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                <span className="material-icons text-sm text-violet-500">auto_graph</span>ML Demand Forecast
+              </h3>
+              {forecasts.length > 0 ? (
+                <div className="space-y-2">
+                  {forecasts.map((f) => (
+                    <div key={f.region} className="flex items-center gap-3 p-2 bg-gray-50 dark:bg-black/50 rounded-lg">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[10px] font-bold text-gray-900 dark:text-white truncate">{f.region}</p>
+                        <p className="text-[9px] text-gray-400">{(f.confidence * 100).toFixed(0)}% confidence</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs font-bold text-gray-900 dark:text-white">{f.predicted}</p>
+                        <span className={`text-[9px] font-semibold ${f.trend === 'up' ? 'text-green-500' : f.trend === 'down' ? 'text-red-500' : 'text-gray-400'}`}>
+                          {f.trend === 'up' ? 'Rising' : f.trend === 'down' ? 'Falling' : 'Stable'}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-400 text-center py-6">No ML predictions available. Run the ML service to generate forecasts.</p>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
-      {/* === PEAK HOURS TAB === */}
+      {/* Peak Hours Tab */}
       {tab === 'peak' && (
-        <div className="space-y-4">
-          {/* Peak Summary */}
-          <div className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/20 dark:to-orange-950/20 rounded-2xl p-4 border border-amber-200/50 dark:border-amber-800/30 slide-up-d1">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="size-10 rounded-xl bg-amber-500 flex items-center justify-center">
-                <span className="material-icons text-white text-lg">bolt</span>
+        <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
+          <h3 className="text-xs font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+            <span className="material-icons text-sm text-amber-500">schedule</span>24-Hour Demand Distribution
+          </h3>
+          <div className="flex items-end gap-[3px] h-64">
+            {peaks.map((p) => (
+              <div key={p.hour} className="group flex-1 flex flex-col items-center relative">
+                <div className="absolute -top-6 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-900 text-white text-[9px] px-1.5 py-0.5 rounded whitespace-nowrap z-10">
+                  {p.count} rides
+                </div>
+                <div className={`w-full rounded-t transition-all ${p.isPeak ? 'bg-red-500 hover:bg-red-400' : 'bg-blue-400 dark:bg-blue-600 hover:bg-blue-300 dark:hover:bg-blue-500'}`}
+                  style={{ height: `${Math.max(Math.round((p.count / maxPeak) * 230), 3)}px` }}></div>
+                {p.hour % 3 === 0 && <span className="text-[8px] text-gray-400 mt-1">{String(p.hour).padStart(2, '0')}</span>}
               </div>
-              <div>
-                <p className="text-xs font-bold text-amber-800 dark:text-amber-300 uppercase tracking-wider">Peak Hours Detected</p>
-                <p className="text-sm font-black text-amber-900 dark:text-amber-200">
-                  {peakData.filter(p => p.isPeak).map(p => p.label).join(', ') || 'None'}
-                </p>
-              </div>
-            </div>
-            <p className="text-[10px] font-semibold text-amber-600 dark:text-amber-400">
-              Threshold: &gt;{peakData[0]?.threshold || 100} rides/hour — {peakData.filter(p => p.isPeak).length} peak hours flagged today
-            </p>
+            ))}
           </div>
-
-          {/* Hourly Bar Chart */}
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800 slide-up-d2">
-            <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4">Hourly Ride Distribution</p>
-            <div className="flex items-end gap-[3px] h-36">
-              {peakData.map((p, i) => (
-                <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                  <span className="text-[7px] font-bold text-gray-400">{p.rides}</span>
-                  <div
-                    className={`w-full rounded-t-md transition-all duration-500 ${p.isPeak ? 'bg-amber-500' : 'bg-leaf-400 dark:bg-leaf-600'}`}
-                    style={{ height: `${Math.max((p.rides / maxRides) * 100, 4)}%` }}
-                  />
-                  {p.isPeak && <div className="size-1.5 rounded-full bg-red-500"></div>}
-                </div>
-              ))}
-            </div>
-            <div className="flex justify-between mt-2">
-              {[0, 6, 12, 18, 23].map(h => (
-                <span key={h} className="text-[8px] text-gray-400 font-bold">{peakData[h]?.label}</span>
-              ))}
-            </div>
-          </div>
-
-          {/* Peak Configuration Panel */}
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800 slide-up-d3">
-            <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Peak Configuration</p>
-            <div className="space-y-3">
-              <div className="flex justify-between items-center">
-                <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">Volume Threshold</span>
-                <span className="text-xs font-black text-leaf-600">100 rides/hr</span>
-              </div>
-              <div className="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-2">
-                <div className="bg-leaf-500 h-2 rounded-full" style={{ width: '65%' }}></div>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">Auto-notify Drivers</span>
-                <div className="w-10 h-6 bg-leaf-500 rounded-full relative cursor-pointer">
-                  <div className="absolute right-1 top-1 size-4 bg-white rounded-full shadow-md"></div>
-                </div>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">Surge Pricing</span>
-                <div className="w-10 h-6 bg-leaf-500 rounded-full relative cursor-pointer">
-                  <div className="absolute right-1 top-1 size-4 bg-white rounded-full shadow-md"></div>
-                </div>
-              </div>
-            </div>
+          <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-100 dark:border-zinc-900">
+            <span className="flex items-center gap-1 text-[10px] text-gray-500"><span className="size-2 rounded-full bg-blue-400"></span>Normal</span>
+            <span className="flex items-center gap-1 text-[10px] text-gray-500"><span className="size-2 rounded-full bg-red-500"></span>Peak</span>
+            <span className="text-[10px] text-gray-400 ml-auto">{peaks.filter(p => p.isPeak).length} peak hours identified</span>
           </div>
         </div>
       )}
 
-      {/* === ALLOCATION TAB === */}
+      {/* Allocation Tab */}
       {tab === 'allocation' && (
         <div className="space-y-4">
-          {/* Real-time Zone Monitor */}
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800 slide-up-d1">
-            <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Zone Demand vs Drivers</p>
-            {regionData.filter(r => r.deficit > 0).map((r, i) => (
-              <div key={r.region} className="flex items-center gap-3 py-3 border-b border-gray-50 dark:border-zinc-800 last:border-0">
-                <div className={`size-9 rounded-lg ${heatColor(r.heatLevel)} flex items-center justify-center`}>
-                  <span className="text-white text-xs font-black">{r.deficit}</span>
-                </div>
-                <div className="flex-1">
-                  <p className="text-xs font-bold text-gray-900 dark:text-white">{r.region}</p>
-                  <div className="flex gap-3 mt-0.5">
-                    <span className="text-[10px] text-gray-400">Demand: {r.predicted}</span>
-                    <span className="text-[10px] text-gray-400">Drivers: {r.drivers}</span>
-                  </div>
-                </div>
-                <button onClick={async () => {
-                  try {
-                    const res = await fetch(`${API}/driver-alerts/broadcast`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ zone: r.region, message: `🚨 High demand in ${r.region}! ${r.deficit} more drivers needed.` }) });
-                    if (res.ok) { const d = await res.json(); alert(`✅ Notified ${d.driversNotified} drivers for ${r.region}`); }
-                  } catch { alert('❌ Failed'); }
-                }} className="px-3 py-1.5 rounded-lg bg-leaf-500 text-white text-[10px] font-bold hover:bg-leaf-600 transition-colors">
-                  Notify
-                </button>
+          {/* Driver Alerts */}
+          <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                <span className="material-icons text-sm text-red-500">notifications_active</span>Driver Alerts
+                {unackAlerts.length > 0 && <span className="px-1.5 py-0.5 bg-red-100 dark:bg-red-500/20 text-red-600 dark:text-red-400 text-[9px] font-bold rounded-full">{unackAlerts.length}</span>}
+              </h3>
+            </div>
+            {alerts.length > 0 ? (
+              <div className="space-y-2 max-h-72 overflow-y-auto">
+                {alerts.map(a => {
+                  const sevColors: Record<string, string> = { critical: 'border-red-400 bg-red-50 dark:bg-red-500/10', high: 'border-orange-400 bg-orange-50 dark:bg-orange-500/10', medium: 'border-amber-400 bg-amber-50 dark:bg-amber-500/10', low: 'border-blue-400 bg-blue-50 dark:bg-blue-500/10' };
+                  return (
+                    <div key={a.id} className={`p-2.5 rounded-lg border-l-3 ${sevColors[a.severity] || 'border-gray-400 bg-gray-50 dark:bg-black'}`}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${sevColors[a.severity] || ''}`}>{a.severity}</span>
+                            <span className="text-[9px] text-gray-400">{a.region}</span>
+                          </div>
+                          <p className="text-[10px] font-medium text-gray-900 dark:text-white mt-1">{a.message}</p>
+                          <p className="text-[9px] text-gray-400 mt-0.5">{new Date(a.timestamp).toLocaleString()}</p>
+                        </div>
+                        {!a.acknowledged && (
+                          <button onClick={() => handleAck(a.id)} className="text-[9px] font-semibold text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap">
+                            Acknowledge
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            ))}
+            ) : (
+              <p className="text-xs text-gray-400 text-center py-6">No active alerts</p>
+            )}
           </div>
 
-          {/* Driver Alerts Log */}
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800 slide-up-d2">
-            <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Driver Surge Alerts</p>
-            {alertData.map((a, i) => (
-              <div key={i} className="flex items-start gap-3 py-3 border-b border-gray-50 dark:border-zinc-800 last:border-0">
-                <div className="size-8 rounded-lg bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center mt-0.5">
-                  <span className="material-icons text-amber-600 text-sm">campaign</span>
-                </div>
-                <div className="flex-1">
-                  <p className="text-xs font-bold text-gray-900 dark:text-white">{a.zone}</p>
-                  <p className="text-[10px] text-gray-500 mt-0.5">{a.message}</p>
-                  <div className="flex gap-3 mt-1">
-                    <span className="text-[9px] font-bold text-leaf-600">{a.driversNotified} drivers notified</span>
-                    <span className="text-[9px] text-gray-400">{a.sentAt}</span>
-                  </div>
-                </div>
-              </div>
-            ))}
+          {/* Allocation Summary */}
+          <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
+            <h3 className="text-xs font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+              <span className="material-icons text-sm text-teal-500">groups</span>Regional Allocation Summary
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="border-b border-gray-200 dark:border-zinc-900">
+                    <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Region</th>
+                    <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Rides</th>
+                    <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Drivers</th>
+                    <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Deficit</th>
+                    <th className="text-[9px] font-bold text-gray-400 uppercase pb-2">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {regions.map((r) => (
+                    <tr key={r.name} className="border-b border-gray-50 dark:border-zinc-900/50">
+                      <td className="text-[10px] font-semibold text-gray-900 dark:text-white py-2 pr-4">{r.name}</td>
+                      <td className="text-[10px] text-gray-600 dark:text-white py-2 pr-4">{r.rides}</td>
+                      <td className="text-[10px] text-gray-600 dark:text-white py-2 pr-4">{r.drivers}</td>
+                      <td className={`text-[10px] font-semibold py-2 pr-4 ${r.deficit > 0 ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>{r.deficit > 0 ? `+${r.deficit}` : r.deficit}</td>
+                      <td className="py-2"><span className={`text-[9px] font-bold uppercase ${r.heatLevel === 'critical' ? 'text-red-600' : r.heatLevel === 'high' ? 'text-orange-600' : r.heatLevel === 'medium' ? 'text-amber-600' : 'text-green-600'}`}>{r.heatLevel}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-
-          {/* Broadcast Button */}
-          <button onClick={async () => {
-            if (!confirm('Send surge alert to ALL nearby drivers?')) return;
-            try {
-              const res = await fetch(`${API}/driver-alerts/broadcast`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ zone: 'All Zones', message: '🚨 Surge alert! High demand across the city — go online now!' }) });
-              if (res.ok) { const d = await res.json(); alert(`✅ Alert sent to ${d.driversNotified} drivers!`); }
-            } catch { alert('❌ Broadcast failed'); }
-          }} className="w-full py-3.5 rounded-xl bg-leaf-500 text-white text-sm font-bold hover:bg-leaf-600 transition-colors shadow-lg shadow-leaf-500/20 flex items-center justify-center gap-2 slide-up-d3">
-            <span className="material-icons text-lg">send</span>
-            Broadcast Surge Alert to All Nearby Drivers
-          </button>
         </div>
       )}
     </div>

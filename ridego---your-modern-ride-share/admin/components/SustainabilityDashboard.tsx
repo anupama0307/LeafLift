@@ -1,203 +1,189 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
+import { io } from 'socket.io-client';
 
-const API = '/api/admin';
-
-interface MonthlyEco {
-  month: string;
-  co2Saved: number;
-  co2Emitted: number;
-  poolingSaved: number;
-  treesEquivalent: number;
-  greenTrips: number;
-}
+interface EcoStats { totalCO2Saved: number; totalCO2Emitted: number; poolingImpact: number; avgEfficiency: number; greenRidesPct: number; }
+interface MonthlyEco { month: string; saved: number; emitted: number; efficiency: number; }
 
 const SustainabilityDashboard: React.FC = () => {
-  const [data, setData] = useState<MonthlyEco[]>([]);
+  const [stats, setStats] = useState<EcoStats | null>(null);
+  const [monthly, setMonthly] = useState<MonthlyEco[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const res = await fetch(`${API}/eco/stats`);
-        if (res.ok) setData(await res.json());
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
+  const fetchData = useCallback(async () => {
+    try {
+      const res = await fetch('/api/admin/eco/stats');
+      if (res.ok) {
+        const d = await res.json();
+        setStats(d.current);
+        setMonthly(d.monthly || []);
       }
-    };
-    load();
+    } catch (e) { console.error('Eco fetch error:', e); }
+    finally {
+      setStats(prev => prev || { totalCO2Saved: 3120.5, totalCO2Emitted: 8940.2, poolingImpact: 34.9, avgEfficiency: 72.3, greenRidesPct: 41.8 });
+      setMonthly(prev => prev.length ? prev : [
+        { month: 'January', saved: 380, emitted: 1250, efficiency: 68 },
+        { month: 'February', saved: 420, emitted: 1180, efficiency: 70 },
+        { month: 'March', saved: 510, emitted: 1320, efficiency: 71 },
+        { month: 'April', saved: 580, emitted: 1400, efficiency: 73 },
+        { month: 'May', saved: 620, emitted: 1480, efficiency: 74 },
+        { month: 'June', saved: 610, emitted: 1310, efficiency: 75 },
+      ]);
+      setLoading(false);
+    }
   }, []);
 
-  const ecoData: MonthlyEco[] = data.length > 0 ? data : [
-    { month: 'Aug', co2Saved: 320, co2Emitted: 1850, poolingSaved: 180, treesEquivalent: 14, greenTrips: 420 },
-    { month: 'Sep', co2Saved: 410, co2Emitted: 2100, poolingSaved: 225, treesEquivalent: 18, greenTrips: 510 },
-    { month: 'Oct', co2Saved: 520, co2Emitted: 2350, poolingSaved: 290, treesEquivalent: 23, greenTrips: 640 },
-    { month: 'Nov', co2Saved: 610, co2Emitted: 2480, poolingSaved: 345, treesEquivalent: 27, greenTrips: 720 },
-    { month: 'Dec', co2Saved: 480, co2Emitted: 2150, poolingSaved: 260, treesEquivalent: 21, greenTrips: 580 },
-    { month: 'Jan', co2Saved: 720, co2Emitted: 2680, poolingSaved: 410, treesEquivalent: 32, greenTrips: 850 },
-    { month: 'Feb', co2Saved: 680, co2Emitted: 2520, poolingSaved: 385, treesEquivalent: 30, greenTrips: 790 },
-  ];
+  useEffect(() => {
+    fetchData();
+    const socket = io({ path: '/socket.io' });
+    socket.on('eco-update', (d: any) => { if (d?.current) { setStats(d.current); if (d.monthly) setMonthly(d.monthly); } });
+    const iv = setInterval(fetchData, 30000);
+    return () => { socket.disconnect(); clearInterval(iv); };
+  }, [fetchData]);
 
-  const totalSaved = ecoData.reduce((a, d) => a + d.co2Saved, 0);
-  const totalEmitted = ecoData.reduce((a, d) => a + d.co2Emitted, 0);
-  const totalPoolSaved = ecoData.reduce((a, d) => a + d.poolingSaved, 0);
-  const totalTrees = ecoData.reduce((a, d) => a + d.treesEquivalent, 0);
-  const totalGreenTrips = ecoData.reduce((a, d) => a + d.greenTrips, 0);
-  const netReduction = ((totalSaved / (totalEmitted + totalSaved)) * 100).toFixed(1);
+  const maxMonthly = Math.max(...monthly.map(m => Math.max(m.saved, m.emitted)), 1) * 1.1;
+  const sustainabilityScore = stats ? Math.min(100, Math.round((stats.totalCO2Saved / Math.max(stats.totalCO2Emitted, 1)) * 50 + stats.greenRidesPct * 0.5)) : 0;
+  const scoreColor = sustainabilityScore >= 70 ? 'text-green-500' : sustainabilityScore >= 40 ? 'text-amber-500' : 'text-red-500';
+  const scoreStroke = sustainabilityScore >= 70 ? 'stroke-green-500' : sustainabilityScore >= 40 ? 'stroke-amber-500' : 'stroke-red-500';
 
-  const currentMonth = ecoData[ecoData.length - 1];
-  const prevMonth = ecoData[ecoData.length - 2];
-  const savingsChange = currentMonth.co2Saved - prevMonth.co2Saved;
-
-  const maxSaved = Math.max(...ecoData.map(d => d.co2Saved));
-  const maxEmitted = Math.max(...ecoData.map(d => d.co2Emitted));
+  if (loading) return <div className="flex items-center justify-center h-64"><div className="size-8 border-3 border-blue-500/20 border-t-blue-500 rounded-full animate-spin"></div></div>;
 
   return (
-    <div className="px-5 py-4 pb-6">
-      <div className="mb-4 slide-up">
-        <h1 className="text-xl font-black text-gray-900 dark:text-white tracking-tight">Sustainability Impact</h1>
-        <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 mt-0.5">Environmental footprint analytics</p>
+    <div className="space-y-4">
+      {/* Header */}
+      <div>
+        <h1 className="text-lg font-bold text-gray-900 dark:text-white">Sustainability Dashboard</h1>
+        <p className="text-xs text-gray-500 dark:text-gray-400">Environmental impact tracking and CO2 analytics (real-time)</p>
       </div>
 
-      {/* Hero Card */}
-      <div className="bg-gradient-to-br from-emerald-500 to-green-700 rounded-2xl p-5 mb-5 slide-up-d1 relative overflow-hidden">
-        <div className="absolute -right-4 -top-4 size-24 rounded-full bg-white/10"></div>
-        <div className="absolute -right-8 -bottom-8 size-32 rounded-full bg-white/5"></div>
-        <div className="flex items-center gap-2 mb-3">
-          <span className="material-icons text-white/60 text-lg">eco</span>
-          <span className="text-[10px] font-bold text-white/60 uppercase tracking-wider">Total CO₂ Saved</span>
-        </div>
-        <div className="flex items-baseline gap-2 mb-1">
-          <span className="text-4xl font-black text-white">{(totalSaved / 1000).toFixed(1)}</span>
-          <span className="text-lg font-bold text-white/80">tonnes</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className={`text-sm font-bold ${savingsChange >= 0 ? 'text-green-200' : 'text-red-200'}`}>
-            {savingsChange >= 0 ? '↑' : '↓'} {Math.abs(savingsChange)} kg vs last month
-          </span>
-        </div>
-        <p className="text-[10px] text-white/50 font-semibold mt-2">Equivalent to planting {totalTrees} trees 🌳</p>
-      </div>
-
-      {/* Quick Stats */}
-      <div className="grid grid-cols-2 gap-3 mb-5 slide-up-d1">
-        <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="size-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
-              <span className="material-icons text-emerald-600 text-sm">forest</span>
-            </div>
-            <span className="text-[10px] font-bold text-gray-400 uppercase">Net Reduction</span>
-          </div>
-          <p className="text-xl font-black text-emerald-600">{netReduction}%</p>
-          <p className="text-[9px] text-gray-400 font-semibold">Of total emissions</p>
-        </div>
-        <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="size-8 rounded-lg bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center">
-              <span className="material-icons text-purple-600 text-sm">groups</span>
-            </div>
-            <span className="text-[10px] font-bold text-gray-400 uppercase">Pooling Savings</span>
-          </div>
-          <p className="text-xl font-black text-purple-600">{(totalPoolSaved / 1000).toFixed(1)}t</p>
-          <p className="text-[9px] text-gray-400 font-semibold">From shared rides</p>
-        </div>
-        <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="size-8 rounded-lg bg-leaf-100 dark:bg-leaf-900/30 flex items-center justify-center">
-              <span className="material-icons text-leaf-600 text-sm">directions_bike</span>
-            </div>
-            <span className="text-[10px] font-bold text-gray-400 uppercase">Green Trips</span>
-          </div>
-          <p className="text-xl font-black text-leaf-600">{totalGreenTrips.toLocaleString()}</p>
-          <p className="text-[9px] text-gray-400 font-semibold">Eco rides taken</p>
-        </div>
-        <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="size-8 rounded-lg bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
-              <span className="material-icons text-amber-600 text-sm">park</span>
-            </div>
-            <span className="text-[10px] font-bold text-gray-400 uppercase">Trees Equiv</span>
-          </div>
-          <p className="text-xl font-black text-amber-600">{totalTrees}</p>
-          <p className="text-[9px] text-gray-400 font-semibold">Trees planted equiv</p>
-        </div>
-      </div>
-
-      {/* CO2 Monthly Trend */}
-      <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800 mb-5 slide-up-d2">
-        <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4">Monthly CO₂ Trend</p>
-        <div className="flex items-end gap-2 h-32">
-          {ecoData.map((d, i) => (
-            <div key={d.month} className="flex-1 flex flex-col items-center gap-0.5">
-              <span className="text-[7px] font-bold text-emerald-600">{d.co2Saved}</span>
-              <div className="w-full flex flex-col gap-[2px]">
-                {/* Saved bar */}
-                <div
-                  className="w-full rounded-t-sm bg-emerald-400 transition-all duration-500"
-                  style={{ height: `${(d.co2Saved / maxSaved) * 50}px` }}
-                />
-                {/* Emitted bar */}
-                <div
-                  className="w-full rounded-b-sm bg-red-300/50 dark:bg-red-800/30 transition-all duration-500"
-                  style={{ height: `${(d.co2Emitted / maxEmitted) * 30}px` }}
-                />
+      {/* Stats Grid */}
+      {stats && (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+          {[
+            { label: 'CO2 Saved', value: `${stats.totalCO2Saved.toFixed(1)} kg`, icon: 'eco', color: 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/10' },
+            { label: 'CO2 Emitted', value: `${stats.totalCO2Emitted.toFixed(1)} kg`, icon: 'cloud', color: 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10' },
+            { label: 'Pool Impact', value: `${stats.poolingImpact.toFixed(1)}%`, icon: 'group', color: 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10' },
+            { label: 'Efficiency', value: `${stats.avgEfficiency.toFixed(1)}%`, icon: 'bolt', color: 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10' },
+            { label: 'Green Rides', value: `${stats.greenRidesPct.toFixed(1)}%`, icon: 'nature', color: 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10' },
+          ].map((c, i) => (
+            <div key={i} className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-3">
+              <div className="flex items-center gap-2">
+                <div className={`size-7 rounded-lg flex items-center justify-center ${c.color}`}>
+                  <span className="material-icons" style={{ fontSize: '14px' }}>{c.icon}</span>
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-gray-900 dark:text-white">{c.value}</p>
+                  <p className="text-[9px] font-semibold text-gray-400 uppercase">{c.label}</p>
+                </div>
               </div>
             </div>
           ))}
         </div>
-        <div className="flex justify-between mt-2">
-          {ecoData.map(d => (
-            <span key={d.month} className="flex-1 text-center text-[8px] text-gray-400 font-bold">{d.month}</span>
-          ))}
-        </div>
-        <div className="flex items-center gap-4 mt-3 justify-center">
-          <div className="flex items-center gap-1.5">
-            <div className="size-2.5 rounded-full bg-emerald-400"></div>
-            <span className="text-[9px] text-gray-400 font-bold">CO₂ Saved (kg)</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="size-2.5 rounded-full bg-red-300/50"></div>
-            <span className="text-[9px] text-gray-400 font-bold">CO₂ Emitted (kg)</span>
-          </div>
-        </div>
-      </div>
+      )}
 
-      {/* Pooling Impact Breakdown */}
-      <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800 mb-5 slide-up-d3">
-        <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Pooling Environment Impact</p>
-        <div className="space-y-3">
-          {ecoData.map((d, i) => (
-            <div key={d.month} className="flex items-center gap-3">
-              <span className="text-xs font-bold text-gray-600 dark:text-gray-400 w-8">{d.month}</span>
-              <div className="flex-1 bg-gray-100 dark:bg-zinc-800 rounded-full h-4 relative overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-emerald-400 to-emerald-500 rounded-full transition-all duration-700"
-                  style={{ width: `${(d.poolingSaved / Math.max(...ecoData.map(e => e.poolingSaved))) * 100}%` }}
-                />
-                <span className="absolute right-2 top-0 h-full flex items-center text-[8px] font-bold text-gray-500 dark:text-gray-400">{d.poolingSaved} kg</span>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Monthly CO2 Trend */}
+        <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
+          <h3 className="text-xs font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+            <span className="material-icons text-sm text-green-500">show_chart</span>CO2 Monthly Trend (kg)
+          </h3>
+          {monthly.length > 0 ? (
+            <>
+              <div className="flex items-end gap-3 h-64">
+                {monthly.map((m, i) => (
+                  <div key={i} className="group flex-1 flex flex-col items-center gap-1 relative">
+                    <div className="absolute -top-6 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-900 text-white text-[8px] px-1.5 py-0.5 rounded whitespace-nowrap z-10">
+                      Saved: {m.saved.toFixed(1)} / Emitted: {m.emitted.toFixed(1)}
+                    </div>
+                    <div className="w-full flex gap-0.5 items-end">
+                      <div className="flex-1 bg-green-400 dark:bg-green-600 rounded-t transition-all" style={{ height: `${Math.max(Math.round((m.saved / maxMonthly) * 230), 3)}px` }}></div>
+                      <div className="flex-1 bg-red-400 dark:bg-red-600 rounded-t transition-all" style={{ height: `${Math.max(Math.round((m.emitted / maxMonthly) * 230), 3)}px` }}></div>
+                    </div>
+                    <span className="text-[7px] text-gray-400 font-semibold">{m.month.slice(0, 3)}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-100 dark:border-zinc-900">
+                <span className="flex items-center gap-1 text-[10px] text-gray-500"><span className="size-2 rounded-full bg-green-400"></span>Saved</span>
+                <span className="flex items-center gap-1 text-[10px] text-gray-500"><span className="size-2 rounded-full bg-red-400"></span>Emitted</span>
+              </div>
+            </>
+          ) : <p className="text-xs text-gray-400 text-center py-8">No monthly data available</p>}
+        </div>
+
+        {/* Sustainability Score */}
+        <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
+          <h3 className="text-xs font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+            <span className="material-icons text-sm text-emerald-500">eco</span>Sustainability Score
+          </h3>
+          <div className="flex flex-col items-center py-4">
+            <div className="relative size-36">
+              <svg className="size-36 -rotate-90" viewBox="0 0 120 120">
+                <circle cx="60" cy="60" r="50" fill="none" strokeWidth="8" className="stroke-gray-100 dark:stroke-zinc-800" />
+                <circle cx="60" cy="60" r="50" fill="none" strokeWidth="8" strokeLinecap="round"
+                  className={scoreStroke}
+                  strokeDasharray={`${sustainabilityScore * 3.14} 314`} />
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <span className={`text-2xl font-bold ${scoreColor}`}>{sustainabilityScore}</span>
+                <span className="text-[9px] text-gray-400 font-semibold">/ 100</span>
               </div>
             </div>
-          ))}
+            <p className="text-[10px] text-gray-500 text-center mt-4 max-w-xs">
+              {sustainabilityScore >= 70
+                ? 'Excellent sustainability performance. Fleet is operating efficiently with strong environmental impact.'
+                : sustainabilityScore >= 40
+                  ? 'Moderate sustainability. There is room to increase pooling adoption and reduce emissions.'
+                  : 'Sustainability needs improvement. Focus on increasing pooled rides and optimizing routes.'}
+            </p>
+          </div>
         </div>
       </div>
 
-      {/* Environmental Score */}
-      <div className="bg-gradient-to-r from-leaf-50 to-emerald-50 dark:from-leaf-950/20 dark:to-emerald-950/20 rounded-2xl p-5 border border-leaf-200/50 dark:border-leaf-800/30 slide-up-d4">
-        <div className="flex items-center gap-3 mb-3">
-          <div className="size-12 rounded-xl bg-leaf-500 flex items-center justify-center shadow-lg shadow-leaf-500/20">
-            <span className="material-icons text-white text-xl">emoji_nature</span>
-          </div>
-          <div>
-            <p className="text-xs font-bold text-leaf-800 dark:text-leaf-300 uppercase tracking-wider">Sustainability Score</p>
-            <p className="text-2xl font-black text-leaf-700 dark:text-leaf-400">A+</p>
+      {/* Monthly Data Table */}
+      {monthly.length > 0 && (
+        <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
+          <h3 className="text-xs font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+            <span className="material-icons text-sm text-indigo-500">table_chart</span>Monthly Environmental Summary
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-gray-200 dark:border-zinc-900">
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Month</th>
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">CO2 Saved (kg)</th>
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">CO2 Emitted (kg)</th>
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Net Impact</th>
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2">Efficiency</th>
+                </tr>
+              </thead>
+              <tbody>
+                {monthly.map((m, i) => {
+                  const net = m.saved - m.emitted;
+                  return (
+                    <tr key={i} className="border-b border-gray-50 dark:border-zinc-900/50">
+                      <td className="text-[10px] font-semibold text-gray-900 dark:text-white py-2 pr-4">{m.month}</td>
+                      <td className="text-[10px] text-green-600 dark:text-green-400 py-2 pr-4 font-semibold">{m.saved.toFixed(1)}</td>
+                      <td className="text-[10px] text-red-600 dark:text-red-400 py-2 pr-4">{m.emitted.toFixed(1)}</td>
+                      <td className={`text-[10px] font-semibold py-2 pr-4 ${net > 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                        {net > 0 ? '+' : ''}{net.toFixed(1)}
+                      </td>
+                      <td className="py-2">
+                        <div className="flex items-center gap-1.5">
+                          <div className="flex-1 h-1.5 bg-gray-100 dark:bg-black rounded-full max-w-[50px]">
+                            <div className={`h-full rounded-full ${m.efficiency >= 70 ? 'bg-green-500' : m.efficiency >= 40 ? 'bg-amber-500' : 'bg-red-500'}`}
+                              style={{ width: `${m.efficiency}%` }}></div>
+                          </div>
+                          <span className="text-[10px] font-bold text-gray-900 dark:text-white">{m.efficiency.toFixed(1)}%</span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
-        <p className="text-xs text-gray-600 dark:text-gray-400 font-semibold leading-relaxed">
-          LeafLift has saved <strong className="text-leaf-600">{(totalSaved / 1000).toFixed(1)} tonnes</strong> of CO₂ this year through pooling ({(totalPoolSaved / 1000).toFixed(1)}t),
-          route optimization, and efficient fleet management. Equivalent to <strong className="text-leaf-600">{totalTrees} trees</strong> planted.
-        </p>
-      </div>
+      )}
     </div>
   );
 };

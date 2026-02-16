@@ -6,6 +6,7 @@ import DemandScreen from './components/DemandScreen';
 import FleetScreen from './components/FleetScreen';
 import PoolingAnalytics from './components/PoolingAnalytics';
 import SustainabilityDashboard from './components/SustainabilityDashboard';
+import NotificationsScreen from './components/NotificationsScreen';
 
 const App: React.FC = () => {
   const [currentScreen, setCurrentScreen] = useState<AdminScreen>(AdminScreen.DASHBOARD);
@@ -28,14 +29,17 @@ const App: React.FC = () => {
         return <PoolingAnalytics />;
       case AdminScreen.ECO:
         return <SustainabilityDashboard />;
+      case AdminScreen.NOTIFICATIONS:
+        return <NotificationsScreen />;
       default:
         return <DashboardHome />;
     }
   };
 
   return (
-    <div className="flex justify-center min-h-screen bg-[#f3f3f3] dark:bg-zinc-950 transition-colors duration-300">
-      <div className="w-full max-w-[430px] min-h-screen bg-white dark:bg-zinc-950 flex flex-col relative shadow-2xl overflow-hidden">
+    <div className="flex min-h-screen bg-[#f3f3f3] dark:bg-black transition-colors duration-300">
+      {/* Responsive container: full-width on desktop, centered phone on small viewports */}
+      <div className="w-full min-h-screen bg-white dark:bg-black flex flex-col relative overflow-hidden">
         <Layout
           currentScreen={currentScreen}
           setCurrentScreen={setCurrentScreen}

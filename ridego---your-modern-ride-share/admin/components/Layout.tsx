@@ -1,73 +1,117 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { AdminScreen } from '../types';
 
 interface LayoutProps {
   children: React.ReactNode;
   currentScreen: AdminScreen;
-  setCurrentScreen: (s: AdminScreen) => void;
-  toggleDarkMode: () => void;
+  setCurrentScreen: (screen: AdminScreen) => void;
   isDark: boolean;
+  toggleDarkMode: () => void;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScreen, toggleDarkMode, isDark }) => {
-  const tabs: { screen: AdminScreen; icon: string; label: string }[] = [
-    { screen: AdminScreen.DASHBOARD, icon: 'dashboard', label: 'Home' },
-    { screen: AdminScreen.DEMAND, icon: 'trending_up', label: 'Demand' },
-    { screen: AdminScreen.FLEET, icon: 'local_shipping', label: 'Fleet' },
-    { screen: AdminScreen.POOLING, icon: 'groups', label: 'Pooling' },
-    { screen: AdminScreen.ECO, icon: 'eco', label: 'Eco' },
-  ];
+const navItems: { screen: AdminScreen; label: string; icon: string; }[] = [
+  { screen: AdminScreen.DASHBOARD, label: 'Dashboard', icon: 'dashboard' },
+  { screen: AdminScreen.DEMAND, label: 'Demand', icon: 'analytics' },
+  { screen: AdminScreen.FLEET, label: 'Fleet', icon: 'directions_car' },
+  { screen: AdminScreen.POOLING, label: 'Pooling', icon: 'group' },
+  { screen: AdminScreen.ECO, label: 'Sustainability', icon: 'eco' },
+  { screen: AdminScreen.NOTIFICATIONS, label: 'Notifications', icon: 'notifications' },
+];
+
+const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScreen, isDark, toggleDarkMode }) => {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden bg-white dark:bg-zinc-950">
-      {/* Top Bar */}
-      <div className="flex justify-between items-center px-6 pt-4 pb-2 bg-white dark:bg-zinc-950 z-10">
-        <div className="flex items-center gap-2.5">
-          <div className="size-9 rounded-xl bg-leaf-500 flex items-center justify-center shadow-lg shadow-leaf-500/20">
-            <span className="material-icons text-white text-lg">admin_panel_settings</span>
-          </div>
-          <div>
-            <span className="text-sm font-extrabold tracking-tight text-gray-900 dark:text-white">LeafLift</span>
-            <span className="text-[10px] font-bold text-leaf-600 dark:text-leaf-400 block -mt-0.5 tracking-widest uppercase">Admin</span>
+    <div className="flex h-screen bg-gray-50 dark:bg-black">
+      {/* Sidebar Overlay */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm lg:hidden" onClick={() => setSidebarOpen(false)} />
+      )}
+
+      {/* Sidebar */}
+      <aside className={`fixed inset-y-0 left-0 z-50 w-56 bg-white dark:bg-black border-r border-gray-200 dark:border-zinc-900 flex flex-col transition-transform lg:translate-x-0 lg:static lg:z-auto ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        {/* Brand */}
+        <div className="p-4 border-b border-gray-100 dark:border-zinc-900">
+          <div className="flex items-center gap-2.5">
+            <div className="size-8 bg-green-600 rounded-lg flex items-center justify-center">
+              <span className="material-icons text-white text-base">eco</span>
+            </div>
+            <div>
+              <h1 className="text-sm font-bold text-gray-900 dark:text-white leading-none">LeafLift</h1>
+              <p className="text-[9px] font-semibold text-gray-400 mt-0.5">Admin Console</p>
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={toggleDarkMode} className="size-9 rounded-xl bg-gray-100 dark:bg-zinc-800 flex items-center justify-center hover:scale-105 transition-transform">
-            <span className="material-icons-outlined text-sm text-leaf-600 dark:text-leaf-400">
-              {isDark ? 'light_mode' : 'dark_mode'}
-            </span>
-          </button>
-          <button className="size-9 rounded-xl bg-gray-100 dark:bg-zinc-800 flex items-center justify-center hover:scale-105 transition-transform relative">
-            <span className="material-icons-outlined text-sm">notifications</span>
-            <div className="absolute -top-0.5 -right-0.5 size-3 bg-red-500 rounded-full border-2 border-white dark:border-zinc-950"></div>
+
+        {/* Nav Items */}
+        <nav className="flex-1 py-3 px-2 overflow-y-auto">
+          <div className="space-y-0.5">
+            {navItems.map(item => {
+              const active = currentScreen === item.screen;
+              return (
+                <button key={item.screen} onClick={() => { setCurrentScreen(item.screen); setSidebarOpen(false); }}
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${active ? 'bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-zinc-900'}`}>
+                  <span className={`material-icons text-base ${active ? 'text-blue-500' : 'text-gray-400 dark:text-gray-500'}`}>{item.icon}</span>
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+
+        {/* Dark Mode + Info */}
+        <div className="p-3 border-t border-gray-100 dark:border-zinc-900">
+          <button onClick={toggleDarkMode}
+            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-zinc-900 transition-colors">
+            <span className="material-icons text-base">{isDark ? 'light_mode' : 'dark_mode'}</span>
+            {isDark ? 'Light Mode' : 'Dark Mode'}
           </button>
         </div>
-      </div>
+      </aside>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto hide-scrollbar relative">
-        {children}
-      </div>
-
-      {/* Bottom Navigation */}
-      <div className="bg-white dark:bg-zinc-950 border-t border-gray-100 dark:border-gray-800 flex justify-around items-center pt-3 pb-8 px-2 z-50">
-        {tabs.map((tab) => {
-          const isActive = currentScreen === tab.screen;
-          return (
-            <button
-              key={tab.screen}
-              onClick={() => setCurrentScreen(tab.screen)}
-              className={`flex flex-col items-center gap-1 transition-all flex-1 ${isActive ? 'opacity-100 text-leaf-600 dark:text-leaf-400' : 'opacity-40 hover:opacity-70 dark:text-white'}`}
-            >
-              <div className={`size-10 rounded-xl flex items-center justify-center transition-all ${isActive ? 'bg-leaf-50 dark:bg-leaf-900/20 mb-0.5' : ''}`}>
-                <span className="material-icons-outlined text-2xl">{tab.icon}</span>
-              </div>
-              <span className="text-[10px] font-black tracking-tight">{tab.label}</span>
+      {/* Main */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Top Bar */}
+        <header className="bg-white dark:bg-black border-b border-gray-200 dark:border-zinc-900 px-4 py-3 flex items-center justify-between flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setSidebarOpen(!sidebarOpen)} className="lg:hidden size-8 rounded-lg bg-gray-100 dark:bg-zinc-900 flex items-center justify-center">
+              <span className="material-icons text-base text-gray-500">{sidebarOpen ? 'close' : 'menu'}</span>
             </button>
-          );
-        })}
-        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-32 h-1 bg-gray-100 dark:bg-zinc-800 rounded-full"></div>
+            <h2 className="text-sm font-bold text-gray-900 dark:text-white">
+              {navItems.find(n => n.screen === currentScreen)?.label || 'Dashboard'}
+            </h2>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-semibold text-gray-400 hidden sm:inline">
+              {new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+            </span>
+            <div className="size-7 bg-blue-500 rounded-full flex items-center justify-center">
+              <span className="material-icons text-white" style={{ fontSize: '14px' }}>person</span>
+            </div>
+          </div>
+        </header>
+
+        {/* Content */}
+        <main className="flex-1 overflow-y-auto p-4 lg:p-6">
+          {children}
+        </main>
       </div>
+
+      {/* Mobile Bottom Nav */}
+      <nav className="fixed bottom-0 left-0 right-0 bg-white dark:bg-black border-t border-gray-200 dark:border-zinc-900 px-2 py-1.5 lg:hidden z-30">
+        <div className="flex items-center justify-around">
+          {navItems.slice(0, 5).map(item => {
+            const active = currentScreen === item.screen;
+            return (
+              <button key={item.screen} onClick={() => setCurrentScreen(item.screen)}
+                className={`flex flex-col items-center gap-0.5 py-1 px-2 rounded-lg ${active ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400 dark:text-gray-500'}`}>
+                <span className="material-icons" style={{ fontSize: '18px' }}>{item.icon}</span>
+                <span className="text-[8px] font-semibold">{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
     </div>
   );
 };
