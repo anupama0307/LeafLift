@@ -44,3 +44,6 @@ This epic focuses on enabling efficient ride-sharing by matching users with simi
 - [x] **1.5 Opt-out capability** (Implemented Toggle)
 - [ ] **1.6 Safety preference filtering** (Pending strict filter logic)
 - [ ] **1.7 Automated request clustering** (Pending advanced algorithm)
+
+> *Last Updated: Sprint 1 Review*
+
