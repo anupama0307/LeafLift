@@ -42,3 +42,6 @@ This epic aims to motivate users to make eco-conscious travel choices by visuali
 - [x] **3.5 Highlight eco-friendly rides** (Implemented UI Badges)
 - [ ] **3.6 Eco-driving insights for drivers** (Pending advanced sensors)
 - [ ] **3.7 Visual sustainability metrics** (Pending detailed charting library integration)
+
+> *Last Updated: Sprint 1 Review*
+
