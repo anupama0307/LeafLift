@@ -215,26 +215,26 @@ app.get('/api/ola/autocomplete', async (req, res) => {
 });
 
 // ✅ OLA Maps Directions Proxy (with multi-stop waypoints support)
-app.post('/api/ola/directions', async (req, res) => {
-    try {
-        const { origin, destination, alternatives, waypoints } = req.body;
+app.post('/api/ola/directions', async(req, res) => {
+            try {
+                const { origin, destination, alternatives, waypoints } = req.body;
 
-        if (!origin || !destination) {
-            return res.status(400).json({ error: 'Origin and destination required' });
-        }
+                if (!origin || !destination) {
+                    return res.status(400).json({ error: 'Origin and destination required' });
+                }
 
-        if (!OLA_API_KEY) {
-            return res.status(500).json({ error: 'OLA_MAPS_API_KEY not configured' });
-        }
+                if (!OLA_API_KEY) {
+                    return res.status(500).json({ error: 'OLA_MAPS_API_KEY not configured' });
+                }
 
-        let url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&alternatives=${alternatives || false}&steps=true&overview=full&language=en&traffic_metadata=true&api_key=${OLA_API_KEY}`;
+                let url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&alternatives=${alternatives || false}&steps=true&overview=full&language=en&traffic_metadata=true&api_key=${OLA_API_KEY}`;
 
-        // Add waypoints for multi-stop rides (format: "lat,lng|lat,lng")
-        if (waypoints && Array.isArray(waypoints) && waypoints.length > 0) {
-            url += `&waypoints=${waypoints.join('|')}`;
-        }
+                // Add waypoints for multi-stop rides (format: "lat,lng|lat,lng")
+                if (waypoints && Array.isArray(waypoints) && waypoints.length > 0) {
+                    url += `&waypoints=${waypoints.join('|')}`;
+                }
 
-        console.log(`🗺️ OLA Directions: ${origin} → ${destination}${waypoints ? ` via ${waypoints.length} stops` : ''}`);
+                console.log(`🗺️ OLA Directions: ${origin} → ${destination}${waypoints ? ` via ${waypoints.length} stops` : ''}`);
         const response = await axios.post(url);
         res.json(response.data);
 
@@ -551,6 +551,46 @@ app.get('/api/rider/match-driver', async (req, res) => {
     } catch (error) {
         console.error('Match driver error:', error);
         res.status(500).json({ message: 'Error matching drivers' });
+    }
+});
+
+// ── Bridge: Admin → Driver real-time push ──
+// The admin server (port 5002) calls this endpoint to push notifications
+// to drivers connected on THIS server's Socket.IO (port 5001).
+app.post('/api/internal/push-notification', (req, res) => {
+    try {
+        const { type, driverId, notification, zone, message, title, count } = req.body;
+
+        if (type === 'driver-alert') {
+            // Broadcast surge/zone alert to ALL online drivers
+            io.to('drivers:online').emit('notification:new', {
+                _id: notification?._id || Date.now().toString(),
+                title: zone || 'Surge Alert',
+                message: message || 'High demand in your area!',
+                type: 'SYSTEM',
+                createdAt: new Date(),
+            });
+            console.log('[Bridge] driver-alert pushed to drivers:online');
+        } else if (type === 'notification' && driverId) {
+            // Push to a specific driver
+            io.to(`user:${driverId}`).emit('notification:new', notification);
+            console.log(`[Bridge] notification pushed to user:${driverId}`);
+        } else if (type === 'broadcast') {
+            // Broadcast to ALL online drivers
+            io.to('drivers:online').emit('notification:new', {
+                _id: Date.now().toString(),
+                title: title || 'Admin Broadcast',
+                message: message || '',
+                type: 'SYSTEM',
+                createdAt: new Date(),
+            });
+            console.log(`[Bridge] broadcast pushed to drivers:online (${count || '?'} drivers)`);
+        }
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error('[Bridge] push-notification error:', err.message);
+        res.status(500).json({ error: err.message });
     }
 });
 

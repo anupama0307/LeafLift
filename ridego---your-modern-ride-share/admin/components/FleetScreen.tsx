@@ -1,246 +1,265 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
+import { io } from 'socket.io-client';
 
-const API = '/api/admin';
-
-interface VehicleData {
-  type: string;
-  icon: string;
-  total: number;
-  active: number;
-  utilization: number;
-  avgHoursPerDay: number;
-  totalKm: number;
-  avgRevenue: number;
-}
+interface VehicleUtil { type: string; total: number; active: number; idle: number; maintenance: number; utilization: number; }
+interface FleetInsight { title: string; suggestion: string; impact: string; priority: string; }
 
 const FleetScreen: React.FC = () => {
-  const [tab, setTab] = useState<'utilization' | 'report'>('utilization');
-  const [vehicles, setVehicles] = useState<VehicleData[]>([]);
-  const [period, setPeriod] = useState<'today' | 'week' | 'month'>('week');
+  const [tab, setTab] = useState<'utilization' | 'report' | 'optimization'>('utilization');
+  const [vehicles, setVehicles] = useState<VehicleUtil[]>([]);
+  const [insights, setInsights] = useState<FleetInsight[]>([]);
+  const [period, setPeriod] = useState<'day' | 'week' | 'month'>('day');
   const [loading, setLoading] = useState(true);
+  const [exportLoading, setExportLoading] = useState(false);
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const res = await fetch(`${API}/fleet/utilization?period=${period}`);
-        if (res.ok) setVehicles(await res.json());
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
+  const fetchData = useCallback(async () => {
+    try {
+      const [utilRes, insightRes] = await Promise.all([
+        fetch(`/api/admin/fleet/utilization?period=${period}`),
+        fetch('/api/admin/ml/fleet-insights'),
+      ]);
+      if (utilRes.ok) setVehicles(await utilRes.json());
+      if (insightRes.ok) { const d = await insightRes.json(); setInsights(d.insights || []); }
+    } catch (e) { console.error('Fleet fetch error:', e); }
+    finally {
+      // Fallback data if server didn't respond
+      setVehicles(prev => prev.length ? prev : [
+        { type: 'Bike', total: 45, active: 32, idle: 8, maintenance: 5, utilization: 71.1 },
+        { type: 'Auto', total: 38, active: 22, idle: 12, maintenance: 4, utilization: 57.9 },
+        { type: 'Car', total: 52, active: 41, idle: 7, maintenance: 4, utilization: 78.8 },
+        { type: 'SUV', total: 24, active: 15, idle: 6, maintenance: 3, utilization: 62.5 },
+      ]);
+      setInsights(prev => prev.length ? prev : [
+        { title: 'Bike Supply Gap', suggestion: 'Add 8 more bikes in T. Nagar during 8-10 AM to meet peak demand.', impact: '+12% ride fulfillment', priority: 'high' },
+        { title: 'Reduce SUV Idle Time', suggestion: 'Shift idle SUV drivers to Car category during off-peak hours (11 AM - 4 PM).', impact: '-18% idle cost', priority: 'medium' },
+        { title: 'Auto Demand in Velachery', suggestion: 'Incentivize auto drivers to operate in Velachery during evening hours.', impact: '+9% coverage', priority: 'low' },
+      ]);
+      setLoading(false);
+    }
   }, [period]);
 
-  const fleetData: VehicleData[] = vehicles.length > 0 ? vehicles : [
-    { type: 'Bike', icon: 'two_wheeler', total: 180, active: 142, utilization: 78.9, avgHoursPerDay: 6.8, totalKm: 28450, avgRevenue: 1250 },
-    { type: 'Auto', icon: 'electric_rickshaw', total: 120, active: 88, utilization: 73.3, avgHoursPerDay: 7.2, totalKm: 19800, avgRevenue: 1850 },
-    { type: 'Car', icon: 'directions_car', total: 95, active: 72, utilization: 75.8, avgHoursPerDay: 8.1, totalKm: 22350, avgRevenue: 2450 },
-    { type: 'Big Car', icon: 'airport_shuttle', total: 35, active: 22, utilization: 62.9, avgHoursPerDay: 5.4, totalKm: 8200, avgRevenue: 3100 },
-  ];
+  useEffect(() => {
+    fetchData();
+    const socket = io({ path: '/socket.io' });
+    socket.on('fleet-update', (d: any) => { if (d) setVehicles(prev => prev.length ? prev : prev); });
+    return () => { socket.disconnect(); };
+  }, [fetchData]);
 
-  const totalFleet = fleetData.reduce((a, v) => a + v.total, 0);
-  const totalActive = fleetData.reduce((a, v) => a + v.active, 0);
-  const avgUtil = fleetData.reduce((a, v) => a + v.utilization, 0) / fleetData.length;
+  const handleExport = async () => {
+    setExportLoading(true);
+    try {
+      const res = await fetch(`/api/admin/export/rides?period=${period}`);
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = `fleet_report_${period}.csv`; a.click(); URL.revokeObjectURL(url);
+      }
+    } catch (e) { console.error('Export error:', e); }
+    finally { setExportLoading(false); }
+  };
 
-  // Weekly trend (fake sparkline data)
-  const weeklyTrend = [68, 72, 75, 71, 78, 82, 79];
-  const maxTrend = Math.max(...weeklyTrend);
+  const totalVehicles = vehicles.reduce((s, v) => s + v.total, 0);
+  const totalActive = vehicles.reduce((s, v) => s + v.active, 0);
+  const totalIdle = vehicles.reduce((s, v) => s + v.idle, 0);
+  const totalMaint = vehicles.reduce((s, v) => s + v.maintenance, 0);
+  const avgUtil = totalVehicles > 0 ? (totalActive / totalVehicles * 100) : 0;
+
+  if (loading) return <div className="flex items-center justify-center h-64"><div className="size-8 border-3 border-blue-500/20 border-t-blue-500 rounded-full animate-spin"></div></div>;
 
   return (
-    <div className="px-5 py-4 pb-6">
-      <div className="mb-4 slide-up">
-        <h1 className="text-xl font-black text-gray-900 dark:text-white tracking-tight">Fleet & Vehicles</h1>
-        <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 mt-0.5">Vehicle utilization & efficiency reports</p>
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-bold text-gray-900 dark:text-white">Fleet Management</h1>
+          <p className="text-xs text-gray-500 dark:text-gray-400">Vehicle utilization, optimization, and reports</p>
+        </div>
+        <button onClick={handleExport} disabled={exportLoading}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-xs font-semibold transition-colors disabled:opacity-50">
+          <span className="material-icons text-sm">{exportLoading ? 'hourglass_empty' : 'download'}</span>Export CSV
+        </button>
       </div>
 
-      {/* Tab Switcher */}
-      <div className="flex gap-2 mb-5 slide-up-d1">
-        {(['utilization', 'report'] as const).map(t => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${tab === t ? 'bg-leaf-500 text-white shadow-lg shadow-leaf-500/20' : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-400'}`}
-          >
-            {t === 'utilization' ? '🚗 Utilization' : '📋 Reports'}
-          </button>
-        ))}
+      {/* Tabs + Period */}
+      <div className="flex items-center justify-between">
+        <div className="flex gap-1 bg-gray-100 dark:bg-black p-1 rounded-lg">
+          {[{ key: 'utilization', label: 'Utilization', icon: 'speed' }, { key: 'report', label: 'Report', icon: 'assessment' }, { key: 'optimization', label: 'Optimization', icon: 'auto_fix_high' }].map(t => (
+            <button key={t.key} onClick={() => setTab(t.key as any)}
+              className={`flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${tab === t.key ? 'bg-white dark:bg-black text-blue-600 dark:text-blue-400 shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}>
+              <span className="material-icons" style={{ fontSize: '14px' }}>{t.icon}</span>{t.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-1 bg-gray-100 dark:bg-black p-0.5 rounded-lg">
+          {(['day', 'week', 'month'] as const).map(p => (
+            <button key={p} onClick={() => setPeriod(p)}
+              className={`px-2 py-1 rounded-md text-[10px] font-semibold ${period === p ? 'bg-white dark:bg-black text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              {p.charAt(0).toUpperCase() + p.slice(1)}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Period Selector */}
-      <div className="flex gap-2 mb-5 slide-up-d1">
-        {(['today', 'week', 'month'] as const).map(p => (
-          <button
-            key={p}
-            onClick={() => setPeriod(p)}
-            className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${period === p ? 'bg-gray-900 dark:bg-white text-white dark:text-black' : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-400'}`}
-          >
-            {p.charAt(0).toUpperCase() + p.slice(1)}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'utilization' && (
-        <div className="space-y-4">
-          {/* Summary Row */}
-          <div className="grid grid-cols-3 gap-3 slide-up-d1">
-            <div className="bg-white dark:bg-zinc-900 rounded-2xl p-3 border border-gray-100 dark:border-zinc-800 text-center">
-              <p className="text-xl font-black text-gray-900 dark:text-white">{totalFleet}</p>
-              <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Total Fleet</p>
-            </div>
-            <div className="bg-white dark:bg-zinc-900 rounded-2xl p-3 border border-gray-100 dark:border-zinc-800 text-center">
-              <p className="text-xl font-black text-leaf-600">{totalActive}</p>
-              <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Active Now</p>
-            </div>
-            <div className="bg-white dark:bg-zinc-900 rounded-2xl p-3 border border-gray-100 dark:border-zinc-800 text-center">
-              <p className="text-xl font-black text-blue-600">{avgUtil.toFixed(1)}%</p>
-              <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Avg Util</p>
-            </div>
-          </div>
-
-          {/* Utilization Trend */}
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800 slide-up-d2">
-            <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Weekly Utilization Trend</p>
-            <div className="flex items-end gap-2 h-20">
-              {weeklyTrend.map((v, i) => (
-                <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                  <span className="text-[8px] font-bold text-gray-400">{v}%</span>
-                  <div
-                    className="w-full rounded-t-md bg-leaf-400 dark:bg-leaf-600 transition-all"
-                    style={{ height: `${(v / maxTrend) * 100}%` }}
-                  />
-                </div>
-              ))}
-            </div>
-            <div className="flex justify-between mt-2">
-              {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => (
-                <span key={d} className="text-[8px] text-gray-400 font-bold flex-1 text-center">{d}</span>
-              ))}
-            </div>
-          </div>
-
-          {/* Per-Vehicle Type Cards */}
-          {fleetData.map((v, i) => {
-            const utilColor = v.utilization >= 75 ? 'text-leaf-600' : v.utilization >= 60 ? 'text-amber-600' : 'text-red-500';
-            const utilBarColor = v.utilization >= 75 ? 'bg-leaf-500' : v.utilization >= 60 ? 'bg-amber-400' : 'bg-red-400';
-            return (
-              <div key={v.type} className={`bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800 slide-up-d${Math.min(i + 2, 4)}`}>
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="size-10 rounded-xl bg-gray-100 dark:bg-zinc-800 flex items-center justify-center">
-                    <span className="material-icons text-lg text-gray-700 dark:text-gray-300">{v.icon}</span>
-                  </div>
-                  <div className="flex-1">
-                    <p className="text-sm font-bold text-gray-900 dark:text-white">{v.type}</p>
-                    <p className="text-[10px] text-gray-400 font-semibold">{v.active}/{v.total} active</p>
-                  </div>
-                  <div className="text-right">
-                    <p className={`text-lg font-black ${utilColor}`}>{v.utilization}%</p>
-                    <p className="text-[9px] text-gray-400 font-bold">Utilization</p>
-                  </div>
-                </div>
-                {/* Progress bar */}
-                <div className="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-2 mb-3">
-                  <div className={`${utilBarColor} h-2 rounded-full transition-all duration-1000`} style={{ width: `${v.utilization}%` }} />
-                </div>
-                <div className="grid grid-cols-3 gap-2 text-center">
-                  <div>
-                    <p className="text-xs font-black text-gray-900 dark:text-white">{v.avgHoursPerDay}h</p>
-                    <p className="text-[8px] text-gray-400 font-bold uppercase">Avg hrs/day</p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-black text-gray-900 dark:text-white">{(v.totalKm / 1000).toFixed(1)}K</p>
-                    <p className="text-[8px] text-gray-400 font-bold uppercase">Total KM</p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-black text-gray-900 dark:text-white">₹{v.avgRevenue}</p>
-                    <p className="text-[8px] text-gray-400 font-bold uppercase">Avg Rev</p>
-                  </div>
-                </div>
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+        {[
+          { label: 'Total', value: totalVehicles, icon: 'directions_car', color: 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10' },
+          { label: 'Active', value: totalActive, icon: 'check_circle', color: 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/10' },
+          { label: 'Idle', value: totalIdle, icon: 'pause_circle', color: 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10' },
+          { label: 'Maintenance', value: totalMaint, icon: 'build', color: 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10' },
+          { label: 'Utilization', value: `${avgUtil.toFixed(1)}%`, icon: 'speed', color: 'text-violet-600 dark:text-violet-400 bg-violet-50 dark:bg-violet-500/10' },
+        ].map((c, i) => (
+          <div key={i} className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-3">
+            <div className="flex items-center gap-2">
+              <div className={`size-7 rounded-lg flex items-center justify-center ${c.color}`}>
+                <span className="material-icons" style={{ fontSize: '14px' }}>{c.icon}</span>
               </div>
-            );
-          })}
+              <div>
+                <p className="text-sm font-bold text-gray-900 dark:text-white">{c.value}</p>
+                <p className="text-[9px] font-semibold text-gray-400 uppercase">{c.label}</p>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Utilization Tab */}
+      {tab === 'utilization' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {vehicles.map((v, i) => (
+            <div key={i} className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-xs font-bold text-gray-900 dark:text-white capitalize">{v.type}</h3>
+                <span className={`text-xs font-bold ${v.utilization >= 70 ? 'text-green-600 dark:text-green-400' : v.utilization >= 40 ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'}`}>
+                  {v.utilization.toFixed(1)}%
+                </span>
+              </div>
+              {/* Utilization Bar */}
+              <div className="h-3 bg-gray-100 dark:bg-black rounded-full overflow-hidden mb-3">
+                <div className={`h-full rounded-full transition-all ${v.utilization >= 70 ? 'bg-green-500' : v.utilization >= 40 ? 'bg-amber-500' : 'bg-red-500'}`}
+                  style={{ width: `${v.utilization}%` }}></div>
+              </div>
+              {/* Breakdown */}
+              <div className="grid grid-cols-4 gap-2">
+                {[
+                  { label: 'Total', value: v.total, c: 'text-gray-900 dark:text-white' },
+                  { label: 'Active', value: v.active, c: 'text-green-600 dark:text-green-400' },
+                  { label: 'Idle', value: v.idle, c: 'text-amber-600 dark:text-amber-400' },
+                  { label: 'Service', value: v.maintenance, c: 'text-red-600 dark:text-red-400' },
+                ].map((s, j) => (
+                  <div key={j} className="text-center">
+                    <p className={`text-xs font-bold ${s.c}`}>{s.value}</p>
+                    <p className="text-[8px] text-gray-400 font-semibold uppercase">{s.label}</p>
+                  </div>
+                ))}
+              </div>
+              {/* Visual breakdown bar */}
+              <div className="flex h-1.5 rounded-full overflow-hidden mt-3 bg-gray-100 dark:bg-black">
+                {v.total > 0 && <>
+                  <div className="bg-green-500 transition-all" style={{ width: `${(v.active / v.total) * 100}%` }}></div>
+                  <div className="bg-amber-500 transition-all" style={{ width: `${(v.idle / v.total) * 100}%` }}></div>
+                  <div className="bg-red-500 transition-all" style={{ width: `${(v.maintenance / v.total) * 100}%` }}></div>
+                </>}
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
+      {/* Report Tab */}
       {tab === 'report' && (
-        <div className="space-y-4">
-          {/* Report Generator */}
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl p-5 border border-gray-100 dark:border-zinc-800 slide-up-d1">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="size-10 rounded-xl bg-blue-500 flex items-center justify-center">
-                <span className="material-icons text-white text-lg">assessment</span>
-              </div>
-              <div>
-                <p className="text-sm font-bold text-gray-900 dark:text-white">Generate Utilization Report</p>
-                <p className="text-[10px] text-gray-400 font-semibold">Export detailed vehicle analytics</p>
-              </div>
-            </div>
-            <div className="space-y-3 mb-4">
-              <div>
-                <label className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider block mb-1">Time Range</label>
-                <select className="w-full bg-gray-100 dark:bg-zinc-800 rounded-xl px-3 py-2.5 text-xs font-semibold text-gray-900 dark:text-white border-0 outline-0">
-                  <option>Last 7 Days</option>
-                  <option>Last 30 Days</option>
-                  <option>Last 90 Days</option>
-                  <option>Custom Range</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider block mb-1">Vehicle Type</label>
-                <select className="w-full bg-gray-100 dark:bg-zinc-800 rounded-xl px-3 py-2.5 text-xs font-semibold text-gray-900 dark:text-white border-0 outline-0">
-                  <option>All Vehicles</option>
-                  <option>Bike</option>
-                  <option>Auto</option>
-                  <option>Car</option>
-                  <option>Big Car</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider block mb-1">Export Format</label>
-                <div className="flex gap-2">
-                  {['CSV', 'PDF', 'Excel'].map(f => (
-                    <button key={f} className="flex-1 py-2 rounded-xl bg-gray-100 dark:bg-zinc-800 text-xs font-bold text-gray-600 dark:text-gray-400 hover:bg-leaf-50 dark:hover:bg-leaf-900/20 hover:text-leaf-600 transition-colors">
-                      {f}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <button onClick={async () => {
-              try {
-                const res = await fetch(`${API}/export/rides?format=csv&period=${period}`);
-                if (res.ok) { const blob = await res.blob(); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `fleet-report-${period}.csv`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href); }
-                else alert('❌ No data to export');
-              } catch { alert('❌ Export failed'); }
-            }} className="w-full py-3 rounded-xl bg-leaf-500 text-white text-sm font-bold hover:bg-leaf-600 transition-colors shadow-lg shadow-leaf-500/20 flex items-center justify-center gap-2">
-              <span className="material-icons text-lg">download</span>
-              Generate & Download Report
-            </button>
+        <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
+          <h3 className="text-xs font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+            <span className="material-icons text-sm text-blue-500">assessment</span>Fleet Report ({period})
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-gray-200 dark:border-zinc-900">
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Type</th>
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Total</th>
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Active</th>
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Idle</th>
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Maintenance</th>
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Utilization</th>
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2">Trend</th>
+                </tr>
+              </thead>
+              <tbody>
+                {vehicles.map((v, i) => (
+                  <tr key={i} className="border-b border-gray-50 dark:border-zinc-900/50">
+                    <td className="text-[10px] font-semibold text-gray-900 dark:text-white py-2.5 pr-4 capitalize">{v.type}</td>
+                    <td className="text-[10px] text-gray-600 dark:text-white py-2.5 pr-4">{v.total}</td>
+                    <td className="text-[10px] text-green-600 dark:text-green-400 py-2.5 pr-4 font-semibold">{v.active}</td>
+                    <td className="text-[10px] text-amber-600 dark:text-amber-400 py-2.5 pr-4">{v.idle}</td>
+                    <td className="text-[10px] text-red-600 dark:text-red-400 py-2.5 pr-4">{v.maintenance}</td>
+                    <td className="py-2.5 pr-4">
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-1.5 bg-gray-100 dark:bg-black rounded-full max-w-[60px]">
+                          <div className={`h-full rounded-full ${v.utilization >= 70 ? 'bg-green-500' : v.utilization >= 40 ? 'bg-amber-500' : 'bg-red-500'}`}
+                            style={{ width: `${v.utilization}%` }}></div>
+                        </div>
+                        <span className="text-[10px] font-bold text-gray-900 dark:text-white">{v.utilization.toFixed(1)}%</span>
+                      </div>
+                    </td>
+                    <td className="py-2.5">
+                      <span className={`material-icons text-sm ${v.utilization >= 70 ? 'text-green-600' : 'text-red-500'}`}>
+                        {v.utilization >= 70 ? 'trending_up' : 'trending_down'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
+        </div>
+      )}
 
-          {/* Recent Reports */}
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800 slide-up-d2">
-            <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Recent Reports</p>
-            {[
-              { name: 'Weekly Fleet Report', date: 'Feb 9, 2026', size: '2.4 MB', format: 'PDF' },
-              { name: 'Monthly Utilization', date: 'Feb 1, 2026', size: '5.1 MB', format: 'Excel' },
-              { name: 'Vehicle Efficiency Q4', date: 'Jan 15, 2026', size: '8.7 MB', format: 'PDF' },
-            ].map((r, i) => (
-              <div key={i} className="flex items-center gap-3 py-3 border-b border-gray-50 dark:border-zinc-800 last:border-0">
-                <div className="size-9 rounded-lg bg-gray-100 dark:bg-zinc-800 flex items-center justify-center">
-                  <span className="material-icons text-sm text-gray-500">description</span>
-                </div>
-                <div className="flex-1">
-                  <p className="text-xs font-bold text-gray-900 dark:text-white">{r.name}</p>
-                  <p className="text-[10px] text-gray-400 font-semibold">{r.date} · {r.size} · {r.format}</p>
-                </div>
-                <button className="size-8 rounded-lg bg-leaf-50 dark:bg-leaf-900/20 flex items-center justify-center hover:scale-105 transition-transform">
-                  <span className="material-icons text-sm text-leaf-600">download</span>
-                </button>
-              </div>
-            ))}
+      {/* Optimization Tab */}
+      {tab === 'optimization' && (
+        <div className="space-y-3">
+          <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
+            <h3 className="text-xs font-bold text-gray-900 dark:text-white mb-1 flex items-center gap-2">
+              <span className="material-icons text-sm text-violet-500">auto_fix_high</span>Fleet Optimization Insights
+            </h3>
+            <p className="text-[10px] text-gray-400 mb-4">AI-generated recommendations to improve fleet efficiency</p>
           </div>
+          {insights.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {insights.map((ins, i) => {
+                const prColors: Record<string, { icon: string; border: string; bg: string; text: string; }> = {
+                  high: { icon: 'priority_high', border: 'border-red-200 dark:border-red-800', bg: 'bg-red-50 dark:bg-red-500/10', text: 'text-red-600 dark:text-red-400' },
+                  medium: { icon: 'remove', border: 'border-amber-200 dark:border-amber-800', bg: 'bg-amber-50 dark:bg-amber-500/10', text: 'text-amber-600 dark:text-amber-400' },
+                  low: { icon: 'arrow_downward', border: 'border-blue-200 dark:border-blue-800', bg: 'bg-blue-50 dark:bg-blue-500/10', text: 'text-blue-600 dark:text-blue-400' },
+                };
+                const pc = prColors[ins.priority] || prColors.medium;
+                return (
+                  <div key={i} className={`rounded-xl border ${pc.border} ${pc.bg} p-4`}>
+                    <div className="flex items-start gap-3">
+                      <div className={`size-8 rounded-lg flex items-center justify-center ${pc.text} bg-white dark:bg-black flex-shrink-0`}>
+                        <span className="material-icons text-base">{pc.icon}</span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <h4 className="text-xs font-bold text-gray-900 dark:text-white">{ins.title}</h4>
+                          <span className={`text-[8px] font-bold uppercase px-1.5 py-0.5 rounded ${pc.text} bg-white/50 dark:bg-black/50`}>{ins.priority}</span>
+                        </div>
+                        <p className="text-[10px] text-gray-600 dark:text-white leading-relaxed">{ins.suggestion}</p>
+                        <p className="text-[9px] font-semibold text-gray-400 mt-2 flex items-center gap-1">
+                          <span className="material-icons" style={{ fontSize: '10px' }}>trending_up</span>Expected Impact: {ins.impact}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-8 text-center">
+              <span className="material-icons text-3xl text-gray-300 dark:text-gray-600 mb-2">auto_fix_high</span>
+              <p className="text-xs text-gray-400">No optimization insights available. Start the ML service to generate recommendations.</p>
+            </div>
+          )}
         </div>
       )}
     </div>

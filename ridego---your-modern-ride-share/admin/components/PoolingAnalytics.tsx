@@ -1,173 +1,207 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
+import { io } from 'socket.io-client';
 
-const API = '/api/admin';
-
-interface MonthlyPooling {
-  month: string;
-  totalRequests: number;
-  matched: number;
-  successRate: number;
-}
+interface PoolingStats { totalPooled: number; totalSolo: number; successRate: number; avgSavings: number; avgOccupancy: number; }
+interface MonthlyPooling { month: string; pooled: number; solo: number; rate: number; }
 
 const PoolingAnalytics: React.FC = () => {
-  const [data, setData] = useState<MonthlyPooling[]>([]);
+  const [stats, setStats] = useState<PoolingStats | null>(null);
+  const [monthly, setMonthly] = useState<MonthlyPooling[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const res = await fetch(`${API}/pooling/stats`);
-        if (res.ok) setData(await res.json());
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
+  const fetchData = useCallback(async () => {
+    try {
+      const res = await fetch('/api/admin/pooling/stats');
+      if (res.ok) {
+        const d = await res.json();
+        setStats(d.current);
+        setMonthly(d.monthly || []);
       }
-    };
-    load();
+    } catch (e) { console.error('Pooling fetch error:', e); }
+    finally {
+      setStats(prev => prev || { totalPooled: 486, totalSolo: 761, successRate: 63.8, avgSavings: 28, avgOccupancy: 2.4 });
+      setMonthly(prev => prev.length ? prev : [
+        { month: 'January', pooled: 52, solo: 98, rate: 34.7 },
+        { month: 'February', pooled: 61, solo: 102, rate: 37.4 },
+        { month: 'March', pooled: 74, solo: 110, rate: 40.2 },
+        { month: 'April', pooled: 85, solo: 108, rate: 44.0 },
+        { month: 'May', pooled: 102, solo: 115, rate: 47.0 },
+        { month: 'June', pooled: 112, solo: 128, rate: 46.7 },
+      ]);
+      setLoading(false);
+    }
   }, []);
 
-  const poolData: MonthlyPooling[] = data.length > 0 ? data : [
-    { month: 'Aug', totalRequests: 820, matched: 540, successRate: 65.9 },
-    { month: 'Sep', totalRequests: 950, matched: 652, successRate: 68.6 },
-    { month: 'Oct', totalRequests: 1100, matched: 792, successRate: 72.0 },
-    { month: 'Nov', totalRequests: 1250, matched: 937, successRate: 75.0 },
-    { month: 'Dec', totalRequests: 980, matched: 715, successRate: 73.0 },
-    { month: 'Jan', totalRequests: 1380, matched: 1062, successRate: 77.0 },
-    { month: 'Feb', totalRequests: 1450, matched: 1145, successRate: 78.9 },
-  ];
+  useEffect(() => {
+    fetchData();
+    const socket = io({ path: '/socket.io' });
+    socket.on('pooling-update', (d: any) => { if (d?.current) { setStats(d.current); if (d.monthly) setMonthly(d.monthly); } });
+    const iv = setInterval(fetchData, 30000);
+    return () => { socket.disconnect(); clearInterval(iv); };
+  }, [fetchData]);
 
-  const currentMonth = poolData[poolData.length - 1];
-  const prevMonth = poolData[poolData.length - 2];
-  const rateChange = currentMonth.successRate - prevMonth.successRate;
-  const maxReqs = Math.max(...poolData.map(d => d.totalRequests));
+  const maxMonthly = Math.max(...monthly.map(m => m.pooled + m.solo), 1) * 1.1;
 
-  // Summary calculations
-  const totalMatched = poolData.reduce((a, d) => a + d.matched, 0);
-  const totalRequests = poolData.reduce((a, d) => a + d.totalRequests, 0);
-  const overallRate = ((totalMatched / totalRequests) * 100).toFixed(1);
-  const co2SavedByPooling = Math.round(totalMatched * 0.85); // ~0.85kg CO2 per pooled ride
+  if (loading) return <div className="flex items-center justify-center h-64"><div className="size-8 border-3 border-blue-500/20 border-t-blue-500 rounded-full animate-spin"></div></div>;
 
   return (
-    <div className="px-5 py-4 pb-6">
-      <div className="mb-4 slide-up">
-        <h1 className="text-xl font-black text-gray-900 dark:text-white tracking-tight">Pooling Analytics</h1>
-        <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 mt-0.5">Ride-pooling success rates & performance</p>
+    <div className="space-y-4">
+      {/* Header */}
+      <div>
+        <h1 className="text-lg font-bold text-gray-900 dark:text-white">Ride Pooling Analytics</h1>
+        <p className="text-xs text-gray-500 dark:text-gray-400">Pooling success rates, savings, and trends (real-time)</p>
       </div>
 
-      {/* Big Metric Card */}
-      <div className="bg-gradient-to-br from-purple-500 to-indigo-600 rounded-2xl p-5 mb-5 slide-up-d1">
-        <div className="flex items-center gap-2 mb-2">
-          <span className="material-icons text-white/60 text-sm">groups</span>
-          <span className="text-[10px] font-bold text-white/60 uppercase tracking-wider">Current Pool Success Rate</span>
-        </div>
-        <div className="flex items-baseline gap-2 mb-1">
-          <span className="text-4xl font-black text-white">{currentMonth.successRate}%</span>
-          <span className={`text-sm font-bold ${rateChange >= 0 ? 'text-leaf-300' : 'text-red-300'}`}>
-            {rateChange >= 0 ? '↑' : '↓'} {Math.abs(rateChange).toFixed(1)}%
-          </span>
-        </div>
-        <p className="text-xs text-white/60 font-semibold">{currentMonth.matched.toLocaleString()} / {currentMonth.totalRequests.toLocaleString()} requests matched this month</p>
-      </div>
-
-      {/* Quick Stats */}
-      <div className="grid grid-cols-3 gap-3 mb-5 slide-up-d1">
-        <div className="bg-white dark:bg-zinc-900 rounded-2xl p-3 border border-gray-100 dark:border-zinc-800 text-center">
-          <p className="text-lg font-black text-purple-600">{overallRate}%</p>
-          <p className="text-[8px] font-bold text-gray-400 uppercase">All-time Rate</p>
-        </div>
-        <div className="bg-white dark:bg-zinc-900 rounded-2xl p-3 border border-gray-100 dark:border-zinc-800 text-center">
-          <p className="text-lg font-black text-leaf-600">{totalMatched.toLocaleString()}</p>
-          <p className="text-[8px] font-bold text-gray-400 uppercase">Total Matched</p>
-        </div>
-        <div className="bg-white dark:bg-zinc-900 rounded-2xl p-3 border border-gray-100 dark:border-zinc-800 text-center">
-          <p className="text-lg font-black text-emerald-600">{(co2SavedByPooling / 1000).toFixed(1)}t</p>
-          <p className="text-[8px] font-bold text-gray-400 uppercase">CO₂ from Pool</p>
-        </div>
-      </div>
-
-      {/* Monthly Trend Chart */}
-      <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800 mb-5 slide-up-d2">
-        <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4">Monthly Pool Trends</p>
-        <div className="flex items-end gap-2 h-32">
-          {poolData.map((d, i) => (
-            <div key={d.month} className="flex-1 flex flex-col items-center gap-1">
-              <span className="text-[8px] font-bold text-purple-500">{d.successRate}%</span>
-              <div className="w-full flex flex-col gap-0.5">
-                {/* Total requests bar (background) */}
-                <div className="relative w-full rounded-t-md overflow-hidden" style={{ height: `${(d.totalRequests / maxReqs) * 80}px` }}>
-                  <div className="absolute inset-0 bg-gray-200 dark:bg-zinc-700 rounded-t-md" />
-                  <div
-                    className="absolute bottom-0 left-0 right-0 bg-purple-500 dark:bg-purple-400 rounded-t-md transition-all duration-500"
-                    style={{ height: `${d.successRate}%` }}
-                  />
+      {/* Stats Grid */}
+      {stats && (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+          {[
+            { label: 'Pooled Rides', value: stats.totalPooled.toLocaleString(), icon: 'group', color: 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10' },
+            { label: 'Solo Rides', value: stats.totalSolo.toLocaleString(), icon: 'person', color: 'text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-black' },
+            { label: 'Success Rate', value: `${stats.successRate.toFixed(1)}%`, icon: 'check_circle', color: stats.successRate >= 50 ? 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/10' : 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10' },
+            { label: 'Avg Savings', value: `${stats.avgSavings.toFixed(0)}%`, icon: 'savings', color: 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10' },
+            { label: 'Avg Occupancy', value: stats.avgOccupancy.toFixed(1), icon: 'airline_seat_recline_normal', color: 'text-violet-600 dark:text-violet-400 bg-violet-50 dark:bg-violet-500/10' },
+          ].map((c, i) => (
+            <div key={i} className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-3">
+              <div className="flex items-center gap-2">
+                <div className={`size-7 rounded-lg flex items-center justify-center ${c.color}`}>
+                  <span className="material-icons" style={{ fontSize: '14px' }}>{c.icon}</span>
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-gray-900 dark:text-white">{c.value}</p>
+                  <p className="text-[9px] font-semibold text-gray-400 uppercase">{c.label}</p>
                 </div>
               </div>
             </div>
           ))}
         </div>
-        <div className="flex justify-between mt-2">
-          {poolData.map(d => (
-            <span key={d.month} className="text-[8px] text-gray-400 font-bold flex-1 text-center">{d.month}</span>
-          ))}
-        </div>
-        <div className="flex items-center gap-4 mt-3 justify-center">
-          <div className="flex items-center gap-1.5">
-            <div className="size-2.5 rounded-full bg-gray-300 dark:bg-zinc-600"></div>
-            <span className="text-[9px] text-gray-400 font-bold">Total Requests</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="size-2.5 rounded-full bg-purple-500"></div>
-            <span className="text-[9px] text-gray-400 font-bold">Matched Pools</span>
-          </div>
-        </div>
-      </div>
+      )}
 
-      {/* Success Rate Trend (Line-style) */}
-      <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800 mb-5 slide-up-d3">
-        <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Success Rate Trend</p>
-        <div className="flex items-center gap-1 h-12">
-          {poolData.map((d, i) => {
-            const h = ((d.successRate - 50) / 35) * 100; // normalize 50-85% range
-            return (
-              <div key={d.month} className="flex-1 flex items-end justify-center h-full">
-                <div
-                  className="w-3 rounded-full bg-gradient-to-t from-purple-500 to-purple-300 transition-all duration-500"
-                  style={{ height: `${Math.max(h, 10)}%` }}
-                />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Monthly Trend Chart */}
+        <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
+          <h3 className="text-xs font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+            <span className="material-icons text-sm text-blue-500">trending_up</span>Monthly Pooling Trend
+          </h3>
+          {monthly.length > 0 ? (
+            <>
+              <div className="flex items-end gap-2 h-64">
+                {monthly.map((m, i) => {
+                  const total = m.pooled + m.solo;
+                  const barH = Math.max(Math.round((total / maxMonthly) * 230), 3);
+                  const pooledPct = total > 0 ? (m.pooled / total) * 100 : 0;
+                  return (
+                    <div key={i} className="group flex-1 flex flex-col items-center relative">
+                      <div className="absolute -top-6 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-900 text-white text-[8px] px-1.5 py-0.5 rounded whitespace-nowrap z-10">
+                        {m.pooled}P / {m.solo}S ({m.rate.toFixed(0)}%)
+                      </div>
+                      <div className="w-full rounded-t overflow-hidden" style={{ height: `${barH}px` }}>
+                        <div className="bg-blue-500 dark:bg-blue-600" style={{ height: `${pooledPct}%` }}></div>
+                        <div className="bg-gray-300 dark:bg-zinc-900" style={{ height: `${100 - pooledPct}%` }}></div>
+                      </div>
+                      <span className="text-[7px] text-gray-400 mt-1 font-semibold">{m.month.slice(0, 3)}</span>
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
+              <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-100 dark:border-zinc-900">
+                <span className="flex items-center gap-1 text-[10px] text-gray-500"><span className="size-2 rounded-full bg-blue-500"></span>Pooled</span>
+                <span className="flex items-center gap-1 text-[10px] text-gray-500"><span className="size-2 rounded-full bg-gray-300 dark:bg-zinc-900"></span>Solo</span>
+              </div>
+            </>
+          ) : (
+            <p className="text-xs text-gray-400 text-center py-8">No monthly data available</p>
+          )}
         </div>
-        <div className="flex justify-between mt-1">
-          {poolData.map(d => (
-            <span key={d.month} className="flex-1 text-center text-[8px] text-gray-400 font-bold">{d.month}</span>
-          ))}
+
+        {/* Success Rate Gauge */}
+        <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
+          <h3 className="text-xs font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+            <span className="material-icons text-sm text-green-500">speed</span>Pooling Performance
+          </h3>
+          {stats && (
+            <div className="flex flex-col items-center py-4">
+              {/* Circular gauge */}
+              <div className="relative size-32">
+                <svg className="size-32 -rotate-90" viewBox="0 0 120 120">
+                  <circle cx="60" cy="60" r="50" fill="none" strokeWidth="10" className="stroke-gray-100 dark:stroke-zinc-800" />
+                  <circle cx="60" cy="60" r="50" fill="none" strokeWidth="10" strokeLinecap="round"
+                    className={stats.successRate >= 60 ? 'stroke-green-500' : stats.successRate >= 40 ? 'stroke-amber-500' : 'stroke-red-500'}
+                    strokeDasharray={`${stats.successRate * 3.14} 314`} />
+                </svg>
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="text-xl font-bold text-gray-900 dark:text-white">{stats.successRate.toFixed(1)}%</span>
+                  <span className="text-[9px] text-gray-400 font-semibold">Success Rate</span>
+                </div>
+              </div>
+              {/* Breakdown */}
+              <div className="grid grid-cols-3 gap-4 mt-6 w-full max-w-xs">
+                {[
+                  { label: 'Pooled', value: stats.totalPooled, color: 'text-blue-500' },
+                  { label: 'Solo', value: stats.totalSolo, color: 'text-gray-500' },
+                  { label: 'Total', value: stats.totalPooled + stats.totalSolo, color: 'text-gray-900 dark:text-white' },
+                ].map((s, i) => (
+                  <div key={i} className="text-center">
+                    <p className={`text-sm font-bold ${s.color}`}>{s.value.toLocaleString()}</p>
+                    <p className="text-[9px] text-gray-400 font-semibold uppercase">{s.label}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Monthly Breakdown Table */}
-      <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-gray-100 dark:border-zinc-800 slide-up-d4">
-        <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Detailed Breakdown</p>
-        <div className="space-y-2">
-          <div className="grid grid-cols-4 gap-2 pb-2 border-b border-gray-100 dark:border-zinc-800">
-            <span className="text-[9px] font-bold text-gray-400 uppercase">Month</span>
-            <span className="text-[9px] font-bold text-gray-400 uppercase text-right">Requests</span>
-            <span className="text-[9px] font-bold text-gray-400 uppercase text-right">Matched</span>
-            <span className="text-[9px] font-bold text-gray-400 uppercase text-right">Rate</span>
+      {monthly.length > 0 && (
+        <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
+          <h3 className="text-xs font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+            <span className="material-icons text-sm text-indigo-500">table_chart</span>Monthly Breakdown
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-gray-200 dark:border-zinc-900">
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Month</th>
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Pooled</th>
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Solo</th>
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Total</th>
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Rate</th>
+                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2">Trend</th>
+                </tr>
+              </thead>
+              <tbody>
+                {monthly.map((m, i) => {
+                  const prev = i > 0 ? monthly[i - 1].rate : m.rate;
+                  const delta = m.rate - prev;
+                  return (
+                    <tr key={i} className="border-b border-gray-50 dark:border-zinc-900/50">
+                      <td className="text-[10px] font-semibold text-gray-900 dark:text-white py-2 pr-4">{m.month}</td>
+                      <td className="text-[10px] text-blue-600 dark:text-blue-400 py-2 pr-4 font-semibold">{m.pooled}</td>
+                      <td className="text-[10px] text-gray-500 py-2 pr-4">{m.solo}</td>
+                      <td className="text-[10px] text-gray-900 dark:text-white py-2 pr-4 font-semibold">{m.pooled + m.solo}</td>
+                      <td className="py-2 pr-4">
+                        <div className="flex items-center gap-1.5">
+                          <div className="flex-1 h-1.5 bg-gray-100 dark:bg-black rounded-full max-w-[50px]">
+                            <div className={`h-full rounded-full ${m.rate >= 60 ? 'bg-green-500' : m.rate >= 40 ? 'bg-amber-500' : 'bg-red-500'}`}
+                              style={{ width: `${m.rate}%` }}></div>
+                          </div>
+                          <span className="text-[10px] font-bold text-gray-900 dark:text-white">{m.rate.toFixed(1)}%</span>
+                        </div>
+                      </td>
+                      <td className="py-2">
+                        <span className={`text-[10px] font-semibold ${delta > 0 ? 'text-green-500' : delta < 0 ? 'text-red-500' : 'text-gray-400'}`}>
+                          {delta > 0 ? '+' : ''}{delta.toFixed(1)}%
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-          {[...poolData].reverse().map((d, i) => (
-            <div key={d.month} className="grid grid-cols-4 gap-2 py-1.5">
-              <span className="text-xs font-bold text-gray-900 dark:text-white">{d.month}</span>
-              <span className="text-xs text-gray-600 dark:text-gray-400 text-right">{d.totalRequests.toLocaleString()}</span>
-              <span className="text-xs text-gray-600 dark:text-gray-400 text-right">{d.matched.toLocaleString()}</span>
-              <div className="flex items-center justify-end gap-1">
-                <span className="text-xs font-bold text-purple-600">{d.successRate}%</span>
-              </div>
-            </div>
-          ))}
         </div>
-      </div>
+      )}
     </div>
   );
 };
