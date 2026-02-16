@@ -154,6 +154,13 @@ const RideSchema = new mongoose.Schema({
     // Passengers
     passengers: { type: Number, default: 1 },
     maxPassengers: { type: Number, default: 4 },
+    // Safety Preferences (Pooled rides)
+    safetyPreferences: {
+        womenOnly: { type: Boolean, default: false },
+        verifiedOnly: { type: Boolean, default: false },
+        noSmoking: { type: Boolean, default: false },
+        genderPreference: { type: String, enum: ['any', 'male', 'female'], default: 'any' }
+    },
     // Early termination / partial ride
     actualDropoff: {
         address: String,

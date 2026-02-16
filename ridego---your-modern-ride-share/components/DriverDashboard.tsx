@@ -198,6 +198,10 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
         setRideStatus(payload.status);
         if (payload.status === 'COMPLETED') {
           setChatOpen(false);
+          // Remove this ride from requests list if it's there
+          if (payload.rideId) {
+            setRequests((prev) => prev.filter((r) => String(r.rideId) !== String(payload.rideId)));
+          }
         }
       }
     };
@@ -253,6 +257,8 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
     const handleNearbyRiderRemove = (payload: any) => {
       if (!payload?.rideId) return;
       const removeId = String(payload.rideId);
+      // Use functional update to access latest state without adding dependency
+      setSelectedRequest(prev => (prev?.rideId === removeId ? null : prev));
       removeRequestMarker(payload.rideId);
       setRequests((prev) => prev.filter((r) => String(r.rideId) !== removeId));
     };
@@ -326,6 +332,10 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
         setPoolStops([]);
         setCurrentPoolStopIndex(0);
         setPoolStopOtp('');
+      }
+      // Remove this ride from requests list regardless of who canceled
+      if (payload?.rideId) {
+        setRequests((prev) => prev.filter((r) => String(r.rideId) !== String(payload.rideId)));
       }
     };
 
@@ -552,11 +562,23 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
           fare: ride.fare,
           isPooled: ride.isPooled
         }));
+        // Clear ALL old markers before setting new state
+        requestMarkersRef.current.forEach(m => m.remove());
+        requestMarkersRef.current.clear();
         setRequests(newRequests);
         newRequests.forEach((r: any) => addOrUpdateRequestMarker(r));
+      } else {
+        // Server error — clear stale requests
+        setRequests([]);
+        requestMarkersRef.current.forEach(m => m.remove());
+        requestMarkersRef.current.clear();
       }
     } catch (error) {
       console.error('Fetch requests error:', error);
+      // Network error — clear stale requests
+      setRequests([]);
+      requestMarkersRef.current.forEach(m => m.remove());
+      requestMarkersRef.current.clear();
     }
   };
 
@@ -867,6 +889,8 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
   const handleCompleteRide = async () => {
     if (!activeRide?._id) return;
     await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/complete`, { method: 'POST' });
+    // Remove from requests list
+    setRequests((prev) => prev.filter((r) => String(r.rideId) !== String(activeRide._id)));
     fetchDriverRides();
   };
 
@@ -887,6 +911,8 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
         const data = await resp.json();
         setShowCancelModal(false);
         setCancelReason('');
+        // Remove from requests list
+        setRequests((prev) => prev.filter((r) => String(r.rideId) !== String(activeRide._id)));
         handleClearRide();
         if (data.cancellationFee > 0) {
           alert(`Ride canceled. A ₹${data.cancellationFee} penalty has been applied.`);
@@ -1067,7 +1093,16 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
         <>
           <div className="absolute top-0 inset-x-0 z-30 p-4 pt-10 flex items-center justify-between">
             <button
-              onClick={() => { setIsOnline(false); setDashboardView('HOME'); socketRef.current?.emit('driver:offline', { driverId: user?._id || user?.id }); }}
+              onClick={() => {
+                setIsOnline(false);
+                setDashboardView('HOME');
+                // Clear ALL requests and markers to prevent stale state
+                setRequests([]);
+                setSelectedRequest(null);
+                requestMarkersRef.current.forEach(m => m.remove());
+                requestMarkersRef.current.clear();
+                socketRef.current?.emit('driver:offline', { driverId: user?._id || user?.id });
+              }}
               className="bg-white/90 dark:bg-black/80 backdrop-blur-xl size-12 rounded-2xl shadow-lg border border-white/10 flex items-center justify-center"
             >
               <span className="material-icons-outlined text-black dark:text-white">arrow_back</span>
