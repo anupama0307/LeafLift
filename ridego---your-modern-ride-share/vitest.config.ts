@@ -1,3 +1,4 @@
+import path from 'path';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
@@ -9,5 +10,10 @@ export default defineConfig({
         include: ['tests/**/*.test.{ts,tsx}'],
         setupFiles: ['./tests/setup.ts'],
         testTimeout: 15000,
+    },
+    resolve: {
+        alias: {
+            '@': path.resolve(__dirname, '.'),
+        },
     },
 });
