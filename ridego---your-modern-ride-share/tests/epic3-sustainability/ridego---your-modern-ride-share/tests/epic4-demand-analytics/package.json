@@ -1,0 +1,15 @@
+{
+    "name": "epic4-demand-analytics-tests",
+    "version": "1.0.0",
+    "description": "Tests for Epic 4: Demand Prediction and Usage Analytics",
+    "type": "module",
+    "scripts": {
+        "test": "vitest run",
+        "test:watch": "vitest"
+    },
+    "devDependencies": {
+        "vitest": "^3.2.1",
+        "mongodb-memory-server": "^10.4.0",
+        "mongoose": "^9.1.5"
+    }
+}

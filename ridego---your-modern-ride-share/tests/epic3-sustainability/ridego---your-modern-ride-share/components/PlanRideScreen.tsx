@@ -1,0 +1,2608 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { OLA_CONFIG, VEHICLE_CATEGORIES } from '../constants';
+import { searchPlaces, getRoute, formatRouteInfo, reverseGeocode, decodePolyline } from '../src/utils/olaApi';
+import { joinRideRoom, leaveRideRoom, registerSocket } from '../src/services/realtime';
+import { OlaPlace, RouteInfo } from '../types';
+
+declare global {
+    interface Window {
+        maplibregl: any;
+    }
+}
+
+interface PlanRideScreenProps {
+    user: any;
+    onBack: () => void;
+    initialVehicleCategory?: string;
+    scheduleInfo?: { scheduledFor: string; forName?: string; forPhone?: string };
+}
+
+type RideStatus = 'IDLE' | 'SEARCHING' | 'ACCEPTED' | 'ARRIVED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELED';
+type PaymentMethod = 'Cash' | 'UPI' | 'Wallet';
+
+interface DriverDetails {
+    id: string;
+    name: string;
+    rating: number;
+    vehicle: string;
+    vehicleNumber: string;
+    photoUrl?: string;
+    maskedPhone?: string;
+}
+
+interface RideChatMessage {
+    senderId?: string;
+    senderRole?: string;
+    message: string;
+    createdAt: string;
+}
+
+const NEARBY_RADIUS_KM = 6;
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
+
+const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVehicleCategory, scheduleInfo }) => {
+    const [destination, setDestination] = useState('');
+    const [pickup, setPickup] = useState('Current Location');
+    const [showOptions, setShowOptions] = useState(false);
+    const [rideMode, setRideMode] = useState<'Solo' | 'Pooled'>('Solo');
+    const [selectedCategory, setSelectedCategory] = useState('CAR');
+    const [showPaymentModal, setShowPaymentModal] = useState(false);
+    const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Cash');
+    const [focusedInput, setFocusedInput] = useState<'pickup' | 'dropoff'>('dropoff');
+    const [isRequesting, setIsRequesting] = useState(false);
+    const [rideStatus, setRideStatus] = useState<RideStatus>('IDLE');
+    const [activeRideId, setActiveRideId] = useState<string | null>(null);
+    const [driverDetails, setDriverDetails] = useState<DriverDetails | null>(null);
+    const [etaToPickup, setEtaToPickup] = useState<string | null>(null);
+    const [otpCode, setOtpCode] = useState<string | null>(null);
+    const [currentFare, setCurrentFare] = useState<number | null>(null);
+    const [chatOpen, setChatOpen] = useState(false);
+    const [chatInput, setChatInput] = useState('');
+    const [chatMessages, setChatMessages] = useState<RideChatMessage[]>([]);
+    const [maskedDriverPhone, setMaskedDriverPhone] = useState<string | null>(null);
+    const [passengers, setPassengers] = useState(1);
+    const [maxPassengers, setMaxPassengers] = useState(4);
+    const [safetyPrefs, setSafetyPrefs] = useState({ womenOnly: false, verifiedOnly: false, noSmoking: false });
+    const [confirmCompleteData, setConfirmCompleteData] = useState<any>(null);
+    const [inProgressPooledRides, setInProgressPooledRides] = useState<any[]>([]);
+    const [matchedDrivers, setMatchedDrivers] = useState<DriverDetails[]>([]);
+    const [isNoDriversFound, setIsNoDriversFound] = useState(false);
+    const [poolMatchInfo, setPoolMatchInfo] = useState<{
+        poolGroupId: string;
+        matchedRider: { name: string; pickup: any; dropoff: any };
+        originalFare: number;
+        poolFare: number;
+    } | null>(null);
+    const [poolStopUpdates, setPoolStopUpdates] = useState<any[]>([]);
+    const poolMatchedRef = useRef(false);
+
+    // ─── Live ETA State ───
+    const [liveEtaText, setLiveEtaText] = useState<string | null>(null);
+    const [liveEtaLabel, setLiveEtaLabel] = useState<'pickup' | 'dropoff' | null>(null);
+    const [liveEtaSource, setLiveEtaSource] = useState<string | null>(null);
+    const [liveEtaUpdatedAt, setLiveEtaUpdatedAt] = useState<string | null>(null);
+
+    // ─── Delay Alert State ───
+    const [delayAlert, setDelayAlert] = useState<{ delayMinutes: number; message: string; etaText: string; etaLabel: string } | null>(null);
+    const delayAlertTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+    // ─── Multi-Stop State ───
+    const [stops, setStops] = useState<Array<{ address: string; lat: number; lng: number }>>([]);
+    const [showStopSearch, setShowStopSearch] = useState(false);
+    const [stopSearchQuery, setStopSearchQuery] = useState('');
+    const [stopSuggestions, setStopSuggestions] = useState<OlaPlace[]>([]);
+    const [isStopSearching, setIsStopSearching] = useState(false);
+    const [activeRideStops, setActiveRideStops] = useState<Array<{ address: string; lat: number; lng: number; order: number; status: string; reachedAt?: string }>>([]);
+    const [currentStopIndex, setCurrentStopIndex] = useState(0);
+    const stopMarkerRefs = useRef<any[]>([]);
+
+    // ─── Cancellation State ───
+    const [showCancelModal, setShowCancelModal] = useState(false);
+    const [riderCancelReason, setRiderCancelReason] = useState('');
+    const [isCanceling, setIsCanceling] = useState(false);
+    const [canceledByDriver, setCanceledByDriver] = useState(false);
+    const [driverCancelInfo, setDriverCancelInfo] = useState<{ cancelReason: string; cancellationFee: number } | null>(null);
+    const [isAutoReSearching, setIsAutoReSearching] = useState(false);
+    const [reSearchDriversNotified, setReSearchDriversNotified] = useState(0);
+    const reSearchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+    const mapRef = useRef<any>(null);
+    const mapContainerRef = useRef<HTMLDivElement>(null);
+    const [mapLoaded, setMapLoaded] = useState(false);
+    const [pickupCoords, setPickupCoords] = useState<{ lat: number; lng: number } | null>(null);
+    const [dropoffCoords, setDropoffCoords] = useState<{ lat: number; lng: number } | null>(null);
+
+    const [suggestions, setSuggestions] = useState<OlaPlace[]>([]);
+    const [isSearching, setIsSearching] = useState(false);
+    const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
+    const [categoryPrices, setCategoryPrices] = useState<Map<string, number>>(new Map());
+
+    const pickupMarkerRef = useRef<any>(null);
+    const dropoffMarkerRef = useRef<any>(null);
+    const routeLayerRef = useRef<string | null>(null);
+    const driverMarkerRef = useRef<any>(null);
+    const riderMarkerRef = useRef<any>(null);
+    const nearbyDriverMarkersRef = useRef<Map<string, any>>(new Map());
+    const nearbyDriverPositionsRef = useRef<Map<string, { lat: number; lng: number }>>(new Map());
+    const socketRef = useRef<any>(null);
+    const activeRouteLayerRef = useRef<string | null>(null);
+    const driverLocationRef = useRef<{ lat: number; lng: number } | null>(null);
+    const lastRouteUpdateRef = useRef<number>(0);
+    const lastRouteLocationRef = useRef<{ lat: number; lng: number } | null>(null);
+    const pickupManuallyEditedRef = useRef(false);
+    const pickupSelectedByUserRef = useRef(false);
+    const resolvedPickupCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
+
+    const [availableRoutes, setAvailableRoutes] = useState<any[]>([]);
+    const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
+    const [isDarkMode, setIsDarkMode] = useState(() => document.documentElement.classList.contains('dark'));
+
+    // ─── Dark mode listener ───
+    useEffect(() => {
+        const observer = new MutationObserver(() => {
+            const d = document.documentElement.classList.contains('dark');
+            if (d !== isDarkMode) { setIsDarkMode(d); if (mapRef.current && mapLoaded) updateMapStyle(d); }
+        });
+        observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+        return () => observer.disconnect();
+    }, [isDarkMode, mapLoaded]);
+
+    // ─── Initial category from prop ───
+    useEffect(() => {
+        if (initialVehicleCategory) {
+            const cat = VEHICLE_CATEGORIES.find(
+                c => c.label.toUpperCase() === initialVehicleCategory.toUpperCase() || c.id === initialVehicleCategory.toUpperCase()
+            );
+            if (cat) setSelectedCategory(cat.id);
+        }
+    }, [initialVehicleCategory]);
+
+    // ─── Auto-switch to Solo for BIKE/AUTO (no pooling) ───
+    useEffect(() => {
+        if ((selectedCategory === 'BIKE' || selectedCategory === 'AUTO') && rideMode === 'Pooled') {
+            setRideMode('Solo');
+        }
+    }, [selectedCategory, rideMode]);
+
+    // ─── Socket setup ───
+    useEffect(() => {
+        const userStr = localStorage.getItem('leaflift_user');
+        if (!userStr) return;
+        const user = JSON.parse(userStr);
+        const socket = registerSocket(user._id, 'RIDER');
+        socketRef.current = socket;
+
+        socket.on('ride:accepted', (payload: any) => {
+            if (!payload?.ride?._id) return;
+            setActiveRideId(payload.ride._id);
+            setRideStatus('ACCEPTED');
+            setDriverDetails(payload.driver);
+            setEtaToPickup(payload.ride.etaToPickup || null);
+            setMaskedDriverPhone(payload.driver?.maskedPhone || null);
+            setCurrentFare(payload.ride.currentFare || payload.ride.fare || null);
+            // Clear re-search / cancel state
+            setIsAutoReSearching(false);
+            setCanceledByDriver(false);
+            setDriverCancelInfo(null);
+            if (reSearchTimeoutRef.current) clearTimeout(reSearchTimeoutRef.current);
+        });
+
+        socket.on('ride:otp', (payload: any) => {
+            if (payload?.otp) { setOtpCode(payload.otp); setRideStatus('ARRIVED'); }
+        });
+
+        socket.on('ride:status', (payload: any) => {
+            if (!payload?.status) return;
+            if (payload.status === 'IN_PROGRESS') setOtpCode(null);
+            if (payload.status === 'COMPLETED') setChatOpen(false);
+            setRideStatus(payload.status);
+            if (payload.fare) setCurrentFare(payload.fare);
+        });
+
+        socket.on('ride:confirm-complete', (payload: any) => {
+            setConfirmCompleteData(payload);
+        });
+
+        socket.on('ride:driver-location', (payload: any) => {
+            if (!payload?.location) return;
+            const { lat, lng } = payload.location;
+            if (!mapRef.current || typeof lat !== 'number') return;
+
+            driverLocationRef.current = { lat, lng };
+
+            if (!driverMarkerRef.current) {
+                const el = document.createElement('div');
+                el.style.cssText = 'width:28px;height:28px;border-radius:50%;background:#2563EB;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.35)';
+                driverMarkerRef.current = new window.maplibregl.Marker({ element: el })
+                    .setLngLat([lng, lat]).addTo(mapRef.current);
+            } else {
+                driverMarkerRef.current.setLngLat([lng, lat]);
+            }
+        });
+
+        socket.on('ride:eta-update', (payload: any) => {
+            if (!payload?.etaText) return;
+            setLiveEtaText(payload.etaText);
+            setLiveEtaLabel(payload.etaLabel || null);
+            setLiveEtaSource(payload.source || null);
+            setLiveEtaUpdatedAt(payload.updatedAt || new Date().toISOString());
+            // Also update the static etaToPickup if this is a pickup ETA
+            if (payload.etaLabel === 'pickup') {
+                setEtaToPickup(payload.etaText);
+            }
+        });
+
+        // ─── Delay Alert Handler (User Story 2.6) ───
+        socket.on('ride:delay-alert', (payload: any) => {
+            if (!payload?.delayMinutes) return;
+            setDelayAlert({
+                delayMinutes: payload.delayMinutes,
+                message: payload.message || `Delayed ~${payload.delayMinutes} min due to traffic`,
+                etaText: payload.etaText || '',
+                etaLabel: payload.etaLabel || 'dropoff'
+            });
+            // Auto-dismiss after 10 seconds
+            if (delayAlertTimerRef.current) clearTimeout(delayAlertTimerRef.current);
+            delayAlertTimerRef.current = setTimeout(() => setDelayAlert(null), 10000);
+        });
+
+        // ─── Multi-Stop Handlers ───
+        socket.on('ride:stop-reached', (payload: any) => {
+            if (payload?.stopIndex !== undefined) {
+                setCurrentStopIndex(payload.stopIndex + 1);
+                setActiveRideStops(prev => prev.map((s, i) =>
+                    i === payload.stopIndex ? { ...s, status: 'REACHED', reachedAt: new Date().toISOString() } : s
+                ));
+            }
+        });
+
+        socket.on('ride:stop-skipped', (payload: any) => {
+            if (payload?.stopIndex !== undefined) {
+                setCurrentStopIndex(payload.stopIndex + 1);
+                setActiveRideStops(prev => prev.map((s, i) =>
+                    i === payload.stopIndex ? { ...s, status: 'SKIPPED' } : s
+                ));
+            }
+        });
+
+        // ─── Ride Canceled Handler ───
+        socket.on('ride:canceled', (payload: any) => {
+            if (payload?.canceledBy === 'DRIVER') {
+                setCanceledByDriver(true);
+                setDriverCancelInfo({
+                    cancelReason: payload.cancelReason || '',
+                    cancellationFee: payload.cancellationFee || 0
+                });
+                setRideStatus('CANCELED');
+                setDriverDetails(null);
+                setEtaToPickup(null);
+                setOtpCode(null);
+                setLiveEtaText(null);
+            }
+        });
+
+        // ─── Auto Re-Search Handler ───
+        socket.on('ride:re-search', (payload: any) => {
+            if (payload?.newRideId) {
+                setIsAutoReSearching(true);
+                setActiveRideId(payload.newRideId);
+                setReSearchDriversNotified(payload.driversNotified || 0);
+                setRideStatus('SEARCHING');
+                setCanceledByDriver(false);
+                setDriverCancelInfo(null);
+                // Auto-timeout after 60s if no driver accepts
+                if (reSearchTimeoutRef.current) clearTimeout(reSearchTimeoutRef.current);
+                reSearchTimeoutRef.current = setTimeout(() => {
+                    setIsAutoReSearching(false);
+                }, 60000);
+            }
+        });
+
+        socket.on('ride:fare-update', (payload: any) => {
+            if (payload?.currentFare) setCurrentFare(payload.currentFare);
+        });
+
+        socket.on('chat:message', (msg: any) => {
+            if (!msg?.message) return;
+            // Avoid duplicating optimistically-added messages from self
+            setChatMessages(prev => {
+                const isDupe = prev.some(m => m.message === msg.message && m.senderRole === msg.senderRole && Math.abs(new Date(m.createdAt).getTime() - new Date(msg.createdAt || Date.now()).getTime()) < 3000);
+                if (isDupe) return prev;
+                return [...prev, { ...msg, createdAt: msg.createdAt || new Date().toISOString() }];
+            });
+        });
+
+        socket.on('nearby:driver:update', (payload: any) => {
+            if (!payload?.driverId || typeof payload.lat !== 'number') return;
+            nearbyDriverPositionsRef.current.set(payload.driverId, { lat: payload.lat, lng: payload.lng });
+            if (pickupCoords) {
+                const dist = getDistanceKm(pickupCoords.lat, pickupCoords.lng, payload.lat, payload.lng);
+                if (dist > NEARBY_RADIUS_KM) { removeNearbyDriverMarker(payload.driverId); return; }
+            }
+            upsertNearbyDriverMarker(payload.driverId, payload.lat, payload.lng);
+        });
+
+        socket.on('nearby:driver:remove', (payload: any) => {
+            if (payload?.driverId) {
+                removeNearbyDriverMarker(payload.driverId);
+                nearbyDriverPositionsRef.current.delete(payload.driverId);
+            }
+        });
+
+        socket.on('pool:rider-joined', (payload: any) => {
+            if (payload?.rideId && activeRideId === payload.rideId) {
+                alert(`✅ ${payload.newRider?.name || 'A rider'} joined your pool! New fare per person: ₹${payload.perPersonFare}`);
+                setCurrentFare(payload.perPersonFare);
+            }
+        });
+
+        socket.on('pool:matched', (payload: any) => {
+            console.log('🤝 Pool match received:', payload);
+            if (payload?.matchedRider) {
+                poolMatchedRef.current = true;
+                setPoolMatchInfo({
+                    poolGroupId: payload.poolGroupId,
+                    matchedRider: payload.matchedRider,
+                    originalFare: payload.originalFare || 0,
+                    poolFare: payload.poolFare || 0
+                });
+                if (payload.poolFare) {
+                    setCurrentFare(payload.poolFare);
+                }
+            }
+        });
+
+        socket.on('pool:stop-update', (payload: any) => {
+            console.log('📍 Pool stop update:', payload);
+            setPoolStopUpdates(prev => [...prev, payload]);
+        });
+
+        return () => { socket.removeAllListeners(); };
+    }, []);
+
+    // ─── Search Timeout Logic ───
+    useEffect(() => {
+        let timer: NodeJS.Timeout;
+        if (rideStatus === 'SEARCHING') {
+            setIsNoDriversFound(false);
+            poolMatchedRef.current = false;
+            // Pooled rides get longer timeout (60s) since rider matching + driver search takes more time
+            const timeoutMs = rideMode === 'Pooled' ? 60000 : 15000;
+            timer = setTimeout(() => {
+                if (rideStatus === 'SEARCHING' && !poolMatchedRef.current) {
+                    setIsNoDriversFound(true);
+                }
+                // If pool matched but no driver yet, don't show 'no drivers' — keep waiting
+            }, timeoutMs);
+        } else {
+            setIsNoDriversFound(false);
+            setPoolMatchInfo(null);
+        }
+        return () => clearTimeout(timer);
+    }, [rideStatus, rideMode]);
+
+    // ─── Join ride room & load messages ───
+    useEffect(() => {
+        if (!activeRideId) return;
+        joinRideRoom(activeRideId);
+        fetch(`${API_BASE_URL}/api/rides/${activeRideId}/messages`)
+            .then(r => r.ok ? r.json() : [])
+            .then(d => setChatMessages(d || []))
+            .catch(() => { });
+        return () => { leaveRideRoom(activeRideId); };
+    }, [activeRideId]);
+
+    // ─── Live ETA polling fallback (every 60s) ───
+    useEffect(() => {
+        if (!activeRideId || rideStatus === 'IDLE' || rideStatus === 'SEARCHING' || rideStatus === 'COMPLETED' || rideStatus === 'CANCELED') {
+            setLiveEtaText(null);
+            setLiveEtaLabel(null);
+            setLiveEtaSource(null);
+            setLiveEtaUpdatedAt(null);
+            return;
+        }
+
+        const fetchLiveEta = async () => {
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/rides/${activeRideId}/live-eta`);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.etaText && data.etaText !== 'N/A') {
+                    setLiveEtaText(data.etaText);
+                    setLiveEtaLabel(data.rideStatus === 'IN_PROGRESS' ? 'dropoff' : 'pickup');
+                    setLiveEtaSource(data.source || null);
+                    setLiveEtaUpdatedAt(new Date().toISOString());
+                    if (data.rideStatus !== 'IN_PROGRESS') {
+                        setEtaToPickup(data.etaText);
+                    }
+                }
+            } catch { }
+        };
+
+        // Fetch immediately on ride status change
+        fetchLiveEta();
+        const interval = setInterval(fetchLiveEta, 60000);
+        return () => clearInterval(interval);
+    }, [activeRideId, rideStatus]);
+
+    // ─── Filter nearby drivers ───
+    useEffect(() => {
+        if (!pickupCoords) return;
+        nearbyDriverPositionsRef.current.forEach((pos, id) => {
+            const dist = getDistanceKm(pickupCoords.lat, pickupCoords.lng, pos.lat, pos.lng);
+            if (dist > NEARBY_RADIUS_KM) removeNearbyDriverMarker(id);
+            else upsertNearbyDriverMarker(id, pos.lat, pos.lng);
+        });
+    }, [pickupCoords]);
+
+    // ─── Broadcast search to drivers ───
+    useEffect(() => {
+        const socket = socketRef.current;
+        if (!socket) return;
+        const userStr = localStorage.getItem('leaflift_user');
+        const user = userStr ? JSON.parse(userStr) : null;
+        if (rideStatus === 'SEARCHING' && activeRideId && pickupCoords) {
+            const resolvedPickup = resolvedPickupCoordsRef.current || pickupCoords;
+            socket.emit('rider:search', {
+                rideId: activeRideId, riderId: user?._id,
+                pickup: { address: pickup, lat: resolvedPickup.lat, lng: resolvedPickup.lng },
+                dropoff: dropoffCoords
+                    ? { address: destination, lat: dropoffCoords.lat, lng: dropoffCoords.lng }
+                    : null,
+                fare: currentFare, isPooled: rideMode === 'Pooled'
+            });
+        } else if (activeRideId) {
+            socket.emit('rider:search:stop', { rideId: activeRideId });
+        }
+    }, [rideStatus, activeRideId, pickupCoords, dropoffCoords, currentFare, destination, pickup, rideMode]);
+
+    // ─── Clear nearby markers when ride is active ───
+    useEffect(() => {
+        if (rideStatus !== 'IDLE' && rideStatus !== 'SEARCHING') {
+            nearbyDriverMarkersRef.current.forEach(m => m.remove());
+            nearbyDriverMarkersRef.current.clear();
+            nearbyDriverPositionsRef.current.clear();
+        }
+    }, [rideStatus]);
+
+    // ─── Draw active ride route based on status ───
+    useEffect(() => {
+        if (!mapLoaded || !mapRef.current || !activeRideId) return;
+
+        const drawRideRoute = async () => {
+            try {
+                let origin, destination;
+
+                if (rideStatus === 'ACCEPTED' && driverLocationRef.current && pickupCoords) {
+                    // Show driver approaching pickup
+                    origin = driverLocationRef.current;
+                    destination = pickupCoords;
+                } else if (rideStatus === 'IN_PROGRESS' && pickupCoords && dropoffCoords) {
+                    // Show route to dropoff
+                    origin = pickupCoords;
+                    destination = dropoffCoords;
+                } else if (rideStatus === 'ARRIVED' && pickupCoords && dropoffCoords) {
+                    // Show upcoming route to dropoff while waiting for OTP
+                    origin = pickupCoords;
+                    destination = dropoffCoords;
+                }
+
+                if (!origin || !destination) return;
+
+                // Only update route if driver moved significantly or enough time passed
+                const now = Date.now();
+                const timeSinceLastUpdate = now - lastRouteUpdateRef.current;
+                const shouldUpdateByTime = timeSinceLastUpdate > 15000; // 15 seconds
+
+                let shouldUpdateByDistance = false;
+                if (lastRouteLocationRef.current && rideStatus === 'ACCEPTED') {
+                    const distance = getDistanceKm(
+                        lastRouteLocationRef.current.lat,
+                        lastRouteLocationRef.current.lng,
+                        origin.lat,
+                        origin.lng
+                    );
+                    shouldUpdateByDistance = distance > 0.05; // 50 meters
+                }
+
+                // For status changes, always update
+                const statusChanged = timeSinceLastUpdate === now || timeSinceLastUpdate > 30000;
+
+                if (!statusChanged && !shouldUpdateByTime && !shouldUpdateByDistance && activeRouteLayerRef.current) {
+                    return; // Skip update
+                }
+
+                lastRouteUpdateRef.current = now;
+                lastRouteLocationRef.current = origin;
+
+                // Clear previous active route
+                if (activeRouteLayerRef.current) {
+                    if (mapRef.current.getLayer(activeRouteLayerRef.current)) {
+                        mapRef.current.removeLayer(activeRouteLayerRef.current);
+                    }
+                    if (mapRef.current.getSource(activeRouteLayerRef.current)) {
+                        mapRef.current.removeSource(activeRouteLayerRef.current);
+                    }
+                    activeRouteLayerRef.current = null;
+                }
+
+                const routes = await getRoute(origin.lat, origin.lng, destination.lat, destination.lng);
+                if (!routes || routes.length === 0) return;
+
+                const route = routes[0];
+                const coords = decodePolyline(route.geometry).map(p => [p.lng, p.lat]);
+
+                const layerId = 'active-ride-route';
+                activeRouteLayerRef.current = layerId;
+
+                mapRef.current.addSource(layerId, {
+                    type: 'geojson',
+                    data: {
+                        type: 'Feature',
+                        properties: {},
+                        geometry: { type: 'LineString', coordinates: coords }
+                    }
+                });
+
+                mapRef.current.addLayer({
+                    id: layerId,
+                    type: 'line',
+                    source: layerId,
+                    layout: {
+                        'line-join': 'round',
+                        'line-cap': 'round'
+                    },
+                    paint: {
+                        'line-color': rideStatus === 'ACCEPTED' ? '#3B82F6' : '#22C55E',
+                        'line-width': 6,
+                        'line-opacity': 0.9
+                    }
+                });
+
+                // Fit bounds to show the route (only on first draw or status change)
+                if (statusChanged) {
+                    const bounds = new window.maplibregl.LngLatBounds();
+                    coords.forEach((c: any) => bounds.extend(c));
+                    mapRef.current.fitBounds(bounds, {
+                        padding: { top: 120, bottom: 450, left: 60, right: 60 },
+                        duration: 1000
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to draw ride route:', error);
+            }
+        };
+
+        drawRideRoute();
+    }, [mapLoaded, activeRideId, rideStatus, pickupCoords, dropoffCoords, driverLocationRef.current]);
+
+    // ─── Send rider live location ───
+    useEffect(() => {
+        if (!activeRideId || !navigator.geolocation) return;
+        const watchId = navigator.geolocation.watchPosition(
+            pos => {
+                const { latitude, longitude } = pos.coords;
+                fetch(`${API_BASE_URL}/api/rides/${activeRideId}/location`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ role: 'RIDER', lat: latitude, lng: longitude })
+                }).catch(() => null);
+                if (mapRef.current) {
+                    if (!riderMarkerRef.current) {
+                        const el = document.createElement('div');
+                        el.style.cssText = 'width:22px;height:22px;border-radius:50%;background:#22C55E;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3)';
+                        riderMarkerRef.current = new window.maplibregl.Marker({ element: el })
+                            .setLngLat([longitude, latitude]).addTo(mapRef.current);
+                    } else {
+                        riderMarkerRef.current.setLngLat([longitude, latitude]);
+                    }
+                }
+            },
+            () => null, { enableHighAccuracy: true, maximumAge: 5001 }
+        );
+        return () => navigator.geolocation.clearWatch(watchId);
+    }, [activeRideId]);
+
+    // ─── Helpers ───
+    const getMapStyle = (dark: boolean) =>
+        dark ? 'https://api.olamaps.io/tiles/vector/v1/styles/default-dark-standard/style.json'
+            : 'https://api.olamaps.io/tiles/vector/v1/styles/default-light-standard/style.json';
+
+    const updateMapStyle = (dark: boolean) => {
+        if (!mapRef.current) return;
+        mapRef.current.setStyle(getMapStyle(dark) + `?api_key=${OLA_CONFIG.apiKey}`);
+        mapRef.current.once('styledata', () => {
+            if (availableRoutes.length > 0 && dropoffCoords) redrawRoutes();
+        });
+    };
+
+    const getDistanceKm = (lat1: number, lng1: number, lat2: number, lng2: number) => {
+        const toRad = (v: number) => (v * Math.PI) / 180;
+        const R = 6371;
+        const dLat = toRad(lat2 - lat1);
+        const dLng = toRad(lng2 - lng1);
+        const a = Math.sin(dLat / 2) ** 2 +
+            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    };
+
+    const calculateCO2 = (distMeters: number, type: string): number => {
+        const km = distMeters / 1000;
+        const rates: Record<string, number> = { BIKE: 20, AUTO: 60, CAR: 120, BIG_CAR: 180, pool: 40 };
+        return Math.round(km * (rates[type] || 120));
+    };
+
+    const upsertNearbyDriverMarker = (driverId: string, lat: number, lng: number) => {
+        if (!mapRef.current) return;
+        let marker = nearbyDriverMarkersRef.current.get(driverId);
+        if (!marker) {
+            const el = document.createElement('div');
+            el.innerHTML = '<span class="material-icons-outlined" style="font-size:20px;color:#2563EB">two_wheeler</span>';
+            el.style.cssText = 'width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:white;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.3)';
+            marker = new window.maplibregl.Marker({ element: el })
+                .setLngLat([lng, lat]).addTo(mapRef.current);
+            nearbyDriverMarkersRef.current.set(driverId, marker);
+        } else {
+            marker.setLngLat([lng, lat]);
+        }
+    };
+
+    const removeNearbyDriverMarker = (driverId: string) => {
+        const m = nearbyDriverMarkersRef.current.get(driverId);
+        if (m) { m.remove(); nearbyDriverMarkersRef.current.delete(driverId); }
+    };
+
+    // ─── Init Map ───
+    useEffect(() => {
+        if (!mapContainerRef.current || mapLoaded) return;
+        const initMap = () => {
+            if (typeof window.maplibregl === 'undefined') { setTimeout(initMap, 300); return; }
+            const apiKey = OLA_CONFIG.apiKey;
+            const map = new window.maplibregl.Map({
+                container: mapContainerRef.current,
+                center: [76.9558, 11.0168],
+                zoom: 13,
+                style: getMapStyle(isDarkMode),
+                transformRequest: (url: string) => {
+                    if (url.includes('olamaps.io')) {
+                        const sep = url.includes('?') ? '&' : '?';
+                        return { url: `${url}${sep}api_key=${apiKey}` };
+                    }
+                    return { url };
+                },
+                attributionControl: false
+            });
+            map.on('load', () => { mapRef.current = map; setMapLoaded(true); });
+            map.on('error', (e: any) => {
+                if (e.error?.message?.includes('Source layer') || e.error?.message?.includes('does not exist')) return;
+            });
+        };
+        setTimeout(initMap, 500);
+    }, [mapLoaded, isDarkMode]);
+
+    // ─── Get User Location ───
+    useEffect(() => {
+        if (!mapLoaded) return;
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                async (position) => {
+                    const { latitude, longitude } = position.coords;
+                    // Don't overwrite user-selected pickup coords with GPS
+                    if (pickupSelectedByUserRef.current) return;
+                    setPickupCoords({ lat: latitude, lng: longitude });
+                    resolvedPickupCoordsRef.current = { lat: latitude, lng: longitude };
+                    if (mapRef.current) {
+                        mapRef.current.flyTo({ center: [longitude, latitude], zoom: 15 });
+                        const el = document.createElement('div');
+                        el.style.cssText = 'width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:white;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.35);border:3px solid #22C55E;cursor:grab';
+                        el.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="#22C55E"><path d="M12 2C8.14 2 5 5.14 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.86-3.14-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>';
+                        const marker = new window.maplibregl.Marker({ element: el, draggable: true })
+                            .setLngLat([longitude, latitude]).addTo(mapRef.current);
+                        marker.on('dragend', async () => {
+                            const lngLat = marker.getLngLat();
+                            const dragCoords = { lat: lngLat.lat, lng: lngLat.lng };
+                            setPickupCoords(dragCoords);
+                            resolvedPickupCoordsRef.current = dragCoords;
+                            pickupManuallyEditedRef.current = false;
+                            pickupSelectedByUserRef.current = true;
+                            setPickup('Locating...');
+                            const address = await reverseGeocode(lngLat.lat, lngLat.lng);
+                            setPickup(address);
+                        });
+                        pickupMarkerRef.current = marker;
+                        try {
+                            const address = await reverseGeocode(latitude, longitude);
+                            setPickup(address);
+                            pickupManuallyEditedRef.current = false;
+                        } catch { }
+                    }
+                    // Fetch nearby drivers to show on map
+                    try {
+                        const resp = await fetch(`${API_BASE_URL}/api/drivers/nearby?lat=${latitude}&lng=${longitude}&radius=${NEARBY_RADIUS_KM}`);
+                        if (resp.ok) {
+                            const drivers = await resp.json();
+                            drivers.forEach((d: any) => {
+                                if (d.location) upsertNearbyDriverMarker(d.driverId, d.location.lat, d.location.lng);
+                            });
+                        }
+                    } catch { }
+                },
+                () => { setPickupCoords({ lat: 11.0168, lng: 76.9558 }); }
+            );
+        } else {
+            setPickupCoords({ lat: 11.0168, lng: 76.9558 });
+        }
+    }, [mapLoaded]);
+
+    // ─── Search suggestions ───
+    const fetchSuggestions = async (query: string) => {
+        if (query.length < 3) { setSuggestions([]); return; }
+        setIsSearching(true);
+        try {
+            const bias = pickupCoords ? `${pickupCoords.lat},${pickupCoords.lng}` : undefined;
+            setSuggestions(await searchPlaces(query, bias));
+        } catch { setSuggestions([]); }
+        finally { setIsSearching(false); }
+    };
+
+    // ─── Multi-Stop search & management ───
+    const fetchStopSuggestions = async (query: string) => {
+        if (query.length < 3) { setStopSuggestions([]); return; }
+        setIsStopSearching(true);
+        try {
+            const bias = pickupCoords ? `${pickupCoords.lat},${pickupCoords.lng}` : undefined;
+            setStopSuggestions(await searchPlaces(query, bias));
+        } catch { setStopSuggestions([]); }
+        finally { setIsStopSearching(false); }
+    };
+
+    useEffect(() => {
+        if (!showStopSearch) return;
+        const timer = setTimeout(() => {
+            if (stopSearchQuery.length > 2) fetchStopSuggestions(stopSearchQuery);
+        }, 500);
+        return () => clearTimeout(timer);
+    }, [stopSearchQuery, showStopSearch]);
+
+    const handleAddStop = async (place: OlaPlace) => {
+        const lat = place.latitude;
+        const lng = place.longitude;
+        if (!lat || !lng) { alert('Unable to get coordinates for this stop.'); return; }
+        const newStop = { address: place.structuredFormatting.mainText, lat, lng };
+        const updatedStops = [...stops, newStop];
+        setStops(updatedStops);
+        setShowStopSearch(false);
+        setStopSearchQuery('');
+        setStopSuggestions([]);
+
+        // Add stop marker on map
+        if (mapRef.current && window.maplibregl) {
+            const el = document.createElement('div');
+            el.style.cssText = 'width:26px;height:26px;border-radius:50%;background:#F59E0B;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:white';
+            el.innerText = `${updatedStops.length}`;
+            const marker = new window.maplibregl.Marker({ element: el })
+                .setLngLat([lng, lat]).addTo(mapRef.current);
+            stopMarkerRefs.current.push(marker);
+        }
+
+        // Recalculate route with waypoints
+        if (pickupCoords && dropoffCoords) {
+            await calculateRoute(pickupCoords, dropoffCoords, updatedStops);
+        }
+    };
+
+    const handleRemoveStop = async (index: number) => {
+        const updatedStops = stops.filter((_, i) => i !== index);
+        setStops(updatedStops);
+
+        // Remove marker
+        if (stopMarkerRefs.current[index]) {
+            stopMarkerRefs.current[index].remove();
+            stopMarkerRefs.current.splice(index, 1);
+        }
+        // Re-number remaining markers
+        stopMarkerRefs.current.forEach((marker, i) => {
+            const el = marker.getElement();
+            if (el) el.innerText = `${i + 1}`;
+        });
+
+        // Recalculate route
+        if (pickupCoords && dropoffCoords) {
+            await calculateRoute(pickupCoords, dropoffCoords, updatedStops);
+        }
+    };
+
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            const q = focusedInput === 'pickup' ? pickup : destination;
+            if (q && q.length > 2 && !showOptions && q !== 'Current Location' && q !== 'Locating...') {
+                fetchSuggestions(q);
+            }
+        }, 500);
+        return () => clearTimeout(timer);
+    }, [pickup, destination, focusedInput, showOptions]);
+
+    const handleSelectSuggestion = async (place: OlaPlace) => {
+        let lat = place.latitude;
+        let lng = place.longitude;
+        if (!lat || !lng || (lat === 0 && lng === 0)) {
+            alert('Unable to get coordinates. Please try another location.');
+            return;
+        }
+        const coords = { lat, lng };
+        if (focusedInput === 'pickup') {
+            setPickup(place.structuredFormatting.mainText);
+            setPickupCoords(coords);
+            resolvedPickupCoordsRef.current = coords;
+            pickupManuallyEditedRef.current = false;
+            pickupSelectedByUserRef.current = true;
+            setFocusedInput('dropoff');
+            if (pickupMarkerRef.current && mapRef.current) {
+                pickupMarkerRef.current.setLngLat([lng, lat]);
+                mapRef.current.flyTo({ center: [lng, lat], zoom: 15, duration: 1000 });
+            }
+        } else {
+            setDestination(place.structuredFormatting.mainText);
+            setDropoffCoords(coords);
+            setSuggestions([]);
+            // Geocode pickup text if user typed it manually without selecting a suggestion
+            let startCoords = pickupCoords;
+            if (pickupManuallyEditedRef.current && pickup && pickup.length > 2) {
+                try {
+                    const results = await searchPlaces(pickup);
+                    if (results.length > 0 && results[0].latitude && results[0].longitude) {
+                        startCoords = { lat: results[0].latitude, lng: results[0].longitude };
+                        setPickupCoords(startCoords);
+                        resolvedPickupCoordsRef.current = startCoords;
+                        pickupManuallyEditedRef.current = false;
+                        pickupSelectedByUserRef.current = true;
+                        if (pickupMarkerRef.current) {
+                            pickupMarkerRef.current.setLngLat([startCoords.lng, startCoords.lat]);
+                        }
+                    }
+                } catch { }
+            }
+            if (startCoords) {
+                await calculateRoute(startCoords, coords);
+                setShowOptions(true);
+            }
+        }
+        setSuggestions([]);
+    };
+
+    // ─── Redraw routes after style change ───
+    const redrawRoutes = () => {
+        if (!mapRef.current || availableRoutes.length === 0 || !dropoffCoords) return;
+        for (let i = 0; i < 5; i++) {
+            const lid = `route-${i}`;
+            try {
+                if (mapRef.current.getLayer(lid)) mapRef.current.removeLayer(lid);
+                if (mapRef.current.getSource(lid)) mapRef.current.removeSource(lid);
+            } catch { }
+        }
+        if (dropoffMarkerRef.current) dropoffMarkerRef.current.remove();
+        const el2 = document.createElement('div');
+        el2.style.cssText = 'width:30px;height:30px;border-radius:50%;background:#EF4444;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3)';
+        dropoffMarkerRef.current = new window.maplibregl.Marker({ element: el2 })
+            .setLngLat([dropoffCoords.lng, dropoffCoords.lat]).addTo(mapRef.current);
+        const colors = isDarkMode ? ['#FFFFFF', '#D1D5DB', '#9CA3AF'] : ['#000000', '#4B5563', '#9CA3AF'];
+        availableRoutes.forEach((route, idx) => {
+            const coords = decodePolyline(route.geometry).map(p => [p.lng, p.lat]);
+            const lid = `route-${idx}`;
+            mapRef.current.addSource(lid, {
+                type: 'geojson',
+                data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } }
+            });
+            mapRef.current.addLayer({
+                id: lid, type: 'line', source: lid,
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': colors[idx] || colors[2],
+                    'line-width': idx === selectedRouteIndex ? 6 : 4,
+                    'line-opacity': idx === selectedRouteIndex ? 0.9 : 0.5
+                }
+            });
+            mapRef.current.on('click', lid, () => handleRouteSelect(idx));
+        });
+    };
+
+    const fetchMatchingDrivers = async (start: { lat: number; lng: number }, end: { lat: number; lng: number }) => {
+        try {
+            const resp = await fetch(`${API_BASE_URL}/api/rider/match-driver?pickupLat=${start.lat}&pickupLng=${start.lng}&dropoffLat=${end.lat}&dropoffLng=${end.lng}`);
+            if (resp.ok) {
+                const data = await resp.json();
+                setMatchedDrivers(data);
+            }
+        } catch (error) {
+            console.error('Failed to fetch matching drivers', error);
+        }
+    };
+
+    const handleRequestJoin = async (driverId: string) => {
+        if (!user?._id && !user?.id) return;
+        if (!pickupCoords || !dropoffCoords) return;
+
+        try {
+            const resp = await fetch(`${API_BASE_URL}/api/rider/request-daily-join`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    riderId: user._id || user.id,
+                    driverId,
+                    pickup: { address: pickup, ...pickupCoords },
+                    dropoff: { address: destination, ...dropoffCoords }
+                })
+            });
+
+            if (resp.ok) {
+                alert('Join request sent to driver!');
+            } else {
+                alert('Failed to send request');
+            }
+        } catch (error) {
+            console.error('Join request error:', error);
+            alert('Connection error');
+        }
+    };
+
+
+    // ─── Calculate route ───
+    const calculateRoute = async (
+        start: { lat: number; lng: number },
+        end: { lat: number; lng: number },
+        waypoints?: Array<{ lat: number; lng: number }>
+    ) => {
+        try {
+            const wp = waypoints || (stops.length > 0 ? stops.map(s => ({ lat: s.lat, lng: s.lng })) : undefined);
+            const routes = await getRoute(start.lat, start.lng, end.lat, end.lng, wp);
+            if (routes && routes.length > 0 && mapRef.current) {
+                fetchMatchingDrivers(start, end);
+                setAvailableRoutes(routes);
+                setSelectedRouteIndex(0);
+                const route = routes[0];
+                const info = formatRouteInfo(route);
+                setRouteInfo(info);
+
+                // Calculate prices for all categories
+                const prices = new Map<string, number>();
+                VEHICLE_CATEGORIES.forEach(cat => {
+                    const price = Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate);
+                    prices.set(cat.id, rideMode === 'Pooled' ? Math.round(price * 0.67 * passengers) : price);
+                });
+                setCategoryPrices(prices);
+
+                // Add destination marker
+                if (dropoffMarkerRef.current) dropoffMarkerRef.current.remove();
+                const el2 = document.createElement('div');
+                el2.style.cssText = 'width:30px;height:30px;border-radius:50%;background:#EF4444;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3)';
+                dropoffMarkerRef.current = new window.maplibregl.Marker({ element: el2 })
+                    .setLngLat([end.lng, end.lat]).addTo(mapRef.current);
+
+                // Clear old routes
+                for (let i = 0; i < 5; i++) {
+                    const lid = `route-${i}`;
+                    try {
+                        if (mapRef.current.getLayer(lid)) mapRef.current.removeLayer(lid);
+                        if (mapRef.current.getSource(lid)) mapRef.current.removeSource(lid);
+                    } catch { }
+                }
+
+                // Draw routes
+                const colors = isDarkMode
+                    ? ['#FFFFFF', '#D1D5DB', '#9CA3AF']
+                    : ['#000000', '#4B5563', '#9CA3AF'];
+                const allCoords: any[] = [];
+
+                routes.forEach((r, idx) => {
+                    const coords = decodePolyline(r.geometry).map(p => [p.lng, p.lat]);
+                    allCoords.push(...coords);
+                    const lid = `route-${idx}`;
+                    mapRef.current.addSource(lid, {
+                        type: 'geojson',
+                        data: {
+                            type: 'Feature',
+                            properties: { routeIndex: idx },
+                            geometry: { type: 'LineString', coordinates: coords }
+                        }
+                    });
+                    mapRef.current.addLayer({
+                        id: lid, type: 'line', source: lid,
+                        layout: { 'line-join': 'round', 'line-cap': 'round' },
+                        paint: {
+                            'line-color': colors[idx] || colors[2],
+                            'line-width': idx === 0 ? 6 : 4,
+                            'line-opacity': idx === 0 ? 0.9 : 0.5
+                        }
+                    });
+                    mapRef.current.on('click', lid, () => handleRouteSelect(idx));
+                });
+
+                routeLayerRef.current = 'route-0';
+                const bounds = new window.maplibregl.LngLatBounds();
+                allCoords.forEach((c: any) => bounds.extend(c));
+                mapRef.current.fitBounds(bounds, {
+                    padding: { top: 100, bottom: 450, left: 50, right: 50 },
+                    duration: 1000
+                });
+            }
+        } catch (error) {
+            console.error('Route error:', error);
+            alert('Failed to calculate route. Please try again.');
+        }
+    };
+
+
+    // ─── Handle route selection ───
+    const handleRouteSelect = (idx: number) => {
+        if (idx === selectedRouteIndex || !availableRoutes[idx]) return;
+        setSelectedRouteIndex(idx);
+        const route = availableRoutes[idx];
+        const info = formatRouteInfo(route);
+        setRouteInfo(info);
+        const prices = new Map<string, number>();
+        VEHICLE_CATEGORIES.forEach(cat => {
+            const price = Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate);
+            prices.set(cat.id, rideMode === 'Pooled' ? Math.round(price * 0.67 * passengers) : price);
+        });
+        setCategoryPrices(prices);
+        availableRoutes.forEach((_, i) => {
+            const lid = `route-${i}`;
+            if (mapRef.current?.getLayer(lid)) {
+                mapRef.current.setPaintProperty(lid, 'line-width', i === idx ? 6 : 4);
+                mapRef.current.setPaintProperty(lid, 'line-opacity', i === idx ? 0.9 : 0.5);
+            }
+        });
+    };
+
+    // ─── Recalc prices on mode/passenger change ───
+    useEffect(() => {
+        if (availableRoutes.length === 0) return;
+        const route = availableRoutes[selectedRouteIndex];
+        if (!route) return;
+        const prices = new Map<string, number>();
+        VEHICLE_CATEGORIES.forEach(cat => {
+            const price = Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate);
+            prices.set(cat.id, rideMode === 'Pooled' ? Math.round(price * 0.67 * passengers) : price);
+        });
+        setCategoryPrices(prices);
+    }, [rideMode, selectedRouteIndex, availableRoutes, passengers]);
+
+    // ─── Auto-switch from BIKE when entering Pooled mode, reset passengers on Solo ───
+    useEffect(() => {
+        if (rideMode === 'Pooled' && selectedCategory === 'BIKE') {
+            setSelectedCategory('CAR');
+        }
+        if (rideMode === 'Solo') {
+            setPassengers(1);
+        }
+    }, [rideMode]);
+
+    // ─── Fetch matching pooled rides (rider-to-rider) ───
+    useEffect(() => {
+        if (!pickupCoords || !dropoffCoords || rideMode !== 'Pooled') {
+            setInProgressPooledRides([]);
+            return;
+        }
+        if (selectedCategory !== 'CAR' && selectedCategory !== 'BIG_CAR') {
+            setInProgressPooledRides([]);
+            return;
+        }
+
+        const fetchPooledRides = async () => {
+            try {
+                const userStr = localStorage.getItem('leaflift_user');
+                const currentUser = userStr ? JSON.parse(userStr) : null;
+                const excludeParam = currentUser?._id ? `&excludeUserId=${currentUser._id}` : '';
+                const url = `${API_BASE_URL}/api/rides/pooled-in-progress?lat=${pickupCoords.lat}&lng=${pickupCoords.lng}&destLat=${dropoffCoords.lat}&destLng=${dropoffCoords.lng}&vehicleCategory=${selectedCategory}&bufferKm=0.5${excludeParam}`;
+                const resp = await fetch(url);
+                if (resp.ok) {
+                    const data = await resp.json();
+                    setInProgressPooledRides(data);
+                }
+            } catch (error) {
+                console.error('Error fetching pooled rides:', error);
+            }
+        };
+
+        fetchPooledRides();
+    }, [pickupCoords, dropoffCoords, rideMode, selectedCategory]);
+
+    // ─── Book ride ───
+    const handleConfirmRide = async () => {
+        setIsRequesting(true);
+        const userStr = localStorage.getItem('leaflift_user');
+        const user = userStr ? JSON.parse(userStr) : null;
+        if (!user?._id) { alert('Please log in'); setIsRequesting(false); return; }
+
+        // Resolve pickup coords: prefer the ref (set during route calc), fallback to state
+        let finalPickupCoords = resolvedPickupCoordsRef.current || pickupCoords;
+
+        // Safety net: if pickup text was manually edited, geocode it before creating ride
+        if (pickupManuallyEditedRef.current && pickup && pickup.length > 2) {
+            try {
+                const results = await searchPlaces(pickup);
+                if (results.length > 0 && results[0].latitude && results[0].longitude) {
+                    finalPickupCoords = { lat: results[0].latitude, lng: results[0].longitude };
+                    setPickupCoords(finalPickupCoords);
+                    resolvedPickupCoordsRef.current = finalPickupCoords;
+                    pickupManuallyEditedRef.current = false;
+                    pickupSelectedByUserRef.current = true;
+                }
+            } catch { }
+        }
+
+        const selectedRoute = availableRoutes[selectedRouteIndex];
+        const price = categoryPrices.get(selectedCategory) || 0;
+        const cat = VEHICLE_CATEGORIES.find(c => c.id === selectedCategory);
+
+        const rideData = {
+            userId: user._id,
+            status: scheduleInfo ? 'SCHEDULED' : 'SEARCHING',
+            pickup: { address: pickup, lat: finalPickupCoords?.lat, lng: finalPickupCoords?.lng },
+            dropoff: { address: destination, lat: dropoffCoords?.lat, lng: dropoffCoords?.lng },
+            fare: price,
+            distance: routeInfo?.distance,
+            duration: routeInfo?.duration,
+            rideType: cat?.label || 'Car',
+            paymentMethod,
+            routeIndex: selectedRouteIndex,
+            vehicleCategory: selectedCategory,
+            co2Emissions: calculateCO2(selectedRoute?.distance || 0, selectedCategory),
+            co2Saved: rideMode === 'Pooled'
+                ? calculateCO2(selectedRoute?.distance || 0, selectedCategory) - calculateCO2(selectedRoute?.distance || 0, 'pool')
+                : 0,
+            isPooled: rideMode === 'Pooled' && (selectedCategory === 'CAR' || selectedCategory === 'BIG_CAR'),
+            passengers,
+            maxPassengers: rideMode === 'Pooled' ? maxPassengers : passengers,
+            ...(rideMode === 'Pooled' ? { safetyPreferences: safetyPrefs } : {}),
+            bookingTime: new Date().toISOString(),
+            ...(stops.length > 0 ? {
+                stops: stops.map((s, i) => ({ address: s.address, lat: s.lat, lng: s.lng, order: i }))
+            } : {}),
+            ...(scheduleInfo ? {
+                isScheduled: true,
+                scheduledFor: scheduleInfo.scheduledFor,
+                scheduledForName: scheduleInfo.forName,
+                scheduledForPhone: scheduleInfo.forPhone
+            } : {})
+        };
+
+        try {
+            const endpoint = scheduleInfo
+                ? `${API_BASE_URL}/api/rides/schedule`
+                : `${API_BASE_URL}/api/rides`;
+            const resp = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(rideData)
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (scheduleInfo) {
+                    alert(`Ride scheduled for ${new Date(scheduleInfo.scheduledFor).toLocaleString()}!`);
+                    onBack();
+                } else {
+                    setActiveRideId(data._id);
+                    setRideStatus('SEARCHING');
+                    setCurrentFare(data.currentFare || data.fare || price);
+                    setShowOptions(false);
+                    // Populate multi-stop tracking state
+                    if (stops.length > 0) {
+                        setActiveRideStops(stops.map((s, i) => ({ ...s, order: i, status: 'PENDING' })));
+                        setCurrentStopIndex(0);
+                    }
+                }
+            } else {
+                alert('Failed to book ride.');
+            }
+        } catch {
+            alert('Network error.');
+        } finally {
+            setIsRequesting(false);
+        }
+    };
+
+    // ─── Cancel Ride (Rider) ───
+    const handleRiderCancelRide = async () => {
+        if (!activeRideId) return;
+        setIsCanceling(true);
+        try {
+            const resp = await fetch(`${API_BASE_URL}/api/rides/${activeRideId}/cancel`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    canceledBy: 'RIDER',
+                    cancelReason: riderCancelReason || 'Rider canceled'
+                })
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                setShowCancelModal(false);
+                setRiderCancelReason('');
+                setRideStatus('IDLE');
+                setActiveRideId(null);
+                setDriverDetails(null);
+                setEtaToPickup(null);
+                setOtpCode(null);
+                setCurrentFare(null);
+                setShowOptions(false);
+                if (data.cancellationFee > 0) {
+                    alert(`Ride canceled. A ₹${data.cancellationFee} fee has been charged.`);
+                }
+            } else {
+                const err = await resp.json();
+                alert(err.message || 'Failed to cancel ride');
+            }
+        } catch {
+            alert('Network error while canceling');
+        } finally {
+            setIsCanceling(false);
+        }
+    };
+
+    // ─── Chat ───
+    const handleSendChat = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!chatInput.trim() || !activeRideId) return;
+        const userStr = localStorage.getItem('leaflift_user');
+        const user = userStr ? JSON.parse(userStr) : null;
+        const msgText = chatInput.trim();
+        const optimisticMsg = {
+            senderId: user?._id,
+            senderRole: 'RIDER',
+            message: msgText,
+            createdAt: new Date().toISOString()
+        };
+        setChatMessages(prev => [...prev, optimisticMsg]);
+        setChatInput('');
+        try {
+            await fetch(`${API_BASE_URL}/api/rides/${activeRideId}/messages`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ senderId: user?._id, senderRole: 'RIDER', message: msgText })
+            });
+        } catch (err) {
+            console.error('Failed to send message', err);
+        }
+    };
+
+    // ─── Confirm ride completion ───
+    const handleConfirmComplete = async (confirmed: boolean) => {
+        if (!activeRideId) return;
+        await fetch(`${API_BASE_URL}/api/rides/${activeRideId}/confirm-complete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirmed })
+        }).catch(() => { });
+        if (confirmed) {
+            setCurrentFare(confirmCompleteData?.completedFare || currentFare);
+        }
+        setConfirmCompleteData(null);
+    };
+
+    // ─── Reset ───
+    const handleResetRide = () => {
+        setRideStatus('IDLE');
+        setActiveRideId(null);
+        setDriverDetails(null);
+        setEtaToPickup(null);
+        setLiveEtaText(null);
+        setLiveEtaLabel(null);
+        setLiveEtaSource(null);
+        setLiveEtaUpdatedAt(null);
+        setDelayAlert(null);
+        if (delayAlertTimerRef.current) clearTimeout(delayAlertTimerRef.current);
+        setOtpCode(null);
+        setCurrentFare(null);
+        setChatMessages([]);
+        setChatOpen(false);
+        setMaskedDriverPhone(null);
+        setDestination('');
+        setDropoffCoords(null);
+        setAvailableRoutes([]);
+        setConfirmCompleteData(null);
+        if (driverMarkerRef.current) { driverMarkerRef.current.remove(); driverMarkerRef.current = null; }
+        if (riderMarkerRef.current) { riderMarkerRef.current.remove(); riderMarkerRef.current = null; }
+        nearbyDriverMarkersRef.current.forEach(m => m.remove());
+        nearbyDriverMarkersRef.current.clear();
+        nearbyDriverPositionsRef.current.clear();
+        // Clear multi-stop state
+        setStops([]);
+        setActiveRideStops([]);
+        setCurrentStopIndex(0);
+        stopMarkerRefs.current.forEach(m => m.remove());
+        stopMarkerRefs.current = [];
+        // Clear cancellation state
+        setCanceledByDriver(false);
+        setDriverCancelInfo(null);
+        setIsAutoReSearching(false);
+        setReSearchDriversNotified(0);
+        if (reSearchTimeoutRef.current) clearTimeout(reSearchTimeoutRef.current);
+        // Navigate back to home screen
+        onBack();
+    };
+
+    // ─── RENDER ───
+    return (
+        <div className="relative w-full h-screen overflow-hidden bg-white dark:bg-zinc-950">
+            {/* ── Congestion Delay Alert Toast (User Story 2.6) ── */}
+            {delayAlert && (
+                <div className="absolute top-16 left-4 right-4 z-[90] animate-in slide-in-from-top duration-500">
+                    <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded-2xl p-4 shadow-xl backdrop-blur-sm">
+                        <div className="flex items-start gap-3">
+                            <div className="size-10 bg-amber-100 dark:bg-amber-800/50 rounded-xl flex items-center justify-center shrink-0">
+                                <span className="material-icons-outlined text-amber-600 dark:text-amber-400">traffic</span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-0.5">
+                                    <h4 className="text-sm font-black text-amber-800 dark:text-amber-300">Traffic Delay Detected</h4>
+                                    <span className="bg-amber-200 dark:bg-amber-700 text-amber-800 dark:text-amber-200 text-[10px] font-bold px-2 py-0.5 rounded-full">+{delayAlert.delayMinutes} min</span>
+                                </div>
+                                <p className="text-xs text-amber-700 dark:text-amber-400">
+                                    {delayAlert.message}. New ETA: <span className="font-bold">{delayAlert.etaText}</span>
+                                    {delayAlert.etaLabel === 'pickup' ? ' to pickup' : ' to destination'}
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setDelayAlert(null)}
+                                className="p-1 rounded-lg hover:bg-amber-200 dark:hover:bg-amber-800 transition-colors shrink-0"
+                            >
+                                <span className="material-icons-outlined text-amber-500 text-sm">close</span>
+                            </button>
+                        </div>
+                        {/* Progress bar for auto-dismiss */}
+                        <div className="mt-3 h-1 bg-amber-200 dark:bg-amber-800 rounded-full overflow-hidden">
+                            <div className="h-full bg-amber-500 dark:bg-amber-400 rounded-full animate-[shrink_10s_linear_forwards]" style={{ animation: 'shrink 10s linear forwards' }} />
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Map */}
+            <div
+                ref={mapContainerRef}
+                className="absolute inset-0 w-full h-full"
+                style={{ minHeight: '100vh' }}
+            >
+                {!mapLoaded && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-zinc-900 z-10">
+                        <div className="text-center">
+                            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500 mx-auto mb-4"></div>
+                            <p className="text-gray-600 dark:text-gray-300 font-semibold">Loading Map...</p>
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* Back Button */}
+            <button
+                onClick={onBack}
+                className="absolute top-4 left-4 z-50 bg-white dark:bg-zinc-900 rounded-full p-3 shadow-lg hover:bg-gray-50 dark:hover:bg-zinc-800 transition-colors"
+            >
+                <span className="material-icons-outlined text-gray-900 dark:text-white">arrow_back</span>
+            </button>
+
+            {/* ── Search Overlay ── */}
+            {rideStatus === 'IDLE' && !showOptions && (
+                <div className="absolute top-0 left-0 right-0 z-40 bg-white dark:bg-zinc-900 shadow-xl rounded-b-3xl p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                        <div className="flex flex-col gap-2 flex-1">
+                            <div className="flex items-center gap-2 bg-gray-100 dark:bg-zinc-800 rounded-xl px-3">
+                                <span className="material-icons-outlined text-gray-500">trip_origin</span>
+                                <input
+                                    type="text"
+                                    value={pickup}
+                                    onChange={(e) => { setPickup(e.target.value); pickupManuallyEditedRef.current = true; }}
+                                    onFocus={() => setFocusedInput('pickup')}
+                                    className="flex-1 bg-transparent border-none p-2 text-sm font-bold focus:ring-0 focus:outline-none dark:text-white"
+                                    placeholder="Current Location"
+                                />
+                            </div>
+                            <div className="flex items-center gap-2 bg-gray-100 dark:bg-zinc-800 rounded-xl px-3">
+                                <span className="material-icons-outlined text-green-500">location_on</span>
+                                <input
+                                    type="text"
+                                    value={destination}
+                                    onChange={(e) => setDestination(e.target.value)}
+                                    onFocus={() => setFocusedInput('dropoff')}
+                                    autoFocus
+                                    className="flex-1 bg-transparent border-none p-2 text-sm font-bold focus:ring-0 focus:outline-none dark:text-white"
+                                    placeholder="Where to?"
+                                />
+                            </div>
+                        </div>
+                        <button
+                            onClick={async () => {
+                                if (destination && dropoffCoords) {
+                                    let startCoords = pickupCoords;
+                                    if (pickupManuallyEditedRef.current && pickup && pickup.length > 2) {
+                                        try {
+                                            const results = await searchPlaces(pickup);
+                                            if (results.length > 0 && results[0].latitude && results[0].longitude) {
+                                                startCoords = { lat: results[0].latitude, lng: results[0].longitude };
+                                                setPickupCoords(startCoords);
+                                                resolvedPickupCoordsRef.current = startCoords;
+                                                pickupManuallyEditedRef.current = false;
+                                                pickupSelectedByUserRef.current = true;
+                                                if (pickupMarkerRef.current) {
+                                                    pickupMarkerRef.current.setLngLat([startCoords.lng, startCoords.lat]);
+                                                }
+                                            }
+                                        } catch { }
+                                    }
+                                    if (startCoords) {
+                                        resolvedPickupCoordsRef.current = startCoords;
+                                        calculateRoute(startCoords, dropoffCoords);
+                                        setShowOptions(true);
+                                    }
+                                }
+                            }}
+                            disabled={!destination || !pickupCoords}
+                            className="ml-2 bg-green-500 hover:bg-green-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg p-2 transition-colors"
+                        >
+                            <span className="material-icons-outlined">directions</span>
+                        </button>
+                    </div>
+                    {suggestions.length > 0 && (
+                        <div className="mt-4 max-h-80 overflow-y-auto">
+                            {suggestions.map((place, idx) => (
+                                <button
+                                    key={`${place.placeId}-${idx}`}
+                                    onClick={() => handleSelectSuggestion(place)}
+                                    className="w-full flex items-center gap-4 py-3 hover:bg-gray-50 dark:hover:bg-zinc-800 rounded-lg px-2 transition-colors"
+                                >
+                                    <span className="material-icons-outlined text-gray-500">location_on</span>
+                                    <div className="flex-1 text-left">
+                                        <div className="font-semibold text-sm dark:text-white">{place.structuredFormatting.mainText}</div>
+                                        <div className="text-xs text-gray-500 dark:text-gray-400">{place.structuredFormatting.secondaryText}</div>
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                    {isSearching && (
+                        <div className="mt-4 text-center">
+                            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-green-500 mx-auto"></div>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* ── Ride Options Sheet ── */}
+            {rideStatus === 'IDLE' && showOptions && (
+                <div className="absolute bottom-0 left-0 right-0 z-40 bg-white dark:bg-zinc-900 rounded-t-3xl shadow-2xl max-h-[75vh] flex flex-col">
+                    <div className="w-12 h-1 bg-gray-300 rounded-full mx-auto my-3" />
+                    <div className="px-4 pb-3">
+                        <h2 className="text-xl font-bold mb-1 dark:text-white">Choose a ride</h2>
+                        {routeInfo && (
+                            <p className="text-sm text-gray-500 dark:text-gray-400">
+                                {routeInfo.distance} • {routeInfo.duration}
+                            </p>
+                        )}
+
+                        {/* Alternative Routes */}
+                        {availableRoutes.length > 1 && (
+                            <div className="mt-3 mb-3">
+                                <p className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-2">
+                                    {availableRoutes.length} Routes
+                                </p>
+                                <div className="flex gap-2 overflow-x-auto pb-2 hide-scrollbar">
+                                    {availableRoutes.map((route, idx) => {
+                                        const info = formatRouteInfo(route);
+                                        return (
+                                            <button
+                                                key={idx}
+                                                onClick={() => handleRouteSelect(idx)}
+                                                className={`flex-shrink-0 w-28 p-2 rounded-lg border-2 transition-all ${idx === selectedRouteIndex
+                                                    ? 'border-black dark:border-white bg-gray-100 dark:bg-zinc-800'
+                                                    : 'border-gray-200 dark:border-zinc-700 hover:border-gray-400'
+                                                    }`}
+                                            >
+                                                <div className="text-xs font-bold dark:text-white">
+                                                    Route {idx + 1}
+                                                    {idx === 0 && <span className="text-green-500 ml-1">⚡</span>}
+                                                </div>
+                                                <div className="text-xs text-gray-500">{info.distance} • {info.duration}</div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* ── Multi-Stop Management ── */}
+                        <div className="mt-3 mb-2">
+                            {stops.length > 0 && (
+                                <div className="mb-2">
+                                    <p className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5 flex items-center gap-1">
+                                        <span className="material-icons-outlined text-amber-500" style={{ fontSize: '14px' }}>pin_drop</span>
+                                        {stops.length} Stop{stops.length > 1 ? 's' : ''}
+                                    </p>
+                                    <div className="space-y-1.5">
+                                        {stops.map((stop, idx) => (
+                                            <div
+                                                key={idx}
+                                                className="flex items-center gap-2 bg-amber-50 dark:bg-amber-900/15 border border-amber-200 dark:border-amber-800 rounded-xl px-3 py-2"
+                                            >
+                                                <div className="w-5 h-5 rounded-full bg-amber-500 text-white flex items-center justify-center text-[10px] font-black shrink-0">
+                                                    {idx + 1}
+                                                </div>
+                                                <span className="flex-1 text-xs font-semibold text-gray-700 dark:text-gray-300 truncate">
+                                                    {stop.address}
+                                                </span>
+                                                <button
+                                                    onClick={() => handleRemoveStop(idx)}
+                                                    className="p-1 rounded-lg hover:bg-amber-200 dark:hover:bg-amber-800 transition-colors shrink-0"
+                                                >
+                                                    <span className="material-icons-outlined text-amber-500" style={{ fontSize: '16px' }}>close</span>
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            {stops.length < 3 && (
+                                <button
+                                    onClick={() => setShowStopSearch(true)}
+                                    className="w-full flex items-center gap-2 py-2.5 px-3 rounded-xl border-2 border-dashed border-gray-300 dark:border-zinc-600 hover:border-amber-400 dark:hover:border-amber-500 text-gray-500 dark:text-gray-400 hover:text-amber-600 dark:hover:text-amber-400 transition-all"
+                                >
+                                    <span className="material-icons-outlined" style={{ fontSize: '18px' }}>add_location</span>
+                                    <span className="text-xs font-bold">Add a Stop</span>
+                                    <span className="text-[10px] text-gray-400 dark:text-gray-500 ml-auto">{3 - stops.length} remaining</span>
+                                </button>
+                            )}
+                        </div>
+
+                        {/* Mode Toggle with Savings */}
+                        {(() => {
+                            const route = availableRoutes[selectedRouteIndex];
+                            const cat = VEHICLE_CATEGORIES.find(c => c.id === selectedCategory);
+                            const soloPrice = route && cat ? Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate) : 0;
+                            const poolPrice = route && cat ? Math.round(soloPrice * 0.67) : 0;
+                            const fareSaved = soloPrice - poolPrice;
+                            const co2Solo = route ? calculateCO2(route.distance, selectedCategory) : 0;
+                            const co2Pool = route ? calculateCO2(route.distance, 'pool') : 0;
+                            const co2Saved = co2Solo - co2Pool;
+                            const canPool = selectedCategory === 'CAR' || selectedCategory === 'BIG_CAR';
+                            return (
+                                <>
+                                    <div className="flex gap-2 mt-3">
+                                        <button
+                                            onClick={() => setRideMode('Solo')}
+                                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Solo'
+                                                ? 'bg-black dark:bg-white text-white dark:text-black'
+                                                : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
+                                                }`}
+                                        >
+                                            Solo {rideMode === 'Solo' && route ? `• ₹${soloPrice}` : ''}
+                                        </button>
+                                        {canPool && (
+                                            <button
+                                                onClick={() => setRideMode('Pooled')}
+                                                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Pooled'
+                                                    ? 'bg-green-500 text-white'
+                                                    : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
+                                                    }`}
+                                            >
+                                                🌱 Pool {rideMode === 'Pooled' && route ? `• ₹${poolPrice}` : ''}
+                                            </button>
+                                        )}
+                                    </div>
+                                    {route && fareSaved > 0 && canPool && (
+                                        <div className={`mt-2 p-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all ${rideMode === 'Pooled'
+                                            ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
+                                            : 'bg-gray-50 dark:bg-zinc-800 text-gray-500 dark:text-gray-400'
+                                            }`}>
+                                            <span>🌱</span>
+                                            <span>
+                                                Pool & save ₹{fareSaved} per person • {co2Saved > 0 ? `${co2Saved}g less CO₂` : ''}
+                                            </span>
+                                        </div>
+                                    )}
+                                </>
+                            );
+                        })()}
+                    </div>
+
+                    {/* Scrollable content area */}
+                    <div className="flex-1 overflow-y-auto hide-scrollbar">
+                        {/* Passengers (Pooled only) */}
+                        {rideMode === 'Pooled' && (
+                            <div className="flex items-center gap-3 px-4 mt-2">
+                                <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Passengers:</span>
+                                {[1, 2, 3, 4].map(n => (
+                                    <button
+                                        key={n}
+                                        onClick={() => setPassengers(n)}
+                                        className={`w-8 h-8 rounded-full text-xs font-bold ${passengers === n
+                                            ? 'bg-black dark:bg-white text-white dark:text-black'
+                                            : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300'
+                                            }`}
+                                    >
+                                        {n}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+
+                        {/* Max Passengers for Pooled Rides (CAR/BIG_CAR only) */}
+                        {rideMode === 'Pooled' && (selectedCategory === 'CAR' || selectedCategory === 'BIG_CAR') && (
+                            <div className="flex items-center gap-3 px-4 mt-2">
+                                <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Max Pool:</span>
+                                {[2, 3, 4, selectedCategory === 'BIG_CAR' ? 6 : null].filter(Boolean).map(n => (
+                                    <button
+                                        key={n}
+                                        onClick={() => setMaxPassengers(n!)}
+                                        className={`w-8 h-8 rounded-full text-xs font-bold ${maxPassengers === n
+                                            ? 'bg-green-500 text-white'
+                                            : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300'
+                                            }`}
+                                    >
+                                        {n}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+
+                        {/* Safety Preferences (Pooled only) */}
+                        {rideMode === 'Pooled' && (
+                            <div className="px-4 mt-3">
+                                <span className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-2 block">Safety Preferences:</span>
+                                <div className="flex flex-col gap-2">
+                                    {[
+                                        { key: 'womenOnly' as const, label: 'Women Only', icon: 'female', desc: 'Match with women riders & drivers only' },
+                                        { key: 'verifiedOnly' as const, label: 'Verified Riders', icon: 'verified_user', desc: 'Only verified profiles' },
+                                        { key: 'noSmoking' as const, label: 'No Smoking', icon: 'smoke_free', desc: 'Smoke-free ride' },
+                                    ].map(pref => (
+                                        <label
+                                            key={pref.key}
+                                            className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition-all ${safetyPrefs[pref.key]
+                                                ? 'border-green-400 bg-green-50 dark:bg-green-900/20 dark:border-green-700'
+                                                : 'border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50'
+                                                }`}
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                checked={safetyPrefs[pref.key]}
+                                                onChange={() => setSafetyPrefs(prev => ({ ...prev, [pref.key]: !prev[pref.key] }))}
+                                                className="sr-only"
+                                            />
+                                            <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-all ${safetyPrefs[pref.key]
+                                                ? 'bg-green-500 border-green-500'
+                                                : 'border-gray-300 dark:border-zinc-600'
+                                                }`}>
+                                                {safetyPrefs[pref.key] && (
+                                                    <span className="material-icons-outlined text-white" style={{ fontSize: '14px' }}>check</span>
+                                                )}
+                                            </div>
+                                            <span className="material-icons-outlined text-sm text-gray-500 dark:text-gray-400">{pref.icon}</span>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="text-xs font-bold dark:text-white">{pref.label}</div>
+                                                <div className="text-[10px] text-gray-400 dark:text-gray-500">{pref.desc}</div>
+                                            </div>
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+
+                        {/* Matched Pooled Riders (Rider-to-Rider) */}
+                        {rideMode === 'Pooled' && inProgressPooledRides.length > 0 && (
+                            <div className="px-4 py-3 mb-4">
+                                <h3 className="text-sm font-bold text-gray-700 dark:text-gray-300 mb-3">
+                                    🤝 Riders Going Your Way ({inProgressPooledRides.length})
+                                </h3>
+                                <div className="space-y-3 max-h-[calc(100vh-400px)] min-h-[200px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-gray-200 dark:scrollbar-thumb-gray-600 dark:scrollbar-track-gray-800">
+                                    {inProgressPooledRides.map((ride: any) => (
+                                        <div
+                                            key={ride._id}
+                                            className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800"
+                                        >
+                                            <div className="flex items-stretch gap-3">
+                                                <div className="flex-1 min-w-0">
+                                                    {/* Matched Rider Info */}
+                                                    <div className="flex items-center gap-2 mb-2">
+                                                        <span className="material-icons text-blue-600 dark:text-blue-400" style={{ fontSize: '18px' }}>
+                                                            person
+                                                        </span>
+                                                        <div className="flex-1">
+                                                            <span className="text-sm font-bold text-gray-800 dark:text-gray-200">
+                                                                {ride.rider?.name || 'Rider'}
+                                                            </span>
+                                                            {ride.rider?.rating && (
+                                                                <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">
+                                                                    ⭐ {typeof ride.rider.rating === 'number' ? ride.rider.rating.toFixed(1) : ride.rider.rating}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Route Info */}
+                                                    <div className="mb-2 p-2 bg-white dark:bg-zinc-800 rounded border border-gray-200 dark:border-zinc-700">
+                                                        <div className="flex items-start gap-2 mb-1">
+                                                            <span className="material-icons text-green-500" style={{ fontSize: '14px', marginTop: '2px' }}>trip_origin</span>
+                                                            <span className="text-[11px] text-gray-600 dark:text-gray-400 line-clamp-1">
+                                                                {ride.pickup?.address || 'Pickup nearby'}
+                                                            </span>
+                                                        </div>
+                                                        <div className="flex items-start gap-2">
+                                                            <span className="material-icons text-red-500" style={{ fontSize: '14px', marginTop: '2px' }}>location_on</span>
+                                                            <span className="text-[11px] text-gray-600 dark:text-gray-400 line-clamp-1">
+                                                                {ride.dropoff?.address || 'Same direction'}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Match Quality */}
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-[10px] px-2 py-0.5 bg-blue-100 dark:bg-blue-800 text-blue-700 dark:text-blue-300 rounded-full font-bold">
+                                                            {ride.matchDetails?.matchType === 'geometric' ? '📐 Route Match' : '📍 Nearby'}
+                                                        </span>
+                                                        <span className="text-[10px] text-gray-500 dark:text-gray-400">
+                                                            {ride.vehicleCategory || 'CAR'}
+                                                        </span>
+                                                    </div>
+                                                </div>
+
+                                                {/* Pool Together Button */}
+                                                <button
+                                                    onClick={async () => {
+                                                        // Book a pooled ride — the server will auto-match with this rider
+                                                        handleConfirmRide();
+                                                    }}
+                                                    className="flex flex-col items-center justify-center px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 active:scale-95 transition-all shadow-md shrink-0"
+                                                >
+                                                    <span className="text-xs font-bold">Pool</span>
+                                                    <span className="text-[10px] mt-0.5">Together</span>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+
+                        {matchedDrivers.length > 0 && (
+                            <div className="mb-6 px-4">
+                                <div className="flex justify-between items-center mb-4 px-1">
+                                    <h3 className="text-[10px] font-black uppercase tracking-[.25em] text-gray-400">Available Drivers</h3>
+                                    <span className="text-[10px] font-black text-leaf-500 uppercase tracking-widest">{matchedDrivers.length} Found</span>
+                                </div>
+                                <div className="space-y-4">
+                                    {matchedDrivers.map((driver) => (
+                                        <div key={driver.id} className="bg-[#fbfbfb] dark:bg-zinc-900/50 border border-gray-100 dark:border-zinc-800 p-5 rounded-[32px] transition-all hover:border-leaf-500/30 group shadow-sm">
+                                            <div className="flex items-center gap-4 mb-4">
+                                                <div className="relative">
+                                                    <img src={driver.photoUrl || `https://i.pravatar.cc/150?u=${driver.id}`} alt={driver.name} className="w-14 h-14 rounded-2xl object-cover border border-gray-100 dark:border-zinc-800 shadow-md" />
+                                                    <div className="absolute -bottom-1 -right-1 bg-leaf-500 size-5 flex items-center justify-center rounded-lg border-2 border-white dark:border-zinc-900 shadow-sm">
+                                                        <span className="material-icons-outlined text-white text-[10px] font-black">verified</span>
+                                                    </div>
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex justify-between items-start">
+                                                        <div className="text-lg font-black dark:text-white truncate pr-2">{driver.name}</div>
+                                                        <div className="flex items-center gap-1 bg-yellow-400/10 px-2 py-0.5 rounded-full border border-yellow-400/20">
+                                                            <span className="material-icons-outlined text-yellow-500 text-xs">star</span>
+                                                            <span className="text-[10px] font-black text-yellow-600 dark:text-yellow-400">{driver.rating}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-xs font-bold text-gray-400 dark:text-zinc-500 mt-0.5">{driver.vehicle} • {driver.vehicleNumber}</div>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <div className="flex-1 p-3 bg-gray-50 dark:bg-zinc-800 rounded-2xl flex items-center gap-2">
+                                                    <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400 text-sm">nature_people</span>
+                                                    <span className="text-[10px] font-black text-gray-500 uppercase tracking-tight">Eco-friendly Choice</span>
+                                                </div>
+                                                <button
+                                                    className="px-8 py-3 bg-black dark:bg-white text-white dark:text-black text-xs font-black rounded-2xl uppercase tracking-widest shadow-xl shadow-black/10 active:scale-95 transition-all group-hover:bg-leaf-600 group-hover:text-white"
+                                                    onClick={() => handleRequestJoin(driver.id)}
+                                                >
+                                                    Invite
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Vehicle Categories */}
+                        <div className="px-4 py-2">
+                            {VEHICLE_CATEGORIES.map(cat => {
+                                const price = categoryPrices.get(cat.id) || 0;
+                                const route = availableRoutes[selectedRouteIndex];
+                                const soloPrice = route ? Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate) : 0;
+                                const co2 = route ? calculateCO2(route.distance, cat.id) : 0;
+                                const co2Pool = route ? calculateCO2(route.distance, 'pool') : 0;
+                                const etaMin = route ? Math.round(route.duration / 60) : 0;
+
+                                return (
+                                    <button
+                                        key={cat.id}
+                                        onClick={() => setSelectedCategory(cat.id)}
+                                        className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 mb-3 transition-all ${selectedCategory === cat.id
+                                            ? 'border-black dark:border-white bg-gray-50 dark:bg-zinc-800'
+                                            : 'border-transparent hover:bg-gray-50 dark:hover:bg-zinc-800'
+                                            }`}
+                                    >
+                                        <div className="w-14 h-14 rounded-2xl bg-gray-100 dark:bg-zinc-700 flex items-center justify-center">
+                                            <span className="material-icons-outlined text-2xl text-gray-700 dark:text-white">
+                                                {cat.icon}
+                                            </span>
+                                        </div>
+                                        <div className="flex-1 text-left">
+                                            <div className="font-bold text-base dark:text-white">{cat.label}</div>
+                                            <div className="text-xs text-gray-500 dark:text-gray-400">
+                                                {etaMin} min • {cat.capacity} seats
+                                            </div>
+                                            {rideMode === 'Pooled' ? (
+                                                <div className="mt-1 inline-flex items-center gap-1 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-200 text-xs font-semibold px-2 py-0.5 rounded-full">
+                                                    🌱 Save {co2 - co2Pool}g CO₂
+                                                </div>
+                                            ) : (
+                                                <div className="mt-1 text-xs text-gray-400">~{co2}g CO₂</div>
+                                            )}
+                                        </div>
+                                        <div className="text-right">
+                                            <div className="font-bold text-lg dark:text-white">₹{price}</div>
+                                            {rideMode === 'Pooled' && soloPrice > price && (
+                                                <div className="text-xs text-gray-400 line-through">₹{soloPrice}</div>
+                                            )}
+                                            {selectedCategory === cat.id && (
+                                                <div className="text-green-500 text-xs mt-1">✓</div>
+                                            )}
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>{/* end scrollable area */}
+
+                    {/* Footer */}
+                    <div className="p-4 border-t border-gray-200 dark:border-zinc-800">
+                        {scheduleInfo && (
+                            <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl flex items-center gap-2">
+                                <span className="material-icons-outlined text-blue-500 text-lg">schedule</span>
+                                <span className="text-sm font-bold text-blue-700 dark:text-blue-300">
+                                    Scheduled: {new Date(scheduleInfo.scheduledFor).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                                </span>
+                            </div>
+                        )}
+                        <button
+                            onClick={() => setShowPaymentModal(true)}
+                            className="w-full flex items-center justify-between mb-3 p-3 bg-gray-50 dark:bg-zinc-800 rounded-xl hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors"
+                        >
+                            <span className="font-semibold dark:text-white">{paymentMethod}</span>
+                            <span className="material-icons-outlined dark:text-white">chevron_right</span>
+                        </button>
+                        <button
+                            onClick={handleConfirmRide}
+                            disabled={isRequesting}
+                            className={`w-full text-white font-bold py-4 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg ${scheduleInfo ? 'bg-blue-500 hover:bg-blue-600' : 'bg-green-500 hover:bg-green-600'}`}
+                        >
+                            {isRequesting ? (
+                                <span className="flex items-center justify-center gap-2">
+                                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                                    {scheduleInfo ? 'Scheduling...' : 'Booking...'}
+                                </span>
+                            ) : scheduleInfo ? (
+                                `Schedule ${VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label} - ₹${categoryPrices.get(selectedCategory) || 0}`
+                            ) : (
+                                `Book ${VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label} - ₹${categoryPrices.get(selectedCategory) || 0}`
+                            )}
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Searching State ── */}
+            {rideStatus === 'SEARCHING' && (
+                <div className="absolute inset-0 z-50 flex items-end">
+                    <div className="w-full bg-white dark:bg-zinc-900 rounded-t-[40px] shadow-2xl p-8 animate-in slide-in-from-bottom duration-500">
+                        <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-8"></div>
+                        {!isNoDriversFound ? (
+                            <div className="flex flex-col items-center text-center pb-8">
+                                {/* Pool Matched State */}
+                                {poolMatchInfo ? (
+                                    <>
+                                        <div className="relative mb-6">
+                                            <div className="size-20 bg-leaf-50 dark:bg-leaf-900/20 rounded-full flex items-center justify-center">
+                                                <span className="material-icons-outlined text-3xl text-leaf-600 dark:text-leaf-400">group</span>
+                                            </div>
+                                            <div className="absolute inset-0 border-4 border-leaf-400/30 rounded-full animate-ping"></div>
+                                            <div className="absolute -bottom-1 -right-1 bg-leaf-500 size-6 flex items-center justify-center rounded-full border-2 border-white dark:border-zinc-900">
+                                                <span className="material-icons-outlined text-white text-xs">check</span>
+                                            </div>
+                                        </div>
+                                        <h3 className="text-2xl font-black mb-1 dark:text-white">Pool Matched!</h3>
+                                        <p className="text-sm text-leaf-600 dark:text-leaf-400 font-bold mb-4">
+                                            Waiting for a driver to accept your pool ride...
+                                        </p>
+
+                                        {/* Matched Rider Card */}
+                                        <div className="w-full bg-[#fbfbfb] dark:bg-zinc-900/50 border border-gray-100 dark:border-zinc-800 rounded-2xl p-4 mb-4">
+                                            <div className="flex items-center gap-3 mb-3">
+                                                <div className="size-10 bg-leaf-100 dark:bg-leaf-900/30 rounded-xl flex items-center justify-center">
+                                                    <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400">person</span>
+                                                </div>
+                                                <div className="flex-1 text-left">
+                                                    <div className="text-sm font-black text-gray-900 dark:text-white">{poolMatchInfo.matchedRider.name}</div>
+                                                    <div className="text-[10px] font-black text-leaf-600 dark:text-leaf-400 uppercase tracking-widest">Pool Partner</div>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-2.5 ml-1">
+                                                <div className="flex flex-col items-center gap-0.5 shrink-0">
+                                                    <div className="size-1.5 bg-leaf-500 rounded-full"></div>
+                                                    <div className="w-0.5 h-3 bg-gray-200 dark:bg-zinc-700"></div>
+                                                    <div className="size-1.5 bg-red-500 rounded-full"></div>
+                                                </div>
+                                                <div className="flex-1 min-w-0 text-left">
+                                                    <p className="text-[11px] font-bold text-gray-700 dark:text-gray-300 truncate">{poolMatchInfo.matchedRider.pickup?.address || 'Nearby'}</p>
+                                                    <p className="text-[11px] font-bold text-gray-700 dark:text-gray-300 truncate">{poolMatchInfo.matchedRider.dropoff?.address || 'Same direction'}</p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Pool Fare */}
+                                        {poolMatchInfo.poolFare > 0 && (
+                                            <div className="flex items-center gap-2 bg-leaf-50 dark:bg-leaf-900/15 border border-leaf-200 dark:border-leaf-800 rounded-xl px-4 py-2.5 mb-2">
+                                                <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400 text-sm">savings</span>
+                                                <span className="text-xs font-black text-gray-400 dark:text-gray-500 line-through">₹{poolMatchInfo.originalFare}</span>
+                                                <span className="text-lg font-black text-leaf-600 dark:text-leaf-400">₹{poolMatchInfo.poolFare}</span>
+                                                <span className="text-[10px] font-black text-leaf-600 dark:text-leaf-400 uppercase tracking-widest">per person</span>
+                                            </div>
+                                        )}
+
+                                        {/* Animated waiting indicator */}
+                                        <div className="flex items-center gap-2 mt-3 text-leaf-600 dark:text-leaf-400">
+                                            <div className="flex gap-1">
+                                                <div className="w-2 h-2 bg-leaf-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                                                <div className="w-2 h-2 bg-leaf-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                                                <div className="w-2 h-2 bg-leaf-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                                            </div>
+                                            <span className="text-xs font-bold">Connecting to drivers</span>
+                                        </div>
+                                    </>
+                                ) : (
+                                    /* Normal Searching State */
+                                    <>
+                                        <div className="relative mb-8">
+                                            <div className="size-24 bg-green-50 dark:bg-green-900/10 rounded-full flex items-center justify-center">
+                                                <span className="material-icons-outlined text-4xl text-green-500">radar</span>
+                                            </div>
+                                            <div className="absolute inset-0 border-4 border-green-500/20 rounded-full animate-ping"></div>
+                                        </div>
+                                        <h3 className="text-2xl font-black mb-2 dark:text-white">Finding your ride</h3>
+                                        <p className="text-sm text-gray-500 dark:text-gray-400 font-medium max-w-[240px]">
+                                            We're connecting you with active drivers in your area.
+                                        </p>
+                                        {currentFare !== null && (
+                                            <div className="mt-6 bg-leaf-600 text-white px-6 py-2 rounded-2xl text-xs font-black uppercase tracking-widest shadow-lg shadow-leaf-500/20">
+                                                Estimate ₹{currentFare}
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                                <button
+                                    onClick={handleResetRide}
+                                    className="mt-6 py-3 px-8 border-2 border-gray-200 dark:border-zinc-700 text-gray-500 dark:text-zinc-400 rounded-2xl font-bold text-sm hover:bg-gray-50 dark:hover:bg-zinc-800 transition-colors"
+                                >
+                                    Cancel Search
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="flex flex-col items-center text-center pb-8">
+                                <div className="size-24 bg-red-50 dark:bg-red-900/10 rounded-full flex items-center justify-center mb-8">
+                                    <span className="material-icons-outlined text-4xl text-red-500">location_off</span>
+                                </div>
+                                <h3 className="text-2xl font-black mb-2 dark:text-white">No drivers found</h3>
+                                <p className="text-sm text-gray-500 dark:text-gray-400 font-medium max-w-[280px]">
+                                    Sorry, there aren't any drivers travelling in this location at the moment.
+                                </p>
+                                <div className="flex gap-3 w-full mt-10">
+                                    <button
+                                        onClick={() => setRideStatus('IDLE')}
+                                        className="flex-1 py-4 bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-400 rounded-2xl font-black text-sm uppercase tracking-widest"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            setIsNoDriversFound(false);
+                                            // Re-trigger search or just wait more
+                                            // For now we'll just reset the timer by toggling state
+                                            setRideStatus('IDLE');
+                                            setTimeout(() => setRideStatus('SEARCHING'), 100);
+                                        }}
+                                        className="flex-[2] py-4 bg-black dark:bg-white text-white dark:text-black rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl"
+                                    >
+                                        Try Again
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* ── Driver Canceled + Auto Re-Search Overlay ── */}
+            {canceledByDriver && rideStatus === 'CANCELED' && (
+                <div className="absolute inset-0 z-[55] flex items-end">
+                    <div className="w-full bg-white dark:bg-zinc-900 rounded-t-[40px] shadow-2xl p-8 animate-in slide-in-from-bottom duration-500">
+                        <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-6"></div>
+                        <div className="flex flex-col items-center text-center pb-6">
+                            <div className="relative mb-6">
+                                <div className="size-20 bg-red-50 dark:bg-red-900/10 rounded-full flex items-center justify-center">
+                                    <span className="material-icons-outlined text-4xl text-red-500">cancel</span>
+                                </div>
+                            </div>
+                            <h3 className="text-2xl font-black mb-2 dark:text-white">Driver Canceled</h3>
+                            {driverCancelInfo?.cancelReason && (
+                                <p className="text-sm text-gray-500 dark:text-gray-400 font-medium mb-1">
+                                    Reason: {driverCancelInfo.cancelReason}
+                                </p>
+                            )}
+                            <p className="text-sm text-gray-400 dark:text-gray-500 mb-4">
+                                Don't worry — we're automatically searching for another driver nearby.
+                            </p>
+
+                            {/* Auto-searching animation */}
+                            <div className="w-full p-4 bg-green-50 dark:bg-green-900/10 rounded-2xl border border-green-100 dark:border-green-800 mb-4">
+                                <div className="flex items-center gap-3">
+                                    <div className="relative">
+                                        <div className="size-10 bg-green-100 dark:bg-green-800/30 rounded-full flex items-center justify-center">
+                                            <span className="material-icons-outlined text-green-500">radar</span>
+                                        </div>
+                                        <div className="absolute inset-0 border-2 border-green-500/30 rounded-full animate-ping"></div>
+                                    </div>
+                                    <div className="text-left">
+                                        <p className="text-sm font-bold text-green-700 dark:text-green-400">
+                                            Searching within 5 km...
+                                        </p>
+                                        <p className="text-xs text-green-600 dark:text-green-500">
+                                            Looking for drivers on your route
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex gap-3 w-full mt-2">
+                                <button
+                                    onClick={handleResetRide}
+                                    className="flex-1 py-4 bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-400 rounded-2xl font-black text-sm uppercase tracking-widest"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setCanceledByDriver(false);
+                                        setDriverCancelInfo(null);
+                                        setRideStatus('IDLE');
+                                        setShowOptions(true);
+                                    }}
+                                    className="flex-[2] py-4 bg-black dark:bg-white text-white dark:text-black rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl"
+                                >
+                                    Rebook Manually
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Active Ride Panel ── */}
+            {rideStatus !== 'IDLE' && rideStatus !== 'SEARCHING' && rideStatus !== 'CANCELED' && (
+                <div className="absolute bottom-0 left-0 right-0 z-50 bg-white dark:bg-zinc-900 rounded-t-3xl shadow-2xl p-6">
+                    <div className="flex items-center justify-between mb-4">
+                        <div>
+                            <p className="text-xs uppercase tracking-widest text-gray-400 font-bold">Ride Status</p>
+                            <h3 className="text-xl font-black dark:text-white">
+                                {rideStatus.replace('_', ' ')}
+                            </h3>
+                        </div>
+                        {/* Live ETA Badge */}
+                        {(liveEtaText || etaToPickup) && rideStatus !== 'COMPLETED' && (
+                            <div className="flex flex-col items-end gap-1">
+                                <div className="flex items-center gap-1.5 bg-black dark:bg-white text-white dark:text-black px-3 py-1.5 rounded-full text-xs font-bold">
+                                    <span className="relative flex h-2 w-2">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                                    </span>
+                                    {rideStatus === 'IN_PROGRESS'
+                                        ? `ETA ${liveEtaText || 'Computing...'}`
+                                        : `ETA ${liveEtaText || etaToPickup}`
+                                    }
+                                </div>
+                                <span className="text-[9px] text-gray-400 dark:text-zinc-500 font-medium">
+                                    {liveEtaSource === 'ola-traffic' ? 'Live traffic' : 'Estimated'}
+                                    {liveEtaLabel === 'pickup' ? ' to pickup' : liveEtaLabel === 'dropoff' ? ' to drop' : ''}
+                                </span>
+                            </div>
+                        )}
+                    </div>
+
+                    {driverDetails && (
+                        <div className="flex items-center gap-3 mb-4">
+                            <img
+                                src={driverDetails.photoUrl}
+                                className="w-12 h-12 rounded-full object-cover"
+                                alt=""
+                            />
+                            <div className="flex-1">
+                                <div className="font-bold dark:text-white">{driverDetails.name}</div>
+                                <div className="text-xs text-gray-500 dark:text-gray-400">
+                                    {driverDetails.vehicle} • {driverDetails.vehicleNumber}
+                                </div>
+                                <div className="text-xs text-gray-500 dark:text-gray-400">
+                                    ⭐ {driverDetails.rating?.toFixed(1)}
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => maskedDriverPhone && alert(`Call: ${maskedDriverPhone}`)}
+                                className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
+                                title="Call driver"
+                            >
+                                <span className="material-icons-outlined">phone</span>
+                            </button>
+                            <button
+                                onClick={() => setChatOpen(true)}
+                                className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
+                                title="Chat"
+                            >
+                                <span className="material-icons-outlined">chat</span>
+                            </button>
+                        </div>
+                    )}
+
+                    {/* ── Pool Ride Progress Tracker ── */}
+                    {poolStopUpdates.length > 0 && (() => {
+                        const latestUpdate = poolStopUpdates[poolStopUpdates.length - 1];
+                        const stops = latestUpdate?.stops || [];
+                        const currentIdx = latestUpdate?.currentStopIndex || 0;
+                        if (stops.length === 0) return null;
+                        return (
+                            <div className="mb-5">
+                                <div className="flex items-center justify-between mb-3">
+                                    <div className="flex items-center gap-2">
+                                        <div className="size-7 bg-leaf-100 dark:bg-leaf-900/30 rounded-lg flex items-center justify-center">
+                                            <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400" style={{ fontSize: '14px' }}>route</span>
+                                        </div>
+                                        <div>
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">Pool Progress</p>
+                                            <p className="text-xs font-black dark:text-white">{stops.filter((s: any) => s.status === 'COMPLETED').length}/{stops.length} stops</p>
+                                        </div>
+                                    </div>
+                                    <div className="bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400 px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-widest">
+                                        Step {Math.min(currentIdx + 1, stops.length)}/{stops.length}
+                                    </div>
+                                </div>
+                                {latestUpdate?.message && (
+                                    <div className="mb-3 px-3 py-2 bg-leaf-50 dark:bg-leaf-900/15 rounded-xl text-xs font-black text-leaf-700 dark:text-leaf-400 border border-leaf-200 dark:border-leaf-800/50">
+                                        {latestUpdate.message}
+                                    </div>
+                                )}
+                                <div className="space-y-2">
+                                    {stops.map((stop: any, idx: number) => {
+                                        const isDone = stop.status === 'COMPLETED';
+                                        const isActive = idx === currentIdx && !isDone;
+                                        return (
+                                            <div key={idx} className={`flex items-center gap-3 p-3 rounded-[16px] transition-all ${isDone ? 'bg-gray-50 dark:bg-zinc-800/40 opacity-60' :
+                                                    isActive ? 'bg-white dark:bg-zinc-900 ring-2 ring-leaf-500 shadow-md shadow-leaf-500/10' :
+                                                        'bg-[#fbfbfb] dark:bg-zinc-900/50 border border-gray-100 dark:border-zinc-800'
+                                                }`}>
+                                                <div className={`size-7 rounded-lg flex items-center justify-center text-[10px] font-black shrink-0 ${isDone ? 'bg-leaf-500 text-white' :
+                                                        isActive ? 'bg-black dark:bg-white text-white dark:text-black' :
+                                                            'bg-gray-200 dark:bg-zinc-700 text-gray-400 dark:text-gray-500'
+                                                    }`}>
+                                                    {isDone ? '✓' : idx + 1}
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <span className={`text-[10px] font-black uppercase tracking-widest ${isDone ? 'text-leaf-600 dark:text-leaf-400' :
+                                                            stop.type === 'PICKUP' ? 'text-leaf-600 dark:text-leaf-400' : 'text-orange-500 dark:text-orange-400'
+                                                        }`}>
+                                                        {stop.type === 'PICKUP' ? 'Pickup' : 'Dropoff'}
+                                                    </span>
+                                                    <span className={`text-xs font-black ml-1.5 ${isDone ? 'text-gray-500 dark:text-gray-400' : 'text-gray-900 dark:text-white'}`}>
+                                                        {stop.riderName}
+                                                    </span>
+                                                </div>
+                                                {isDone && <span className="text-[10px] text-leaf-500 font-black">Done</span>}
+                                                {isActive && <span className="flex items-center gap-1"><span className="size-1.5 bg-leaf-500 rounded-full animate-pulse"></span><span className="text-[10px] text-leaf-600 dark:text-leaf-400 font-black">Now</span></span>}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        );
+                    })()}
+
+                    {/* ── Multi-Stop Progress Tracker ── */}
+                    {activeRideStops.length > 0 && rideStatus === 'IN_PROGRESS' && (
+                        <div className="mb-4 p-3 bg-gray-50 dark:bg-zinc-800/50 rounded-2xl">
+                            <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                                <span className="material-icons-outlined text-amber-500" style={{ fontSize: '14px' }}>pin_drop</span>
+                                Stops Progress
+                            </p>
+                            <div className="space-y-2">
+                                {activeRideStops.map((stop, idx) => (
+                                    <div key={idx} className="flex items-center gap-2.5">
+                                        <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black shrink-0 ${stop.status === 'REACHED' ? 'bg-green-500 text-white' :
+                                            stop.status === 'SKIPPED' ? 'bg-gray-300 dark:bg-zinc-600 text-gray-500 dark:text-zinc-400 line-through' :
+                                                idx === currentStopIndex ? 'bg-amber-500 text-white animate-pulse' :
+                                                    'bg-gray-200 dark:bg-zinc-700 text-gray-500 dark:text-zinc-400'
+                                            }`}>
+                                            {stop.status === 'REACHED' ? '✓' : stop.status === 'SKIPPED' ? '—' : idx + 1}
+                                        </div>
+                                        <span className={`text-xs font-semibold flex-1 truncate ${stop.status === 'REACHED' ? 'text-green-600 dark:text-green-400' :
+                                            stop.status === 'SKIPPED' ? 'text-gray-400 dark:text-zinc-500 line-through' :
+                                                idx === currentStopIndex ? 'text-amber-600 dark:text-amber-400' :
+                                                    'text-gray-500 dark:text-gray-400'
+                                            }`}>
+                                            {stop.address}
+                                        </span>
+                                        {stop.status === 'REACHED' && (
+                                            <span className="text-[10px] text-green-500 font-bold">Done</span>
+                                        )}
+                                        {stop.status === 'SKIPPED' && (
+                                            <span className="text-[10px] text-gray-400 font-bold">Skipped</span>
+                                        )}
+                                        {idx === currentStopIndex && stop.status === 'PENDING' && (
+                                            <span className="text-[10px] text-amber-500 font-bold">Next</span>
+                                        )}
+                                    </div>
+                                ))}
+                                <div className="flex items-center gap-2.5 mt-1 pt-1.5 border-t border-gray-200 dark:border-zinc-700">
+                                    <div className="w-6 h-6 rounded-full bg-red-500 flex items-center justify-center shrink-0">
+                                        <span className="material-icons-outlined text-white" style={{ fontSize: '12px' }}>flag</span>
+                                    </div>
+                                    <span className="text-xs font-bold text-gray-700 dark:text-gray-300 truncate">{destination || 'Final Destination'}</span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {rideStatus === 'ARRIVED' && otpCode && (
+                        <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-2xl mb-4">
+                            <p className="text-xs font-bold text-green-600 dark:text-green-400 uppercase tracking-widest">
+                                Share OTP with driver
+                            </p>
+                            <div className="text-3xl font-black text-green-600 dark:text-green-400 mt-1">
+                                {otpCode}
+                            </div>
+                        </div>
+                    )}
+
+                    {currentFare !== null && (
+                        <div className="flex items-center justify-between mb-3">
+                            <span className="text-sm text-gray-500 dark:text-gray-400">Current Fare</span>
+                            <span className="font-bold text-lg dark:text-white">₹{currentFare}</span>
+                        </div>
+                    )}
+
+                    {/* ── Rider Cancel Button (ACCEPTED / ARRIVED) ── */}
+                    {(rideStatus === 'ACCEPTED' || rideStatus === 'ARRIVED') && (
+                        <button
+                            onClick={() => setShowCancelModal(true)}
+                            className="w-full py-3 border-2 border-red-200 dark:border-red-800 text-red-500 font-bold rounded-xl mb-3 flex items-center justify-center gap-2 hover:bg-red-50 dark:hover:bg-red-900/10 transition-colors"
+                        >
+                            <span className="material-icons-outlined" style={{ fontSize: '18px' }}>close</span>
+                            Cancel Ride
+                        </button>
+                    )}
+
+                    {rideStatus === 'COMPLETED' && (
+                        <>
+                            <div className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+                                Payment completed via {paymentMethod}.
+                            </div>
+                            <button
+                                onClick={handleResetRide}
+                                className="w-full bg-black dark:bg-white text-white dark:text-black font-bold py-3 rounded-xl"
+                            >
+                                Done
+                            </button>
+                        </>
+                    )}
+                </div>
+            )}
+
+            {/* ── Rider Confirmation Modal for Early Completion ── */}
+            {confirmCompleteData && (
+                <div className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4">
+                    <div className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-3xl p-6 shadow-2xl">
+                        <h3 className="text-lg font-bold dark:text-white mb-2">Ride Complete?</h3>
+                        <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">
+                            Driver has marked the ride as complete.
+                        </p>
+                        {confirmCompleteData.actualDistanceKm && (
+                            <p className="text-sm text-gray-500 dark:text-gray-400">
+                                Distance traveled: {confirmCompleteData.actualDistanceKm} km
+                            </p>
+                        )}
+                        <p className="text-lg font-bold text-green-600 dark:text-green-400 mt-2">
+                            Fare: ₹{confirmCompleteData.completedFare}
+                        </p>
+                        <div className="flex gap-3 mt-4">
+                            <button
+                                onClick={() => handleConfirmComplete(true)}
+                                className="flex-1 bg-green-500 text-white py-3 rounded-xl font-bold"
+                            >
+                                Confirm & Pay
+                            </button>
+                            <button
+                                onClick={() => handleConfirmComplete(false)}
+                                className="flex-1 bg-gray-100 dark:bg-zinc-800 py-3 rounded-xl font-bold dark:text-white"
+                            >
+                                Dispute
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Chat Modal ── */}
+            {chatOpen && activeRideId && (
+                <div
+                    className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4"
+                    onClick={() => setChatOpen(false)}
+                >
+                    <div
+                        className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-3xl overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-zinc-800">
+                            <h3 className="font-bold dark:text-white">Ride Chat</h3>
+                            <button
+                                onClick={() => setChatOpen(false)}
+                                className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-zinc-800"
+                            >
+                                <span className="material-icons-outlined">close</span>
+                            </button>
+                        </div>
+                        <div className="max-h-72 overflow-y-auto p-4 space-y-3">
+                            {chatMessages.length === 0 && (
+                                <p className="text-sm text-gray-400 text-center">No messages yet.</p>
+                            )}
+                            {chatMessages.map((msg, idx) => (
+                                <div
+                                    key={`${msg.createdAt}-${idx}`}
+                                    className={`flex ${msg.senderRole === 'RIDER' ? 'justify-end' : 'justify-start'}`}
+                                >
+                                    <div
+                                        className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${msg.senderRole === 'RIDER'
+                                            ? 'bg-black text-white dark:bg-white dark:text-black'
+                                            : 'bg-gray-100 dark:bg-zinc-800 dark:text-white'
+                                            }`}
+                                    >
+                                        {msg.message}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        <form
+                            onSubmit={handleSendChat}
+                            className="p-3 border-t border-gray-100 dark:border-zinc-800 flex gap-2"
+                        >
+                            <input
+                                value={chatInput}
+                                onChange={(e) => setChatInput(e.target.value)}
+                                className="flex-1 bg-gray-100 dark:bg-zinc-800 rounded-full px-4 text-sm dark:text-white"
+                                placeholder="Type a message..."
+                            />
+                            <button
+                                type="submit"
+                                className="bg-black dark:bg-white text-white dark:text-black rounded-full px-4"
+                            >
+                                Send
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Stop Search Modal ── */}
+            {showStopSearch && (
+                <div
+                    className="fixed inset-0 z-[65] bg-black/60 flex items-end justify-center"
+                    onClick={() => { setShowStopSearch(false); setStopSearchQuery(''); setStopSuggestions([]); }}
+                >
+                    <div
+                        className="w-full max-w-md bg-white dark:bg-zinc-900 rounded-t-3xl p-5 max-h-[70vh] flex flex-col"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-bold dark:text-white">Add a Stop</h3>
+                            <button
+                                onClick={() => { setShowStopSearch(false); setStopSearchQuery(''); setStopSuggestions([]); }}
+                                className="p-2 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-full transition-colors"
+                            >
+                                <span className="material-icons-outlined text-gray-500">close</span>
+                            </button>
+                        </div>
+                        <div className="flex items-center gap-2 bg-gray-100 dark:bg-zinc-800 rounded-xl px-3 mb-3">
+                            <span className="material-icons-outlined text-amber-500">add_location</span>
+                            <input
+                                type="text"
+                                value={stopSearchQuery}
+                                onChange={(e) => setStopSearchQuery(e.target.value)}
+                                autoFocus
+                                className="flex-1 bg-transparent border-none p-3 text-sm font-bold focus:ring-0 focus:outline-none dark:text-white"
+                                placeholder="Search for a stop location..."
+                            />
+                        </div>
+                        <div className="flex-1 overflow-y-auto">
+                            {isStopSearching && (
+                                <div className="text-center py-4">
+                                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-amber-500 mx-auto"></div>
+                                </div>
+                            )}
+                            {stopSuggestions.map((place, idx) => (
+                                <button
+                                    key={`${place.placeId}-${idx}`}
+                                    onClick={() => handleAddStop(place)}
+                                    className="w-full flex items-center gap-4 py-3 hover:bg-gray-50 dark:hover:bg-zinc-800 rounded-lg px-2 transition-colors"
+                                >
+                                    <div className="w-8 h-8 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center shrink-0">
+                                        <span className="material-icons-outlined text-amber-500" style={{ fontSize: '16px' }}>location_on</span>
+                                    </div>
+                                    <div className="flex-1 text-left min-w-0">
+                                        <div className="font-semibold text-sm dark:text-white truncate">{place.structuredFormatting.mainText}</div>
+                                        <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{place.structuredFormatting.secondaryText}</div>
+                                    </div>
+                                </button>
+                            ))}
+                            {!isStopSearching && stopSearchQuery.length > 2 && stopSuggestions.length === 0 && (
+                                <p className="text-sm text-gray-400 text-center py-4">No results found</p>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Rider Cancel Reason Modal ── */}
+            {showCancelModal && (
+                <div className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4">
+                    <div className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-3xl p-6 shadow-2xl">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-bold dark:text-white flex items-center gap-2">
+                                <span className="material-icons-outlined text-red-500">warning</span>
+                                Cancel Ride
+                            </h3>
+                            <button
+                                onClick={() => { setShowCancelModal(false); setRiderCancelReason(''); }}
+                                className="p-2 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-full transition-colors"
+                            >
+                                <span className="material-icons-outlined text-gray-500">close</span>
+                            </button>
+                        </div>
+
+                        {rideStatus === 'ACCEPTED' || rideStatus === 'ARRIVED' ? (
+                            <div className="bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800 p-3 rounded-xl mb-4">
+                                <p className="text-xs text-amber-700 dark:text-amber-400 font-semibold flex items-center gap-1">
+                                    <span className="material-icons-outlined" style={{ fontSize: '14px' }}>info</span>
+                                    A cancellation fee of ₹25 will be charged as the driver has already accepted.
+                                </p>
+                            </div>
+                        ) : null}
+
+                        <p className="text-sm text-gray-500 dark:text-gray-400 mb-3 font-medium">
+                            Why are you canceling?
+                        </p>
+                        <div className="space-y-2 mb-4">
+                            {[
+                                'Changed plans',
+                                'Found alternative transport',
+                                'Wrong pickup/destination',
+                                'Taking too long',
+                                'Price too high',
+                            ].map((reason) => (
+                                <button
+                                    key={reason}
+                                    onClick={() => setRiderCancelReason(reason)}
+                                    className={`w-full text-left px-4 py-3 rounded-xl border-2 text-sm font-semibold transition-all ${riderCancelReason === reason
+                                        ? 'border-red-500 bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400'
+                                        : 'border-gray-100 dark:border-zinc-700 text-gray-600 dark:text-zinc-400 hover:bg-gray-50 dark:hover:bg-zinc-800'
+                                        }`}
+                                >
+                                    {reason}
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => { setShowCancelModal(false); setRiderCancelReason(''); }}
+                                className="flex-1 py-3 bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-400 rounded-xl font-bold"
+                            >
+                                Go Back
+                            </button>
+                            <button
+                                onClick={() => {
+                                    if (!riderCancelReason) return;
+                                    handleRiderCancelRide();
+                                }}
+                                disabled={!riderCancelReason || isCanceling}
+                                className={`flex-1 py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${riderCancelReason && !isCanceling
+                                    ? 'bg-red-500 text-white shadow-lg'
+                                    : 'bg-gray-200 dark:bg-zinc-700 text-gray-400 dark:text-zinc-500 cursor-not-allowed'
+                                    }`}
+                            >
+                                {isCanceling ? (
+                                    <>
+                                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                                        </svg>
+                                        Canceling...
+                                    </>
+                                ) : (
+                                    'Cancel Ride'
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Payment Modal ── */}
+            {showPaymentModal && (
+                <div
+                    onClick={() => setShowPaymentModal(false)}
+                    className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4"
+                >
+                    <div
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-3xl p-6 shadow-2xl"
+                    >
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-xl font-bold dark:text-white">Payment Method</h3>
+                            <button
+                                onClick={() => setShowPaymentModal(false)}
+                                className="p-2 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-full transition-colors"
+                            >
+                                <span className="material-icons-outlined text-gray-500">close</span>
+                            </button>
+                        </div>
+                        {[
+                            { id: 'Cash', label: 'Cash', icon: 'payments', desc: 'Pay with cash after ride' },
+                            { id: 'UPI', label: 'UPI', icon: 'account_balance', desc: 'PhonePe, GPay, Paytm' },
+                            { id: 'Wallet', label: 'LeafLift Wallet', icon: 'account_balance_wallet', desc: 'Fast & secure' }
+                        ].map((p) => (
+                            <button
+                                key={p.id}
+                                onClick={() => {
+                                    setPaymentMethod(p.id as PaymentMethod);
+                                    setShowPaymentModal(false);
+                                }}
+                                className={`w-full flex items-center gap-4 p-4 rounded-2xl border-2 mb-3 transition-all ${paymentMethod === p.id
+                                    ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
+                                    : 'border-gray-200 dark:border-zinc-700 hover:border-gray-300 dark:hover:border-zinc-600'
+                                    }`}
+                            >
+                                <div
+                                    className={`p-3 rounded-full ${paymentMethod === p.id
+                                        ? 'bg-green-500 text-white'
+                                        : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
+                                        }`}
+                                >
+                                    <span className="material-icons-outlined">{p.icon}</span>
+                                </div>
+                                <div className="flex-1 text-left">
+                                    <div className="font-bold dark:text-white">{p.label}</div>
+                                    <div className="text-xs text-gray-500 dark:text-gray-400">{p.desc}</div>
+                                </div>
+                                {paymentMethod === p.id && (
+                                    <span className="material-icons-outlined text-green-500">check_circle</span>
+                                )}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+export default PlanRideScreen;

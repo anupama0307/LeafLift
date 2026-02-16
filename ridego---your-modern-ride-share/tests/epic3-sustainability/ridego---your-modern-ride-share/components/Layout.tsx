@@ -1,0 +1,86 @@
+
+import React from 'react';
+import { AppScreen } from '../types';
+
+interface LayoutProps {
+  children: React.ReactNode;
+  currentScreen: AppScreen;
+  setCurrentScreen: (screen: AppScreen) => void;
+  toggleDarkMode: () => void;
+  isAuthenticated: boolean;
+  user?: any;
+}
+
+const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScreen, toggleDarkMode, isAuthenticated, user }) => {
+  const isDriver = user?.role === 'DRIVER';
+  const isSpecialScreen = currentScreen === AppScreen.PLAN_RIDE ||
+    currentScreen === AppScreen.CHAT_DETAIL ||
+    currentScreen === AppScreen.DRIVER_DASHBOARD ||
+    !isAuthenticated;
+
+  const NavItem: React.FC<{ screen: AppScreen; icon: string; label: string }> = ({ screen, icon, label }) => {
+    const isActive = currentScreen === screen;
+    return (
+      <button
+        onClick={() => setCurrentScreen(screen)}
+        className={`flex flex-col items-center gap-1 transition-all flex-1 ${isActive ? 'opacity-100 text-leaf-600 dark:text-leaf-400' : 'opacity-40 hover:opacity-70 dark:text-white'}`}
+      >
+        <div className={`size-10 rounded-xl flex items-center justify-center transition-all ${isActive ? 'bg-leaf-50 dark:bg-leaf-900/20 mb-0.5' : ''}`}>
+          <span className="material-icons-outlined text-2xl">{icon}</span>
+        </div>
+        <span className="text-[10px] font-black tracking-tight">{label}</span>
+      </button>
+    );
+  };
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden bg-white dark:bg-zinc-950">
+      {/* Top Bar / Status Bar (Simulated) */}
+      {!isSpecialScreen && (
+        <div className="flex justify-between items-center px-8 pt-4 pb-2">
+          <span className="text-sm font-semibold">9:41</span>
+          <button onClick={toggleDarkMode} className="flex items-center gap-1.5 bg-gray-100 dark:bg-zinc-800 px-3 py-1.5 rounded-full hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors">
+            <span className="material-icons-outlined text-base text-leaf-600 dark:text-leaf-400">
+              {document.documentElement.classList.contains('dark') ? 'light_mode' : 'dark_mode'}
+            </span>
+            <span className="text-xs font-bold text-gray-600 dark:text-zinc-400">
+              {document.documentElement.classList.contains('dark') ? 'Light' : 'Dark'}
+            </span>
+          </button>
+        </div>
+      )}
+
+      {/* Main Content Area */}
+      <div className="flex-1 overflow-y-auto hide-scrollbar relative">
+        {children}
+      </div>
+
+      {/* Navigation Bar (Sticky at bottom) */}
+      {!isSpecialScreen && (
+        <div className="bg-white dark:bg-zinc-950 border-t border-gray-100 dark:border-gray-800 flex justify-around items-center pt-3 pb-8 px-4 z-50">
+          {isDriver ? (
+            /* Driver Specific Tabs: Dashboard, Inbox, Account */
+            <>
+              <NavItem screen={AppScreen.DRIVER_DASHBOARD} icon="dashboard" label="Dashboard" />
+              <NavItem screen={AppScreen.INBOX} icon="chat_bubble_outline" label="Inbox" />
+              <NavItem screen={AppScreen.ACCOUNT} icon="person" label="Account" />
+            </>
+          ) : (
+            /* Rider Specific Tabs */
+            <>
+              <NavItem screen={AppScreen.HOME} icon="home" label="Home" />
+              <NavItem screen={AppScreen.ACTIVITY} icon="receipt_long" label="Activity" />
+              <NavItem screen={AppScreen.INBOX} icon="chat_bubble_outline" label="Inbox" />
+              <NavItem screen={AppScreen.ACCOUNT} icon="person" label="Account" />
+            </>
+          )}
+
+          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-32 h-1 bg-gray-100 dark:bg-zinc-800 rounded-full"></div>
+        </div>
+      )}
+
+    </div>
+  );
+};
+
+export default Layout;
