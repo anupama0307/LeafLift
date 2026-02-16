@@ -1,0 +1,16 @@
+{
+    "name": "epic5-safety-trust-tests",
+    "version": "1.0.0",
+    "private": true,
+    "description": "Independent test suite for EPIC 5 — Safety & Trust",
+    "scripts": {
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "test:verbose": "vitest run --reporter=verbose"
+    },
+    "devDependencies": {
+        "vitest": "^3.2.1",
+        "mongodb-memory-server": "^10.4.0",
+        "mongoose": "^9.1.5"
+    }
+}
