@@ -44,3 +44,6 @@ This epic focuses on minimizing travel time and environmental impact through int
 - [ ] **2.5 Use live traffic data** (Pending full API integration)
 - [ ] **2.6 Notify delays** (Pending push notification service)
 - [ ] **2.7 Optimize for speed & sustainability** (Pending complex weighting algorithm)
+
+> *Last Updated: Sprint 1 Review*
+
