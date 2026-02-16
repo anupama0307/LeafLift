@@ -8,6 +8,8 @@ test.describe('LeafLift Real-time Flow', () => {
     test.beforeAll(async ({ request }) => {
         driverPhone = '9' + Math.floor(100000000 + Math.random() * 900000000);
         riderPhone = '9' + Math.floor(100000000 + Math.random() * 900000000);
+        console.log(`Starting E2E Test Setup with Driver: ${driverPhone}, Rider: ${riderPhone}`);
+
 
         // Create Driver
         const driverRes = await request.post(`${API_URL}/signup`, {
