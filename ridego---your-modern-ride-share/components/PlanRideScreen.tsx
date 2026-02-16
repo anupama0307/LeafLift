@@ -62,7 +62,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [maskedDriverPhone, setMaskedDriverPhone] = useState<string | null>(null);
     const [passengers, setPassengers] = useState(1);
     const [maxPassengers, setMaxPassengers] = useState(4);
-    const [safetyPrefs, setSafetyPrefs] = useState({ womenOnly: false, verifiedOnly: false, noSmoking: false });
+    const [safetyPrefs, setSafetyPrefs] = useState({ womenOnly: false, verifiedOnly: false, noSmoking: false, genderPreference: 'any' as 'any' | 'male' | 'female' });
     const [confirmCompleteData, setConfirmCompleteData] = useState<any>(null);
 
     const [isNoDriversFound, setIsNoDriversFound] = useState(false);
@@ -1578,20 +1578,25 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                     <div className="flex-1 overflow-y-auto hide-scrollbar">
                         {/* Passengers (Pooled only) */}
                         {rideMode === 'Pooled' && (
-                            <div className="flex items-center gap-3 px-4 mt-2">
-                                <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Passengers:</span>
-                                {[1, 2, 3, 4].map(n => (
-                                    <button
-                                        key={n}
-                                        onClick={() => setPassengers(n)}
-                                        className={`w-8 h-8 rounded-full text-xs font-bold ${passengers === n
-                                            ? 'bg-black dark:bg-white text-white dark:text-black'
-                                            : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300'
-                                            }`}
-                                    >
-                                        {n}
-                                    </button>
-                                ))}
+                            <div className="px-4 mt-2">
+                                <div className="flex items-center gap-3">
+                                    <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Passengers:</span>
+                                    {[1, 2, 3, 4].map(n => (
+                                        <button
+                                            key={n}
+                                            onClick={() => setPassengers(n)}
+                                            className={`w-8 h-8 rounded-full text-xs font-bold ${passengers === n
+                                                ? 'bg-black dark:bg-white text-white dark:text-black'
+                                                : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300'
+                                                }`}
+                                        >
+                                            {n}
+                                        </button>
+                                    ))}
+                                </div>
+                                <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1 italic">
+                                    💡 Select your group size. One OTP for entire group.
+                                </p>
                             </div>
                         )}
 
@@ -1618,9 +1623,42 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         {rideMode === 'Pooled' && (
                             <div className="px-4 mt-3">
                                 <span className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-2 block">Safety Preferences:</span>
+                                
+                                {/* Gender Preference Selector */}
+                                <div className="mb-2">
+                                    <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider block mb-1.5">Gender Preference:</label>
+                                    <div className="flex gap-2">
+                                        {[
+                                            { value: 'any' as const, label: 'Any', icon: 'groups' },
+                                            { value: 'male' as const, label: 'Male', icon: 'male' },
+                                            { value: 'female' as const, label: 'Female', icon: 'female' }
+                                        ].map(opt => (
+                                            <button
+                                                key={opt.value}
+                                                onClick={() => setSafetyPrefs(prev => ({ ...prev, genderPreference: opt.value }))}
+                                                className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl border-2 transition-all ${
+                                                    safetyPrefs.genderPreference === opt.value
+                                                        ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
+                                                        : 'border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50'
+                                                }`}
+                                            >
+                                                <span className={`material-icons-outlined text-sm ${
+                                                    safetyPrefs.genderPreference === opt.value
+                                                        ? 'text-green-600 dark:text-green-400'
+                                                        : 'text-gray-500 dark:text-gray-400'
+                                                }`}>{opt.icon}</span>
+                                                <span className={`text-xs font-bold ${
+                                                    safetyPrefs.genderPreference === opt.value
+                                                        ? 'text-green-600 dark:text-green-400'
+                                                        : 'text-gray-600 dark:text-gray-400'
+                                                }`}>{opt.label}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
                                 <div className="flex flex-col gap-2">
                                     {[
-                                        { key: 'womenOnly' as const, label: 'Women Only', icon: 'female', desc: 'Match with women riders & drivers only' },
                                         { key: 'verifiedOnly' as const, label: 'Verified Riders', icon: 'verified_user', desc: 'Only verified profiles' },
                                         { key: 'noSmoking' as const, label: 'No Smoking', icon: 'smoke_free', desc: 'Smoke-free ride' },
                                     ].map(pref => (

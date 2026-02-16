@@ -1197,7 +1197,7 @@ app.get('/api/rides/nearby-by-location', async (req, res) => {
 // ── Find matching SEARCHING pooled rides (rider-to-rider matching) ──
 app.get('/api/rides/pooled-in-progress', async (req, res) => {
     try {
-        const { lat, lng, destLat, destLng, vehicleCategory, bufferKm = 0.5, excludeUserId } = req.query;
+        const { lat, lng, destLat, destLng, vehicleCategory, bufferKm = 0.5, excludeUserId, genderPreference } = req.query;
 
         if (!lat || !lng || !destLat || !destLng) {
             return res.status(400).json({ message: 'lat, lng, destLat, destLng required' });
@@ -1225,7 +1225,7 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
         }
 
         const rides = await Ride.find(query)
-            .populate('userId', 'firstName lastName email rating');
+            .populate('userId', 'firstName lastName email rating gender');
 
         const riderPickup = { lat: latNum, lng: lngNum };
         const riderDropoff = { lat: destLatNum, lng: destLngNum };
@@ -1236,6 +1236,21 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
             const result = isRiderOnRoute(ride.routePolyline, riderPickup, riderDropoff, bufferKmNum);
             if (result.match) {
                 const riderInfo = ride.userId || {};
+                
+                // Filter by gender preference
+                if (genderPreference && genderPreference !== 'any') {
+                    const rideGenderPref = ride.safetyPreferences?.genderPreference || 'any';
+                    const riderGender = riderInfo.gender?.toLowerCase();
+                    
+                    // Skip if gender preferences don't match
+                    if (rideGenderPref !== 'any' && rideGenderPref !== genderPreference) {
+                        continue;
+                    }
+                    if (genderPreference !== 'any' && riderGender && riderGender !== genderPreference) {
+                        continue;
+                    }
+                }
+                
                 matched.push({
                     _id: ride._id,
                     rideId: ride._id,
@@ -1243,7 +1258,8 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
                     vehicleCategory: ride.vehicleCategory,
                     rider: {
                         name: `${riderInfo.firstName || 'Rider'} ${riderInfo.lastName || ''}`.trim(),
-                        rating: riderInfo.rating || 4.8
+                        rating: riderInfo.rating || 4.8,
+                        gender: riderInfo.gender || 'Not specified'
                     },
                     pickup: ride.pickup,
                     dropoff: ride.dropoff,
@@ -1269,13 +1285,28 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
             'pickup.lat': { $exists: true },
             'dropoff.lat': { $exists: true },
             ...(excludeUserId ? { userId: { $ne: excludeUserId } } : {})
-        }).populate('userId', 'firstName lastName email rating');
+        }).populate('userId', 'firstName lastName email rating gender');
 
         for (const ride of ridesWithoutPolyline) {
             const pickupDist = getDistanceKm(latNum, lngNum, ride.pickup.lat, ride.pickup.lng);
             const dropoffDist = getDistanceKm(destLatNum, destLngNum, ride.dropoff.lat, ride.dropoff.lng);
             if (pickupDist !== null && pickupDist <= 3 && dropoffDist !== null && dropoffDist <= 3) {
                 const riderInfo = ride.userId || {};
+                
+                // Filter by gender preference
+                if (genderPreference && genderPreference !== 'any') {
+                    const rideGenderPref = ride.safetyPreferences?.genderPreference || 'any';
+                    const riderGender = riderInfo.gender?.toLowerCase();
+                    
+                    // Skip if gender preferences don't match
+                    if (rideGenderPref !== 'any' && rideGenderPref !== genderPreference) {
+                        continue;
+                    }
+                    if (genderPreference !== 'any' && riderGender && riderGender !== genderPreference) {
+                        continue;
+                    }
+                }
+                
                 matched.push({
                     _id: ride._id,
                     rideId: ride._id,
@@ -1283,7 +1314,8 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
                     vehicleCategory: ride.vehicleCategory,
                     rider: {
                         name: `${riderInfo.firstName || 'Rider'} ${riderInfo.lastName || ''}`.trim(),
-                        rating: riderInfo.rating || 4.8
+                        rating: riderInfo.rating || 4.8,
+                        gender: riderInfo.gender || 'Not specified'
                     },
                     pickup: ride.pickup,
                     dropoff: ride.dropoff,

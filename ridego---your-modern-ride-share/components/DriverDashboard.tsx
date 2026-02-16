@@ -198,6 +198,10 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
         setRideStatus(payload.status);
         if (payload.status === 'COMPLETED') {
           setChatOpen(false);
+          // Remove this ride from requests list if it's there
+          if (payload.rideId) {
+            setRequests((prev) => prev.filter((r) => String(r.rideId) !== String(payload.rideId)));
+          }
         }
       }
     };
@@ -328,6 +332,10 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
         setPoolStops([]);
         setCurrentPoolStopIndex(0);
         setPoolStopOtp('');
+      }
+      // Remove this ride from requests list regardless of who canceled
+      if (payload?.rideId) {
+        setRequests((prev) => prev.filter((r) => String(r.rideId) !== String(payload.rideId)));
       }
     };
 
@@ -881,6 +889,8 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
   const handleCompleteRide = async () => {
     if (!activeRide?._id) return;
     await fetch(`${API_BASE_URL}/api/rides/${activeRide._id}/complete`, { method: 'POST' });
+    // Remove from requests list
+    setRequests((prev) => prev.filter((r) => String(r.rideId) !== String(activeRide._id)));
     fetchDriverRides();
   };
 
@@ -901,6 +911,8 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
         const data = await resp.json();
         setShowCancelModal(false);
         setCancelReason('');
+        // Remove from requests list
+        setRequests((prev) => prev.filter((r) => String(r.rideId) !== String(activeRide._id)));
         handleClearRide();
         if (data.cancellationFee > 0) {
           alert(`Ride canceled. A ₹${data.cancellationFee} penalty has been applied.`);
