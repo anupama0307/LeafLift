@@ -1161,6 +1161,18 @@ app.post('/api/rides', async (req, res) => {
             };
         }
 
+            // Send to drivers within radius
+            for (const [driverId, entry] of onlineDrivers) {
+                if (!entry.location) continue;
+                const dist = getDistanceKm(ride.pickup.lat, ride.pickup.lng, entry.location.lat, entry.location.lng);
+                if (dist !== null && dist <= RIDE_BROADCAST_RADIUS_KM) {
+                    for (const sid of entry.socketIds) {
+                        io.to(sid).emit('nearby:rider:update', ridePayload);
+                    }
+                }
+            }
+        }
+
         res.status(201).json(ride);
     } catch (error) {
         console.error('Create ride error:', error);
