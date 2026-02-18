@@ -1,7 +1,7 @@
 const axios = require('axios');
 const crypto = require('crypto');
 
-const BASE_URL = 'http://localhost:5000/api';
+const BASE_URL = 'http://localhost:5001/api';
 
 // Helper to generate random phone number
 const randomPhone = () => '9' + Math.floor(100000000 + Math.random() * 900000000);

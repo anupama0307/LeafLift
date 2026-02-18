@@ -1159,6 +1159,7 @@ app.post('/api/rides', async (req, res) => {
                 routeIndex: ride.routeIndex,
                 bookingTime: ride.bookingTime
             };
+        }
 
         res.status(201).json(ride);
     } catch (error) {
