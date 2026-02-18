@@ -1,4 +1,11 @@
 const mongoose = require('mongoose');
+const { encrypt, decrypt } = require('../utils/encryption');
+
+const EncryptedNumber = {
+    type: mongoose.Schema.Types.Mixed,
+    set: encrypt,
+    get: decrypt
+};
 
 const userSchema = new mongoose.Schema({
     role: { type: String, enum: ['RIDER', 'DRIVER'], required: true },
@@ -20,7 +27,6 @@ const userSchema = new mongoose.Schema({
     vehicleModel: { type: String },
     vehicleNumber: { type: String },
     rating: { type: Number, default: 4.8 },
-    photoUrl: { type: String },
     isVerified: { type: Boolean, default: false },
     verificationStatus: { type: String, enum: ['PENDING', 'APPROVED', 'REJECTED'], default: 'PENDING' },
     verificationDate: { type: Date },
@@ -37,13 +43,13 @@ const userSchema = new mongoose.Schema({
     dailyRoute: {
         source: {
             address: String,
-            lat: Number,
-            lng: Number
+            lat: EncryptedNumber,
+            lng: EncryptedNumber
         },
         destination: {
             address: String,
-            lat: Number,
-            lng: Number
+            lat: EncryptedNumber,
+            lng: EncryptedNumber
         },
         isActive: { type: Boolean, default: false },
         genderPreference: { type: String, enum: ['Any', 'Male only', 'Female only'], default: 'Any' }
@@ -53,6 +59,9 @@ const userSchema = new mongoose.Schema({
         publicProfile: { type: Boolean, default: true },
         locationSharing: { type: Boolean, default: true }
     }
+}, {
+    toJSON: { getters: true },
+    toObject: { getters: true }
 });
 
 
