@@ -1858,6 +1858,18 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                     <div className="text-sm font-black text-gray-900 dark:text-white">{poolProposal.matchedRider.name}</div>
                                                     <div className="flex items-center gap-2">
                                                         <span className="text-[10px] font-bold text-gray-500 dark:text-gray-400 capitalize">{poolProposal.matchedRider.gender}</span>
+                                                        {poolProposal.matchedRider.wheelchairFriendly && (
+                                                            <div className="flex items-center gap-0.5 bg-pink-50 dark:bg-pink-900/20 text-pink-600 dark:text-pink-400 text-[9px] font-black px-1.5 py-0.5 rounded-full">
+                                                                <span className="material-icons-outlined text-[10px]">favorite</span>
+                                                                BUDDY
+                                                            </div>
+                                                        )}
+                                                        {poolProposal.matchedRider.needsWheelchair && (
+                                                            <div className="flex items-center gap-0.5 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 text-[9px] font-black px-1.5 py-0.5 rounded-full">
+                                                                <span className="material-icons-outlined text-[10px]">accessible</span>
+                                                                WHEELCHAIR
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </div>
                                             </div>

@@ -861,7 +861,14 @@ app.get('/api/rider/match-driver', async (req, res) => {
             // Check dropoff proximity (within 5km of driver destination)
             const dropoffDist = getDistanceKm(dLat, dLng, route.destination.lat, route.destination.lng);
 
-            // Check accessibility support if rider requested it
+            // ♿ Wheelchair Access Check
+            const riderNeedsWC = req.query.needsWheelchair === 'true';
+            if (riderNeedsWC) {
+                const supportsWheelchair = (driver.accessibilitySupport || []).includes('Wheelchair');
+                if (!supportsWheelchair) return false;
+            }
+
+            // Check other specific accessibility support if rider requested it
             const reqAccessibility = req.query.accessibilityOptions ? req.query.accessibilityOptions.split(',') : [];
             if (reqAccessibility.length > 0) {
                 const supportsAll = reqAccessibility.every(opt => (driver.accessibilitySupport || []).includes(opt));
@@ -1081,11 +1088,31 @@ app.post('/api/rides', async (req, res) => {
                         candidate.dropoff.lat, candidate.dropoff.lng
                     );
 
-                    console.log(`  📏 Candidate ${candidate._id}: pickup dist=${pickupDist?.toFixed(2)}km, dropoff dist=${dropoffDist?.toFixed(2)}km`);
+                    // ♿ Wheelchair Compatibility Check
+                    const rideNeedsWC = ride.safetyPreferences?.needsWheelchair;
+                    const candidateNeedsWC = candidate.safetyPreferences?.needsWheelchair;
+                    const rideIsFriendly = ride.safetyPreferences?.wheelchairFriendly;
+                    const candidateIsFriendly = candidate.safetyPreferences?.wheelchairFriendly;
+
+                    let wheelchairCompatible = true;
+                    if (rideNeedsWC && !candidateIsFriendly) {
+                        wheelchairCompatible = false;
+                        console.log(`  ❌ MISMATCH: Rider ${ride.userId} needs wheelchair, but candidate ${candidate.userId._id} is not Friendly.`);
+                    } else if (candidateNeedsWC && !rideIsFriendly) {
+                        wheelchairCompatible = false;
+                        console.log(`  ❌ MISMATCH: Candidate ${candidate.userId._id} needs wheelchair, but rider ${ride.userId} is not Friendly.`);
+                    } else if (rideNeedsWC && candidateNeedsWC) {
+                        // Prevent two wheelchair users in one car for space/luggage reasons
+                        wheelchairCompatible = false;
+                        console.log(`  ❌ MISMATCH: Both riders need wheelchair access (Space constraint).`);
+                    }
+
+                    console.log(`  📏 Candidate ${candidate._id}: pickup dist=${pickupDist?.toFixed(2)}km, dropoff dist=${dropoffDist?.toFixed(2)}km | WC Compatible: ${wheelchairCompatible}`);
 
                     if (pickupDist !== null && dropoffDist !== null &&
                         pickupDist <= POOL_PICKUP_RADIUS_KM &&
-                        dropoffDist <= POOL_DROPOFF_RADIUS_KM) {
+                        dropoffDist <= POOL_DROPOFF_RADIUS_KM &&
+                        wheelchairCompatible) {
                         poolMatch = candidate;
                         console.log(`  ✅ MATCHED! Rider ${ride.userId} ↔ Rider ${candidate.userId._id || candidate.userId}`);
                         break;
@@ -1147,7 +1174,9 @@ app.post('/api/rides', async (req, res) => {
                             name: `${newRider?.firstName || 'Rider'} ${newRider?.lastName || ''}`.trim(),
                             gender: newRider?.gender || 'Not specified',
                             pickup: ride.pickup,
-                            dropoff: ride.dropoff
+                            dropoff: ride.dropoff,
+                            needsWheelchair: ride.safetyPreferences?.needsWheelchair,
+                            wheelchairFriendly: ride.safetyPreferences?.wheelchairFriendly
                         },
                         rideId: poolMatch._id,
                         originalFare: poolMatch.fare,
@@ -1163,7 +1192,9 @@ app.post('/api/rides', async (req, res) => {
                             name: matchedRiderName,
                             gender: existingRiderUser?.gender || 'Not specified',
                             pickup: poolMatch.pickup,
-                            dropoff: poolMatch.dropoff
+                            dropoff: poolMatch.dropoff,
+                            needsWheelchair: poolMatch.safetyPreferences?.needsWheelchair,
+                            wheelchairFriendly: poolMatch.safetyPreferences?.wheelchairFriendly
                         },
                         rideId: ride._id,
                         originalFare: ride.fare,
