@@ -106,7 +106,7 @@ const estimateEtaMinutes = (distanceKm, speedKmh = 28) => {
 };
 
 // --- New: Simulated Background Check API ---
-const performBackgroundCheck = async(userData) => {
+const performBackgroundCheck = async (userData) => {
     console.log(`🔍 Starting background check for: ${userData.firstName} ${userData.lastName}`);
     // Simulate API latency
     await new Promise(resolve => setTimeout(resolve, 2000));
@@ -426,7 +426,7 @@ const OLA_API_KEY = process.env.OLA_MAPS_API_KEY;
 
 
 // ✅ OLA Maps Autocomplete Proxy
-app.get('/api/ola/autocomplete', async(req, res) => {
+app.get('/api/ola/autocomplete', async (req, res) => {
     try {
         const { input, location } = req.query;
 
@@ -459,26 +459,26 @@ app.get('/api/ola/autocomplete', async(req, res) => {
 });
 
 // ✅ OLA Maps Directions Proxy (with multi-stop waypoints support)
-app.post('/api/ola/directions', async(req, res) => {
-            try {
-                const { origin, destination, alternatives, waypoints } = req.body;
+app.post('/api/ola/directions', async (req, res) => {
+    try {
+        const { origin, destination, alternatives, waypoints } = req.body;
 
-                if (!origin || !destination) {
-                    return res.status(400).json({ error: 'Origin and destination required' });
-                }
+        if (!origin || !destination) {
+            return res.status(400).json({ error: 'Origin and destination required' });
+        }
 
-                if (!OLA_API_KEY) {
-                    return res.status(500).json({ error: 'OLA_MAPS_API_KEY not configured' });
-                }
+        if (!OLA_API_KEY) {
+            return res.status(500).json({ error: 'OLA_MAPS_API_KEY not configured' });
+        }
 
-                let url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&alternatives=${alternatives || false}&steps=true&overview=full&language=en&traffic_metadata=true&api_key=${OLA_API_KEY}`;
+        let url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&alternatives=${alternatives || false}&steps=true&overview=full&language=en&traffic_metadata=true&api_key=${OLA_API_KEY}`;
 
-                // Add waypoints for multi-stop rides (format: "lat,lng|lat,lng")
-                if (waypoints && Array.isArray(waypoints) && waypoints.length > 0) {
-                    url += `&waypoints=${waypoints.join('|')}`;
-                }
+        // Add waypoints for multi-stop rides (format: "lat,lng|lat,lng")
+        if (waypoints && Array.isArray(waypoints) && waypoints.length > 0) {
+            url += `&waypoints=${waypoints.join('|')}`;
+        }
 
-                console.log(`🗺️ OLA Directions: ${origin} → ${destination}${waypoints ? ` via ${waypoints.length} stops` : ''}`);
+        console.log(`🗺️ OLA Directions: ${origin} → ${destination}${waypoints ? ` via ${waypoints.length} stops` : ''}`);
         const response = await axios.post(url);
         res.json(response.data);
 
@@ -545,6 +545,58 @@ if (MONGODB_URI) {
             } catch (cleanupErr) {
                 console.warn('⚠️  Startup cleanup error:', cleanupErr.message);
             }
+
+            // ─── Automated Location Data Retention Policy ───
+            const scrubExpiredLocationData = async () => {
+                const retentionDays = parseInt(process.env.LOCATION_DATA_RETENTION_DAYS, 10) || 30;
+                const thresholdDate = new Date();
+                thresholdDate.setDate(thresholdDate.getDate() - retentionDays);
+
+                console.log(`🧹 Running automated location scrubbing policy (History > ${retentionDays} days)`);
+
+                try {
+                    const result = await Ride.updateMany(
+                        {
+                            createdAt: { $lt: thresholdDate },
+                            status: { $in: ['COMPLETED', 'CANCELED'] },
+                            // Only target documents that still have coordinates or polylines
+                            $or: [
+                                { 'pickup.lat': { $ne: null } },
+                                { 'dropoff.lat': { $ne: null } },
+                                { 'routePolyline': { $ne: '' } },
+                                { 'riderLocation.lat': { $ne: null } }
+                            ]
+                        },
+                        {
+                            $set: {
+                                'pickup.lat': null,
+                                'pickup.lng': null,
+                                'dropoff.lat': null,
+                                'dropoff.lng': null,
+                                'riderLocation.lat': null,
+                                'riderLocation.lng': null,
+                                'driverLocation.lat': null,
+                                'driverLocation.lng': null,
+                                'actualDropoff.lat': null,
+                                'actualDropoff.lng': null,
+                                'routePolyline': '',
+                                'stops': [], // Scrubbing detailed waypoints entirely
+                                'poolStops': []
+                            }
+                        }
+                    );
+                    if (result.modifiedCount > 0) {
+                        console.log(`✅ SCRUBBED sensitive location data from ${result.modifiedCount} rides older than ${retentionDays} days.`);
+                    }
+                } catch (err) {
+                    console.error('❌ Location scrubbing error:', err);
+                }
+            };
+
+            // Run on startup
+            scrubExpiredLocationData();
+            // Then run daily
+            setInterval(scrubExpiredLocationData, 24 * 60 * 60 * 1000);
         })
         .catch(err => console.error('❌ MongoDB error:', err));
 } else {
@@ -1387,12 +1439,12 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
             const result = isRiderOnRoute(ride.routePolyline, riderPickup, riderDropoff, bufferKmNum);
             if (result.match) {
                 const riderInfo = ride.userId || {};
-                
+
                 // Filter by gender preference
                 if (genderPreference && genderPreference !== 'any') {
                     const rideGenderPref = ride.safetyPreferences?.genderPreference || 'any';
                     const riderGender = riderInfo.gender?.toLowerCase();
-                    
+
                     // Skip if gender preferences don't match
                     if (rideGenderPref !== 'any' && rideGenderPref !== genderPreference) {
                         continue;
@@ -1401,7 +1453,7 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
                         continue;
                     }
                 }
-                
+
                 matched.push({
                     _id: ride._id,
                     rideId: ride._id,
@@ -1443,12 +1495,12 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
             const dropoffDist = getDistanceKm(destLatNum, destLngNum, ride.dropoff.lat, ride.dropoff.lng);
             if (pickupDist !== null && pickupDist <= 3 && dropoffDist !== null && dropoffDist <= 3) {
                 const riderInfo = ride.userId || {};
-                
+
                 // Filter by gender preference
                 if (genderPreference && genderPreference !== 'any') {
                     const rideGenderPref = ride.safetyPreferences?.genderPreference || 'any';
                     const riderGender = riderInfo.gender?.toLowerCase();
-                    
+
                     // Skip if gender preferences don't match
                     if (rideGenderPref !== 'any' && rideGenderPref !== genderPreference) {
                         continue;
@@ -1457,7 +1509,7 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
                         continue;
                     }
                 }
-                
+
                 matched.push({
                     _id: ride._id,
                     rideId: ride._id,
