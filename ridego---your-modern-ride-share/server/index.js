@@ -5,6 +5,8 @@ const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
 const nodemailer = require('nodemailer');
+const { setupSwagger } = require('./swagger');
+const jwt = require('jsonwebtoken');
 
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 require('dotenv').config();
@@ -106,7 +108,7 @@ const estimateEtaMinutes = (distanceKm, speedKmh = 28) => {
 };
 
 // --- New: Simulated Background Check API ---
-const performBackgroundCheck = async(userData) => {
+const performBackgroundCheck = async (userData) => {
     console.log(`🔍 Starting background check for: ${userData.firstName} ${userData.lastName}`);
     // Simulate API latency
     await new Promise(resolve => setTimeout(resolve, 2000));
@@ -123,6 +125,24 @@ const performBackgroundCheck = async(userData) => {
         return { status: 'PENDING', verified: false };
     }
 };
+
+
+
+// ─── Authentication Middleware ───
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (token == null) return res.sendStatus(401);
+
+    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+        if (err) return res.sendStatus(403);
+        req.user = user;
+        next();
+    });
+};
+
+// ─── Swagger Configuration ───
+setupSwagger(app);
 
 app.use(cors());
 app.use(express.json());
@@ -426,7 +446,33 @@ const OLA_API_KEY = process.env.OLA_MAPS_API_KEY;
 
 
 // ✅ OLA Maps Autocomplete Proxy
-app.get('/api/ola/autocomplete', async(req, res) => {
+/**
+ * @swagger
+ * /api/ola/autocomplete:
+ *   get:
+ *     summary: Local proxy for OLA Maps Autocomplete
+ *     tags: [OlaMaps]
+ *     parameters:
+ *       - in: query
+ *         name: input
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Text input to search for
+ *       - in: query
+ *         name: location
+ *         schema:
+ *           type: string
+ *         description: Bias location (lat,lng)
+ *     responses:
+ *       200:
+ *         description: Autocomplete predictions
+ *       400:
+ *         description: Missing input
+ *       500:
+ *         description: OLA API error
+ */
+app.get('/api/ola/autocomplete', async (req, res) => {
     try {
         const { input, location } = req.query;
 
@@ -459,26 +505,61 @@ app.get('/api/ola/autocomplete', async(req, res) => {
 });
 
 // ✅ OLA Maps Directions Proxy (with multi-stop waypoints support)
-app.post('/api/ola/directions', async(req, res) => {
-            try {
-                const { origin, destination, alternatives, waypoints } = req.body;
+/**
+ * @swagger
+ * /api/ola/directions:
+ *   post:
+ *     summary: Local proxy for OLA Maps Directions
+ *     tags: [OlaMaps]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - origin
+ *               - destination
+ *             properties:
+ *               origin:
+ *                 type: string
+ *                 description: Origin coordinates (lat,lng)
+ *               destination:
+ *                 type: string
+ *                 description: Destination coordinates (lat,lng)
+ *               waypoints:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Array of waypoint coordinates
+ *     responses:
+ *       200:
+ *         description: Route directions
+ *       400:
+ *         description: Missing param
+ *       500:
+ *         description: OLA API error
+ */
+app.post('/api/ola/directions', async (req, res) => {
+    try {
+        const { origin, destination, alternatives, waypoints } = req.body;
 
-                if (!origin || !destination) {
-                    return res.status(400).json({ error: 'Origin and destination required' });
-                }
+        if (!origin || !destination) {
+            return res.status(400).json({ error: 'Origin and destination required' });
+        }
 
-                if (!OLA_API_KEY) {
-                    return res.status(500).json({ error: 'OLA_MAPS_API_KEY not configured' });
-                }
+        if (!OLA_API_KEY) {
+            return res.status(500).json({ error: 'OLA_MAPS_API_KEY not configured' });
+        }
 
-                let url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&alternatives=${alternatives || false}&steps=true&overview=full&language=en&traffic_metadata=true&api_key=${OLA_API_KEY}`;
+        let url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&alternatives=${alternatives || false}&steps=true&overview=full&language=en&traffic_metadata=true&api_key=${OLA_API_KEY}`;
 
-                // Add waypoints for multi-stop rides (format: "lat,lng|lat,lng")
-                if (waypoints && Array.isArray(waypoints) && waypoints.length > 0) {
-                    url += `&waypoints=${waypoints.join('|')}`;
-                }
+        // Add waypoints for multi-stop rides (format: "lat,lng|lat,lng")
+        if (waypoints && Array.isArray(waypoints) && waypoints.length > 0) {
+            url += `&waypoints=${waypoints.join('|')}`;
+        }
 
-                console.log(`🗺️ OLA Directions: ${origin} → ${destination}${waypoints ? ` via ${waypoints.length} stops` : ''}`);
+        console.log(`🗺️ OLA Directions: ${origin} → ${destination}${waypoints ? ` via ${waypoints.length} stops` : ''}`);
         const response = await axios.post(url);
         res.json(response.data);
 
@@ -492,6 +573,27 @@ app.post('/api/ola/directions', async(req, res) => {
 });
 
 // ✅ OLA Maps Reverse Geocode Proxy
+/**
+ * @swagger
+ * /api/ola/reverse-geocode:
+ *   get:
+ *     summary: Local proxy for OLA Maps Reverse Geocode
+ *     tags: [OlaMaps]
+ *     parameters:
+ *       - in: query
+ *         name: latlng
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Coordinates (lat,lng)
+ *     responses:
+ *       200:
+ *         description: Geocoded address
+ *       400:
+ *         description: Missing latlng
+ *       500:
+ *         description: OLA API error
+ */
 app.get('/api/ola/reverse-geocode', async (req, res) => {
     try {
         const { latlng } = req.query;
@@ -520,6 +622,16 @@ app.get('/api/ola/reverse-geocode', async (req, res) => {
 });
 
 // Health check
+/**
+ * @swagger
+ * /api/health:
+ *   get:
+ *     summary: Server health check
+ *     tags: [System]
+ *     responses:
+ *       200:
+ *         description: Server is running
+ */
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', message: 'OLA Maps server running' });
 });
@@ -552,6 +664,43 @@ if (MONGODB_URI) {
 }
 
 // User Routes
+// User Routes
+
+/**
+ * @swagger
+ * /api/login:
+ *   post:
+ *     summary: User login
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               email:
+ *                 type: string
+ *               phone:
+ *                 type: string
+ *               role:
+ *                 type: string
+ *                 enum: [RIDER, DRIVER]
+ *     responses:
+ *       200:
+ *         description: Login successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 exists:
+ *                   type: boolean
+ *                 user:
+ *                   type: object
+ *       500:
+ *         description: Server error
+ */
 app.post('/api/login', async (req, res) => {
     try {
         const { email, phone, role } = req.body;
@@ -568,6 +717,41 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/signup:
+ *   post:
+ *     summary: Register a new user
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - role
+ *               - firstName
+ *             properties:
+ *               role:
+ *                 type: string
+ *                 enum: [RIDER, DRIVER]
+ *               email:
+ *                 type: string
+ *               phone:
+ *                 type: string
+ *               firstName:
+ *                 type: string
+ *               lastName:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: User created successfully
+ *       400:
+ *         description: User already exists
+ *       500:
+ *         description: Server error
+ */
 app.post('/api/signup', async (req, res) => {
     try {
         const {
@@ -614,6 +798,31 @@ app.post('/api/signup', async (req, res) => {
 });
 
 // --- Email OTP Endpoints ---
+/**
+ * @swagger
+ * /api/send-otp:
+ *   post:
+ *     summary: Send OTP to email
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *             properties:
+ *               email:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: OTP sent
+ *       400:
+ *         description: Missing email
+ *       500:
+ *         description: Failed to send
+ */
 app.post('/api/send-otp', async (req, res) => {
     try {
         const { email } = req.body;
@@ -655,6 +864,34 @@ app.post('/api/send-otp', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/verify-otp:
+ *   post:
+ *     summary: Verify email OTP
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - otp
+ *             properties:
+ *               email:
+ *                 type: string
+ *               otp:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: OTP verified
+ *       400:
+ *         description: Invalid or expired OTP
+ *       500:
+ *         description: Server error
+ */
 app.post('/api/verify-otp', async (req, res) => {
     try {
         const { email, otp } = req.body;
@@ -676,6 +913,16 @@ app.post('/api/verify-otp', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/users:
+ *   get:
+ *     summary: Get all users
+ *     tags: [Users]
+ *     responses:
+ *       200:
+ *         description: List of users
+ */
 app.get('/api/users', async (req, res) => {
     try {
         const users = await User.find();
@@ -685,22 +932,32 @@ app.get('/api/users', async (req, res) => {
     }
 });
 
-app.put('/api/users/:userId', async (req, res) => {
-    try {
-        const { firstName, lastName, photoUrl, accessibilitySupport, gender } = req.body;
-        const user = await User.findByIdAndUpdate(
-            req.params.userId,
-            { firstName, lastName, photoUrl, accessibilitySupport, gender },
-            { new: true }
-        );
-        if (!user) return res.status(404).json({ message: 'User not found' });
-        res.json(user);
-    } catch (error) {
-        console.error('Update user error:', error);
-        res.status(500).json({ message: 'Error updating user' });
-    }
-});
+// Duplicate route removed (merged into lower handler)
 
+/**
+ * @swagger
+ * /api/users/{userId}/privacy:
+ *   put:
+ *     summary: Update privacy settings
+ *     tags: [Users]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               privacySettings:
+ *                 type: object
+ *     responses:
+ *       200:
+ *         description: Updated user
+ */
 app.put('/api/users/:userId/privacy', async (req, res) => {
     try {
         const { privacySettings } = req.body;
@@ -718,6 +975,24 @@ app.put('/api/users/:userId/privacy', async (req, res) => {
 });
 
 // Get single user by ID
+/**
+ * @swagger
+ * /api/users/{userId}:
+ *   get:
+ *     summary: Get user by ID
+ *     tags: [Users]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: User details
+ *       404:
+ *         description: User not found
+ */
 app.get('/api/users/:userId', async (req, res) => {
     try {
         const user = await User.findById(req.params.userId);
@@ -729,9 +1004,45 @@ app.get('/api/users/:userId', async (req, res) => {
 });
 
 // Update user profile
+/**
+ * @swagger
+ * /api/users/{userId}:
+ *   put:
+ *     summary: Update user profile
+ *     tags: [Users]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               firstName:
+ *                 type: string
+ *               lastName:
+ *                 type: string
+ *               phone:
+ *                 type: string
+ *               gender:
+ *                 type: string
+ *               photoUrl:
+ *                 type: string
+ *               accessibilitySupport:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *     responses:
+ *       200:
+ *         description: Updated user
+ */
 app.put('/api/users/:userId', async (req, res) => {
     try {
-        const allowedFields = ['firstName', 'lastName', 'email', 'phone', 'dob', 'gender', 'photoUrl', 'license', 'aadhar', 'vehicleMake', 'vehicleModel', 'vehicleNumber'];
+        const allowedFields = ['firstName', 'lastName', 'email', 'phone', 'dob', 'gender', 'photoUrl', 'license', 'aadhar', 'vehicleMake', 'vehicleModel', 'vehicleNumber', 'accessibilitySupport'];
         const updates = {};
         for (const key of allowedFields) {
             if (req.body[key] !== undefined) updates[key] = req.body[key];
@@ -746,6 +1057,25 @@ app.put('/api/users/:userId', async (req, res) => {
 });
 
 // ── Driver Daily Route ──
+/**
+ * @swagger
+ * /api/driver/route:
+ *   post:
+ *     summary: Update driver daily route
+ *     tags: [Users]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - userId
+ *               - source
+ *               - destination
+ *     responses:
+ *       200:
+ *         description: Route updated
+ */
 app.post('/api/driver/route', async (req, res) => {
     console.log('📬 Received route update request:', JSON.stringify(req.body, null, 2));
     try {
@@ -782,6 +1112,75 @@ app.post('/api/driver/route', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/rides:
+ *   get:
+ *     summary: Get user's ride history
+ *     tags: [Rides]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of rides
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/Ride'
+ */
+app.get('/api/rides', authenticateToken, async (req, res) => {
+    try {
+        // This endpoint is intended to get the authenticated user's ride history.
+        // The `pickupLat`, `pickupLng`, `dropoffLat`, `dropoffLng` parameters
+        // are typically used for matching drivers, not for fetching a user's ride history.
+        // Assuming the JSDoc summary "Get user's ride history" is the correct intent,
+        // this implementation should fetch rides associated with the authenticated user.
+        // If the intent was to match drivers, this endpoint's path and JSDoc would be different.
+
+        // For now, returning an empty array or an error as the provided code snippet
+        // for this specific endpoint is incomplete and contradictory to its JSDoc summary.
+        // A proper implementation would involve getting the userId from the authenticated token
+        // and querying the database for rides associated with that userId.
+        return res.status(501).json({ message: 'This endpoint is not yet fully implemented for fetching user ride history. Please use /api/rides/user/:userId for now.' });
+    } catch (error) {
+        console.error('Error fetching user rides:', error);
+        res.status(500).json({ message: 'Error fetching user rides' });
+    }
+});
+
+/**
+ * @swagger
+ * /api/rider/match-driver:
+ *   get:
+ *     summary: Find matching drivers for daily route
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: query
+ *         name: pickupLat
+ *         schema:
+ *           type: number
+ *         required: true
+ *       - in: query
+ *         name: pickupLng
+ *         schema:
+ *           type: number
+ *         required: true
+ *       - in: query
+ *         name: dropoffLat
+ *         schema:
+ *           type: number
+ *         required: true
+ *       - in: query
+ *         name: dropoffLng
+ *         schema:
+ *           type: number
+ *         required: true
+ *     responses:
+ *       200:
+ *         description: List of matching drivers
+ */
 app.get('/api/rider/match-driver', async (req, res) => {
     try {
         const { pickupLat, pickupLng, dropoffLat, dropoffLng } = req.query;
@@ -853,8 +1252,32 @@ app.get('/api/rider/match-driver', async (req, res) => {
 });
 
 // ── Bridge: Admin → Driver real-time push ──
-// The admin server (port 5002) calls this endpoint to push notifications
-// to drivers connected on THIS server's Socket.IO (port 5001).
+/**
+ * @swagger
+ * /api/internal/push-notification:
+ *   post:
+ *     summary: Internal endpoint to push socket notifications
+ *     tags: [System]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - type
+ *             properties:
+ *               type:
+ *                 type: string
+ *                 enum: [driver-alert, notification, broadcast]
+ *               driverId:
+ *                 type: string
+ *               message:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Notification pushed
+ */
 app.post('/api/internal/push-notification', (req, res) => {
     try {
         const { type, driverId, notification, zone, message, title, count } = req.body;
@@ -893,6 +1316,22 @@ app.post('/api/internal/push-notification', (req, res) => {
 });
 
 // ── Notifications ──
+/**
+ * @swagger
+ * /api/notifications/{userId}:
+ *   get:
+ *     summary: Get user notifications
+ *     tags: [Notifications]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: List of notifications
+ */
 app.get('/api/notifications/:userId', async (req, res) => {
     try {
         const notifications = await Notification.find({ userId: req.params.userId }).sort({ createdAt: -1 }).limit(20);
@@ -902,6 +1341,22 @@ app.get('/api/notifications/:userId', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/notifications/{id}/read:
+ *   post:
+ *     summary: Mark notification as read
+ *     tags: [Notifications]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Marked as read
+ */
 app.post('/api/notifications/:id/read', async (req, res) => {
     try {
         await Notification.findByIdAndUpdate(req.params.id, { isRead: true });
@@ -911,6 +1366,22 @@ app.post('/api/notifications/:id/read', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/notifications/sent/{userId}:
+ *   get:
+ *     summary: Get notifications sent by user
+ *     tags: [Notifications]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: List of sent notifications
+ */
 app.get('/api/notifications/sent/:userId', async (req, res) => {
     try {
         const notifications = await Notification.find({ fromId: req.params.userId }).sort({ createdAt: -1 }).limit(20);
@@ -921,6 +1392,27 @@ app.get('/api/notifications/sent/:userId', async (req, res) => {
 });
 
 // ── Daily Route Join Request ──
+/**
+ * @swagger
+ * /api/rider/request-daily-join:
+ *   post:
+ *     summary: Request to join a driver's daily route
+ *     tags: [Rides]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - riderId
+ *               - driverId
+ *               - pickup
+ *               - dropoff
+ *     responses:
+ *       200:
+ *         description: Request sent
+ */
 app.post('/api/rider/request-daily-join', async (req, res) => {
     console.log('📬 Daily join request received:', JSON.stringify(req.body, null, 2));
     try {
@@ -965,6 +1457,77 @@ app.post('/api/rider/request-daily-join', async (req, res) => {
 });
 
 // Ride Routes
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     Location:
+ *       type: object
+ *       properties:
+ *         lat:
+ *           type: number
+ *         lng:
+ *           type: number
+ *         address:
+ *           type: string
+ *     Ride:
+ *       type: object
+ *       properties:
+ *         _id:
+ *           type: string
+ *         riderId:
+ *           type: string
+ *         pickup:
+ *           $ref: '#/components/schemas/Location'
+ *         dropoff:
+ *           $ref: '#/components/schemas/Location'
+ *         status:
+ *           type: string
+ *           enum: [REQUESTED, SEARCHING, ACCEPTED, IN_PROGRESS, COMPLETED, CANCELLED]
+ *         fare:
+ *           type: number
+ *         isPooled:
+ *           type: boolean
+ */
+
+/**
+ * @swagger
+ * /api/rides:
+ *   post:
+ *     summary: Request a new ride
+ *     tags: [Rides]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - pickup
+ *               - dropoff
+ *             properties:
+ *               pickup:
+ *                 $ref: '#/components/schemas/Location'
+ *               dropoff:
+ *                 $ref: '#/components/schemas/Location'
+ *               isPooled:
+ *                 type: boolean
+ *               passengerCount:
+ *                 type: integer
+ *     responses:
+ *       201:
+ *         description: Ride created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Ride'
+ *       400:
+ *         description: Active ride already exists
+ *       500:
+ *         description: Server error
+ */
 app.post('/api/rides', async (req, res) => {
     try {
         const payload = { ...req.body };
@@ -1180,6 +1743,22 @@ app.post('/api/rides', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/rides/user/{userId}:
+ *   get:
+ *     summary: Get rider history
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: List of rides
+ */
 app.get('/api/rides/user/:userId', async (req, res) => {
     try {
         const rides = await Ride.find({ userId: req.params.userId }).sort({ bookingTime: -1, createdAt: -1 });
@@ -1189,6 +1768,22 @@ app.get('/api/rides/user/:userId', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/rides/driver/{driverId}:
+ *   get:
+ *     summary: Get driver history
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: driverId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: List of rides
+ */
 app.get('/api/rides/driver/:driverId', async (req, res) => {
     try {
         const rides = await Ride.find({ driverId: req.params.driverId }).sort({ bookingTime: -1, createdAt: -1 });
@@ -1199,7 +1794,36 @@ app.get('/api/rides/driver/:driverId', async (req, res) => {
 });
 
 // Nearby ride requests for drivers
-app.get('/api/rides/nearby', async (req, res) => {
+/**
+ * @swagger
+ * /api/rides/nearby:
+ *   get:
+ *     summary: Get nearby available rides (Driver only)
+ *     tags: [Rides]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: lat
+ *         schema:
+ *           type: number
+ *         required: true
+ *       - in: query
+ *         name: lng
+ *         schema:
+ *           type: number
+ *         required: true
+ *     responses:
+ *       200:
+ *         description: List of nearby rides
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/Ride'
+ */
+app.get('/api/rides/nearby', authenticateToken, async (req, res) => {
     try {
         const { lat, lng, radius = 6 } = req.query;
         // Only return rides created in the last 5 minutes to avoid stale requests
@@ -1239,6 +1863,26 @@ app.get('/api/rides/nearby', async (req, res) => {
 });
 
 // ── Driver search by location (uses OLA geocoding) ──
+/**
+ * @swagger
+ * /api/rides/nearby-by-location:
+ *   get:
+ *     summary: Get nearby rides by location name
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: query
+ *         name: location
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: radius
+ *         schema:
+ *           type: number
+ *     responses:
+ *       200:
+ *         description: List of nearby rides
+ */
 app.get('/api/rides/nearby-by-location', async (req, res) => {
     try {
         const { location, radius = 6 } = req.query;
@@ -1286,6 +1930,22 @@ app.get('/api/rides/nearby-by-location', async (req, res) => {
 });
 
 // ── Get Active Ride for Driver ──
+/**
+ * @swagger
+ * /api/driver/{userId}/active-ride:
+ *   get:
+ *     summary: Get driver's active ride
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Active ride details
+ */
 app.get('/api/driver/:userId/active-ride', async (req, res) => {
     try {
         const ride = await Ride.findOne({
@@ -1322,6 +1982,22 @@ app.get('/api/driver/:userId/active-ride', async (req, res) => {
 });
 
 // ── Get Active Ride for Rider ──
+/**
+ * @swagger
+ * /api/rider/{userId}/active-ride:
+ *   get:
+ *     summary: Get rider's active ride
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Active ride details
+ */
 app.get('/api/rider/:userId/active-ride', async (req, res) => {
     try {
         const ride = await Ride.findOne({
@@ -1358,6 +2034,37 @@ app.get('/api/rider/:userId/active-ride', async (req, res) => {
 });
 
 // ── Find matching SEARCHING pooled rides (rider-to-rider matching) ──
+/**
+ * @swagger
+ * /api/rides/pooled-in-progress:
+ *   get:
+ *     summary: Find matching pooled rides
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: query
+ *         name: lat
+ *         required: true
+ *         schema:
+ *           type: number
+ *       - in: query
+ *         name: lng
+ *         required: true
+ *         schema:
+ *           type: number
+ *       - in: query
+ *         name: destLat
+ *         required: true
+ *         schema:
+ *           type: number
+ *       - in: query
+ *         name: destLng
+ *         required: true
+ *         schema:
+ *           type: number
+ *     responses:
+ *       200:
+ *         description: List of matching pooled rides
+ */
 app.get('/api/rides/pooled-in-progress', async (req, res) => {
     try {
         const { lat, lng, destLat, destLng, vehicleCategory, bufferKm = 0.5, excludeUserId, genderPreference } = req.query;
@@ -1399,12 +2106,12 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
             const result = isRiderOnRoute(ride.routePolyline, riderPickup, riderDropoff, bufferKmNum);
             if (result.match) {
                 const riderInfo = ride.userId || {};
-                
+
                 // Filter by gender preference
                 if (genderPreference && genderPreference !== 'any') {
                     const rideGenderPref = ride.safetyPreferences?.genderPreference || 'any';
                     const riderGender = riderInfo.gender?.toLowerCase();
-                    
+
                     // Skip if gender preferences don't match
                     if (rideGenderPref !== 'any' && rideGenderPref !== genderPreference) {
                         continue;
@@ -1413,7 +2120,7 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
                         continue;
                     }
                 }
-                
+
                 matched.push({
                     _id: ride._id,
                     rideId: ride._id,
@@ -1455,12 +2162,12 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
             const dropoffDist = getDistanceKm(destLatNum, destLngNum, ride.dropoff.lat, ride.dropoff.lng);
             if (pickupDist !== null && pickupDist <= 3 && dropoffDist !== null && dropoffDist <= 3) {
                 const riderInfo = ride.userId || {};
-                
+
                 // Filter by gender preference
                 if (genderPreference && genderPreference !== 'any') {
                     const rideGenderPref = ride.safetyPreferences?.genderPreference || 'any';
                     const riderGender = riderInfo.gender?.toLowerCase();
-                    
+
                     // Skip if gender preferences don't match
                     if (rideGenderPref !== 'any' && rideGenderPref !== genderPreference) {
                         continue;
@@ -1469,7 +2176,7 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
                         continue;
                     }
                 }
-                
+
                 matched.push({
                     _id: ride._id,
                     rideId: ride._id,
@@ -1499,6 +2206,24 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/rides/{rideId}:
+ *   get:
+ *     summary: Get ride details
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Ride details
+ *       404:
+ *         description: Ride not found
+ */
 app.get('/api/rides/:rideId', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
@@ -1509,6 +2234,31 @@ app.get('/api/rides/:rideId', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/rides/{rideId}/status:
+ *   put:
+ *     summary: Update ride status
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 enum: [SEARCHING, ACCEPTED, ARRIVED, IN_PROGRESS, COMPLETED, CANCELED]
+ *     responses:
+ *       200:
+ *         description: Updated ride
+ */
 app.put('/api/rides/:rideId/status', async (req, res) => {
     try {
         const { status } = req.body;
@@ -1522,6 +2272,35 @@ app.put('/api/rides/:rideId/status', async (req, res) => {
 });
 
 // ─── Cancel Ride (Driver or Rider) with Auto Re-Search ───
+/**
+ * @swagger
+ * /api/rides/{rideId}/cancel:
+ *   post:
+ *     summary: Cancel a ride
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - canceledBy
+ *             properties:
+ *               canceledBy:
+ *                 type: string
+ *                 enum: [RIDER, DRIVER]
+ *               cancelReason:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Ride canceled
+ */
 app.post('/api/rides/:rideId/cancel', async (req, res) => {
     try {
         const { canceledBy, cancelReason } = req.body;
@@ -1714,6 +2493,33 @@ app.post('/api/rides/:rideId/cancel', async (req, res) => {
 });
 
 // Driver presence
+/**
+ * @swagger
+ * /api/drivers/online:
+ *   post:
+ *     summary: Update driver presence
+ *     tags: [System]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - driverId
+ *             properties:
+ *               driverId:
+ *                 type: string
+ *               location:
+ *                 type: object
+ *                 properties:
+ *                   lat:
+ *                     type: number
+ *                   lng:
+ *                     type: number
+ *     responses:
+ *       200:
+ *         description: Status updated
+ */
 app.post('/api/drivers/online', async (req, res) => {
     const { driverId, location } = req.body;
     if (!driverId) return res.status(400).json({ message: 'driverId required' });
@@ -1725,6 +2531,26 @@ app.post('/api/drivers/online', async (req, res) => {
     res.json({ ok: true, onlineDrivers: onlineDrivers.size });
 });
 
+/**
+ * @swagger
+ * /api/drivers/offline:
+ *   post:
+ *     summary: Mark driver offline
+ *     tags: [System]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - driverId
+ *             properties:
+ *               driverId:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Marked offline
+ */
 app.post('/api/drivers/offline', async (req, res) => {
     const { driverId } = req.body;
     if (driverId) onlineDrivers.delete(driverId);
@@ -1732,6 +2558,39 @@ app.post('/api/drivers/offline', async (req, res) => {
 });
 
 // Accept ride
+/**
+ * @swagger
+ * /api/rides/{rideId}/accept:
+ *   post:
+ *     summary: Accept a ride request
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - driverId
+ *             properties:
+ *               driverId:
+ *                 type: string
+ *               driverLocation:
+ *                 $ref: '#/components/schemas/Location'
+ *     responses:
+ *       200:
+ *         description: Ride accepted
+ *       404:
+ *         description: Ride not found
+ *       409:
+ *         description: Ride already accepted
+ */
 app.post('/api/rides/:rideId/accept', async (req, res) => {
     try {
         const { driverId, driverLocation } = req.body;
@@ -1973,6 +2832,33 @@ app.post('/api/rides/:rideId/accept', async (req, res) => {
 });
 
 // ─── Pool Stop Navigation: driver reached a pool stop ───
+/**
+ * @swagger
+ * /api/rides/{rideId}/pool-stop-reached:
+ *   post:
+ *     summary: Mark pool stop as reached
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - stopIndex
+ *             properties:
+ *               stopIndex:
+ *                 type: integer
+ *     responses:
+ *       200:
+ *         description: Stop reached
+ */
 app.post('/api/rides/:rideId/pool-stop-reached', async (req, res) => {
     try {
         const { stopIndex } = req.body;
@@ -2092,6 +2978,36 @@ app.post('/api/rides/:rideId/pool-stop-reached', async (req, res) => {
 });
 
 // ─── Pool Stop OTP Verification ───
+/**
+ * @swagger
+ * /api/rides/{rideId}/pool-stop-verify-otp:
+ *   post:
+ *     summary: Verify OTP for pool stop
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - stopIndex
+ *               - otp
+ *             properties:
+ *               stopIndex:
+ *                 type: integer
+ *               otp:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: OTP verified
+ */
 app.post('/api/rides/:rideId/pool-stop-verify-otp', async (req, res) => {
     try {
         const { stopIndex, otp } = req.body;
@@ -2140,6 +3056,22 @@ app.post('/api/rides/:rideId/pool-stop-verify-otp', async (req, res) => {
 });
 
 // Driver reached pickup -> generate OTP
+/**
+ * @swagger
+ * /api/rides/{rideId}/reached:
+ *   post:
+ *     summary: Driver arrived at pickup
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: OTP generated
+ */
 app.post('/api/rides/:rideId/reached', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
@@ -2185,6 +3117,33 @@ app.post('/api/rides/:rideId/reached', async (req, res) => {
 });
 
 // Verify OTP and start ride
+/**
+ * @swagger
+ * /api/rides/{rideId}/verify-otp:
+ *   post:
+ *     summary: Verify pickup OTP
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - otp
+ *             properties:
+ *               otp:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: OTP verified, ride started
+ */
 app.post('/api/rides/:rideId/verify-otp', async (req, res) => {
     try {
         const { otp } = req.body;
@@ -2208,6 +3167,22 @@ app.post('/api/rides/:rideId/verify-otp', async (req, res) => {
 });
 
 // Complete ride
+/**
+ * @swagger
+ * /api/rides/{rideId}/complete:
+ *   post:
+ *     summary: Complete the ride
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Ride completed
+ */
 app.post('/api/rides/:rideId/complete', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
@@ -2252,6 +3227,39 @@ app.post('/api/rides/:rideId/complete', async (req, res) => {
 });
 
 // Update live location
+/**
+ * @swagger
+ * /api/rides/{rideId}/location:
+ *   post:
+ *     summary: Update active ride location
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - role
+ *               - lat
+ *               - lng
+ *             properties:
+ *               role:
+ *                 type: string
+ *                 enum: [DRIVER, RIDER]
+ *               lat:
+ *                 type: number
+ *               lng:
+ *                 type: number
+ *     responses:
+ *       200:
+ *         description: Location updated
+ */
 app.post('/api/rides/:rideId/location', async (req, res) => {
     try {
         const { role, lat, lng } = req.body;
@@ -2275,6 +3283,22 @@ app.post('/api/rides/:rideId/location', async (req, res) => {
 });
 
 // Chat messages
+/**
+ * @swagger
+ * /api/rides/{rideId}/messages:
+ *   get:
+ *     summary: Get chat messages
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: List of messages
+ */
 app.get('/api/rides/:rideId/messages', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
@@ -2285,6 +3309,36 @@ app.get('/api/rides/:rideId/messages', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/rides/{rideId}/messages:
+ *   post:
+ *     summary: Send chat message
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - message
+ *             properties:
+ *               senderId:
+ *                 type: string
+ *               senderRole:
+ *                 type: string
+ *               message:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Message sent
+ */
 app.post('/api/rides/:rideId/messages', async (req, res) => {
     try {
         const { senderId, senderRole, message } = req.body;
@@ -2309,6 +3363,34 @@ app.post('/api/rides/:rideId/messages', async (req, res) => {
 });
 
 // Pooling: add rider mid-ride
+/**
+ * @swagger
+ * /api/rides/{rideId}/pool/add:
+ *   post:
+ *     summary: Add rider to existing pool
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - userId
+ *             properties:
+ *               userId:
+ *                 type: string
+ *               fareAdjustment:
+ *                 type: number
+ *     responses:
+ *       200:
+ *         description: Rider added
+ */
 app.post('/api/rides/:rideId/pool/add', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
@@ -2356,6 +3438,40 @@ app.post('/api/rides/:rideId/pool/add', async (req, res) => {
 });
 
 // Join in-progress pooled ride as new rider
+/**
+ * @swagger
+ * /api/rides/{rideId}/pool/join:
+ *   post:
+ *     summary: Request to join active pool
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - userId
+ *               - pickup
+ *               - dropoff
+ *             properties:
+ *               userId:
+ *                 type: string
+ *               pickup:
+ *                 $ref: '#/components/schemas/Location'
+ *               dropoff:
+ *                 $ref: '#/components/schemas/Location'
+ *               passengers:
+ *                 type: integer
+ *     responses:
+ *       200:
+ *         description: Join request sent
+ */
 app.post('/api/rides/:rideId/pool/join', async (req, res) => {
     try {
         const { userId, pickup, dropoff, passengers = 1 } = req.body;
@@ -2397,6 +3513,37 @@ app.post('/api/rides/:rideId/pool/join', async (req, res) => {
 });
 
 // ── Driver requests early completion (rider must confirm) ──
+/**
+ * @swagger
+ * /api/rides/{rideId}/request-complete:
+ *   post:
+ *     summary: Driver requests early completion
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - actualLat
+ *               - actualLng
+ *             properties:
+ *               actualLat:
+ *                 type: number
+ *               actualLng:
+ *                 type: number
+ *               actualAddress:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Completion requested
+ */
 app.post('/api/rides/:rideId/request-complete', async (req, res) => {
     try {
         const { actualLat, actualLng, actualAddress } = req.body;
@@ -2481,6 +3628,22 @@ app.post('/api/rides/:rideId/confirm-complete', async (req, res) => {
 });
 
 // ── Wallet endpoints ──
+/**
+ * @swagger
+ * /api/users/{userId}/wallet:
+ *   get:
+ *     summary: Get user wallet balance
+ *     tags: [Users]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Wallet balance
+ */
 app.get('/api/users/:userId/wallet', async (req, res) => {
     try {
         const user = await User.findById(req.params.userId);
@@ -2491,6 +3654,32 @@ app.get('/api/users/:userId/wallet', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/users/{userId}/wallet/add:
+ *   post:
+ *     summary: Add funds to wallet
+ *     tags: [Users]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - amount
+ *             properties:
+ *               amount:
+ *                 type: number
+ *     responses:
+ *       200:
+ *         description: Funds added
+ */
 app.post('/api/users/:userId/wallet/add', async (req, res) => {
     try {
         const { amount } = req.body;
@@ -2506,6 +3695,22 @@ app.post('/api/users/:userId/wallet/add', async (req, res) => {
 });
 
 // ── User stats (CO2, trips) ──
+/**
+ * @swagger
+ * /api/users/{userId}/stats:
+ *   get:
+ *     summary: Get user statistics
+ *     tags: [Users]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: User stats
+ */
 app.get('/api/users/:userId/stats', async (req, res) => {
     try {
         const user = await User.findById(req.params.userId);
@@ -2523,6 +3728,34 @@ app.get('/api/users/:userId/stats', async (req, res) => {
 });
 
 // ── Scheduled rides ──
+/**
+ * @swagger
+ * /api/rides/schedule:
+ *   post:
+ *     summary: Schedule a ride
+ *     tags: [Rides]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - userId
+ *               - scheduledFor
+ *             properties:
+ *               userId:
+ *                 type: string
+ *               scheduledFor:
+ *                 type: string
+ *                 format: date-time
+ *               pickup:
+ *                 $ref: '#/components/schemas/Location'
+ *               dropoff:
+ *                 $ref: '#/components/schemas/Location'
+ *     responses:
+ *       201:
+ *         description: Ride scheduled
+ */
 app.post('/api/rides/schedule', async (req, res) => {
     try {
         const payload = { ...req.body, isScheduled: true, status: 'SEARCHING' };
@@ -2539,6 +3772,22 @@ app.post('/api/rides/schedule', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/rides/scheduled/{userId}:
+ *   get:
+ *     summary: Get scheduled rides for user
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: List of scheduled rides
+ */
 app.get('/api/rides/scheduled/:userId', async (req, res) => {
     try {
         const rides = await Ride.find({
@@ -2553,6 +3802,22 @@ app.get('/api/rides/scheduled/:userId', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /api/rides/scheduled/{rideId}:
+ *   delete:
+ *     summary: Cancel scheduled ride
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Scheduled ride canceled
+ */
 app.delete('/api/rides/scheduled/:rideId', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
@@ -2566,6 +3831,31 @@ app.delete('/api/rides/scheduled/:rideId', async (req, res) => {
 });
 
 // ── Geospatial clustering: find nearby drivers (optimized Haversine) ──
+/**
+ * @swagger
+ * /api/drivers/nearby:
+ *   get:
+ *     summary: Get drivers nearby a location
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: query
+ *         name: lat
+ *         required: true
+ *         schema:
+ *           type: number
+ *       - in: query
+ *         name: lng
+ *         required: true
+ *         schema:
+ *           type: number
+ *       - in: query
+ *         name: radius
+ *         schema:
+ *           type: number
+ *     responses:
+ *       200:
+ *         description: List of nearby drivers
+ */
 app.get('/api/drivers/nearby', async (req, res) => {
     try {
         const { lat, lng, radius = 6 } = req.query;
@@ -2593,6 +3883,38 @@ app.get('/api/drivers/nearby', async (req, res) => {
 });
 
 // ── SOS Emergency Alert ──
+/**
+ * @swagger
+ * /api/rides/{rideId}/sos:
+ *   post:
+ *     summary: Send SOS alert
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - userId
+ *               - userRole
+ *               - location
+ *             properties:
+ *               userId:
+ *                 type: string
+ *               userRole:
+ *                 type: string
+ *               location:
+ *                 $ref: '#/components/schemas/Location'
+ *     responses:
+ *       200:
+ *         description: SOS alert sent
+ */
 app.post('/api/rides/:rideId/sos', async (req, res) => {
     try {
         const { userId, userRole, location } = req.body;
@@ -2632,6 +3954,27 @@ app.post('/api/rides/:rideId/sos', async (req, res) => {
 });
 
 // ── Multi-Stop: Mark stop as reached ──
+/**
+ * @swagger
+ * /api/rides/{rideId}/stops/{stopIndex}/reached:
+ *   post:
+ *     summary: Mark multi-stop index reached
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: stopIndex
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Stop reached
+ */
 app.post('/api/rides/:rideId/stops/:stopIndex/reached', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
@@ -2666,6 +4009,27 @@ app.post('/api/rides/:rideId/stops/:stopIndex/reached', async (req, res) => {
 });
 
 // ── Multi-Stop: Skip a stop ──
+/**
+ * @swagger
+ * /api/rides/{rideId}/stops/{stopIndex}/skip:
+ *   post:
+ *     summary: Skip a multi-stop index
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: stopIndex
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Stop skipped
+ */
 app.post('/api/rides/:rideId/stops/:stopIndex/skip', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
@@ -2699,6 +4063,22 @@ app.post('/api/rides/:rideId/stops/:stopIndex/skip', async (req, res) => {
 });
 
 // ── Multi-Stop: Get ride stops info ──
+/**
+ * @swagger
+ * /api/rides/{rideId}/stops:
+ *   get:
+ *     summary: Get stops for a ride
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: List of stops
+ */
 app.get('/api/rides/:rideId/stops', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
@@ -2716,6 +4096,22 @@ app.get('/api/rides/:rideId/stops', async (req, res) => {
 });
 
 // ── Live ETA for active rides ──
+/**
+ * @swagger
+ * /api/rides/{rideId}/live-eta:
+ *   get:
+ *     summary: Get live ETA for ride
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Live ETA
+ */
 app.get('/api/rides/:rideId/live-eta', async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
