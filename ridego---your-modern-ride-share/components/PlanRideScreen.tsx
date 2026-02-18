@@ -62,7 +62,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [maskedDriverPhone, setMaskedDriverPhone] = useState<string | null>(null);
     const [passengers, setPassengers] = useState(1);
     const [maxPassengers, setMaxPassengers] = useState(4);
-    const [safetyPrefs, setSafetyPrefs] = useState({ womenOnly: false, verifiedOnly: false, noSmoking: false, accessible: false, genderPreference: 'any' as 'any' | 'male' | 'female' });
+    const [safetyPrefs, setSafetyPrefs] = useState({ womenOnly: false, verifiedOnly: false, noSmoking: false, needsWheelchair: false, wheelchairFriendly: false, genderPreference: 'any' as 'any' | 'male' | 'female' });
     const [confirmCompleteData, setConfirmCompleteData] = useState<any>(null);
 
     const [isNoDriversFound, setIsNoDriversFound] = useState(false);
@@ -1658,7 +1658,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                     {[
                                         { key: 'verifiedOnly' as const, label: 'Verified', icon: 'verified_user', desc: 'Secure riders' },
                                         { key: 'noSmoking' as const, label: 'No Smoke', icon: 'smoke_free', desc: 'Clean air' },
-                                        { key: 'accessible' as const, label: 'Accessible', icon: 'accessible', desc: 'Wheelchair / Assist' },
+                                        { key: 'wheelchairFriendly' as const, label: 'Friendly', icon: 'favorite', desc: 'Wheelchair Buddy' },
                                     ].map(pref => (
                                         <label
                                             key={pref.key}
@@ -1694,34 +1694,39 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
 
 
 
-                        {/* General Accessibility Toggle (Solo & Pooled) */}
+                        {/* ── Wheelchair Access Requirement (Primary) ── */}
                         <div className="px-4 mt-3">
                             <label
-                                className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${safetyPrefs.accessible
-                                    ? 'border-green-400 bg-green-50 dark:bg-green-900/20 dark:border-green-700'
-                                    : 'border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50'
+                                className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${safetyPrefs.needsWheelchair
+                                    ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-700 shadow-sm'
+                                    : 'border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800/50'
                                     }`}
                             >
                                 <input
                                     type="checkbox"
-                                    checked={safetyPrefs.accessible}
-                                    onChange={() => setSafetyPrefs(prev => ({ ...prev, accessible: !prev.accessible }))}
+                                    checked={safetyPrefs.needsWheelchair}
+                                    onChange={() => setSafetyPrefs(prev => ({ ...prev, needsWheelchair: !prev.needsWheelchair }))}
                                     className="sr-only"
                                 />
-                                <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all ${safetyPrefs.accessible
-                                    ? 'bg-green-500 border-green-500'
-                                    : 'border-gray-300 dark:border-zinc-600'
+                                <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all ${safetyPrefs.needsWheelchair
+                                    ? 'bg-blue-500 text-white'
+                                    : 'bg-gray-100 dark:bg-zinc-700 text-gray-400'
                                     }`}>
-                                    {safetyPrefs.accessible && (
-                                        <span className="material-icons-outlined text-white" style={{ fontSize: '16px' }}>check</span>
-                                    )}
+                                    <span className="material-icons-outlined text-2xl">accessible</span>
                                 </div>
-                                <span className="material-icons-outlined text-lg text-gray-500 dark:text-gray-400">accessible</span>
                                 <div className="flex-1 min-w-0">
-                                    <div className="text-sm font-bold dark:text-white">Request Accessible Vehicle</div>
-                                    <div className="text-[10px] text-gray-400 dark:text-gray-500">Wheelchair access or extra assistance</div>
+                                    <div className="text-sm font-black dark:text-white">I need Wheelchair Access</div>
+                                    <div className="text-[10px] text-gray-400 dark:text-gray-500">Requires a vehicle with a fold/ramp or extra trunk space</div>
+                                </div>
+                                <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${safetyPrefs.needsWheelchair ? 'bg-blue-500 border-blue-500' : 'border-gray-300'}`}>
+                                    {safetyPrefs.needsWheelchair && <span className="material-icons-outlined text-white" style={{ fontSize: '16px' }}>check</span>}
                                 </div>
                             </label>
+                            {safetyPrefs.needsWheelchair && (
+                                <p className="text-[10px] text-blue-600 dark:text-blue-400 font-bold mt-1.5 px-1 animate-in fade-in slide-in-from-left-2 duration-300">
+                                    ⚡ Mandatory for your match. We'll only connect you with accessible vehicles.
+                                </p>
+                            )}
                         </div>
 
                         {/* Vehicle Categories */}

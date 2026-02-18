@@ -166,7 +166,8 @@ const RideSchema = new mongoose.Schema({
         womenOnly: { type: Boolean, default: false },
         verifiedOnly: { type: Boolean, default: false },
         noSmoking: { type: Boolean, default: false },
-        accessible: { type: Boolean, default: false },
+        needsWheelchair: { type: Boolean, default: false },
+        wheelchairFriendly: { type: Boolean, default: false },
         genderPreference: { type: String, enum: ['any', 'male', 'female'], default: 'any' }
     },
     // Early termination / partial ride
