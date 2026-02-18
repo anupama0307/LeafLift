@@ -62,7 +62,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [maskedDriverPhone, setMaskedDriverPhone] = useState<string | null>(null);
     const [passengers, setPassengers] = useState(1);
     const [maxPassengers, setMaxPassengers] = useState(4);
-    const [safetyPrefs, setSafetyPrefs] = useState({ womenOnly: false, verifiedOnly: false, noSmoking: false, genderPreference: 'any' as 'any' | 'male' | 'female' });
+    const [safetyPrefs, setSafetyPrefs] = useState({ womenOnly: false, verifiedOnly: false, noSmoking: false, accessible: false, genderPreference: 'any' as 'any' | 'male' | 'female' });
     const [confirmCompleteData, setConfirmCompleteData] = useState<any>(null);
 
     const [isNoDriversFound, setIsNoDriversFound] = useState(false);
@@ -1122,7 +1122,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             isPooled: rideMode === 'Pooled',
             passengers,
             maxPassengers: rideMode === 'Pooled' ? maxPassengers : passengers,
-            ...(rideMode === 'Pooled' ? { safetyPreferences: safetyPrefs } : {}),
+            safetyPreferences: safetyPrefs,
             bookingTime: new Date().toISOString(),
             ...(stops.length > 0 ? {
                 stops: stops.map((s, i) => ({ address: s.address, lat: s.lat, lng: s.lng, order: i }))
@@ -1623,7 +1623,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         {rideMode === 'Pooled' && (
                             <div className="px-4 mt-3">
                                 <span className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-2 block">Safety Preferences:</span>
-                                
+
                                 {/* Gender Preference Selector */}
                                 <div className="mb-2">
                                     <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider block mb-1.5">Gender Preference:</label>
@@ -1636,35 +1636,33 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                             <button
                                                 key={opt.value}
                                                 onClick={() => setSafetyPrefs(prev => ({ ...prev, genderPreference: opt.value }))}
-                                                className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl border-2 transition-all ${
-                                                    safetyPrefs.genderPreference === opt.value
-                                                        ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
-                                                        : 'border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50'
-                                                }`}
+                                                className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl border-2 transition-all ${safetyPrefs.genderPreference === opt.value
+                                                    ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
+                                                    : 'border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50'
+                                                    }`}
                                             >
-                                                <span className={`material-icons-outlined text-sm ${
-                                                    safetyPrefs.genderPreference === opt.value
-                                                        ? 'text-green-600 dark:text-green-400'
-                                                        : 'text-gray-500 dark:text-gray-400'
-                                                }`}>{opt.icon}</span>
-                                                <span className={`text-xs font-bold ${
-                                                    safetyPrefs.genderPreference === opt.value
-                                                        ? 'text-green-600 dark:text-green-400'
-                                                        : 'text-gray-600 dark:text-gray-400'
-                                                }`}>{opt.label}</span>
+                                                <span className={`material-icons-outlined text-sm ${safetyPrefs.genderPreference === opt.value
+                                                    ? 'text-green-600 dark:text-green-400'
+                                                    : 'text-gray-500 dark:text-gray-400'
+                                                    }`}>{opt.icon}</span>
+                                                <span className={`text-xs font-bold ${safetyPrefs.genderPreference === opt.value
+                                                    ? 'text-green-600 dark:text-green-400'
+                                                    : 'text-gray-600 dark:text-gray-400'
+                                                    }`}>{opt.label}</span>
                                             </button>
                                         ))}
                                     </div>
                                 </div>
 
-                                <div className="flex flex-col gap-2">
+                                <div className="grid grid-cols-2 gap-2 mt-2">
                                     {[
-                                        { key: 'verifiedOnly' as const, label: 'Verified Riders', icon: 'verified_user', desc: 'Only verified profiles' },
-                                        { key: 'noSmoking' as const, label: 'No Smoking', icon: 'smoke_free', desc: 'Smoke-free ride' },
+                                        { key: 'verifiedOnly' as const, label: 'Verified', icon: 'verified_user', desc: 'Secure riders' },
+                                        { key: 'noSmoking' as const, label: 'No Smoke', icon: 'smoke_free', desc: 'Clean air' },
+                                        { key: 'accessible' as const, label: 'Accessible', icon: 'accessible', desc: 'Wheelchair / Assist' },
                                     ].map(pref => (
                                         <label
                                             key={pref.key}
-                                            className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition-all ${safetyPrefs[pref.key]
+                                            className={`flex items-center gap-2 p-2 rounded-xl border cursor-pointer transition-all ${safetyPrefs[pref.key]
                                                 ? 'border-green-400 bg-green-50 dark:bg-green-900/20 dark:border-green-700'
                                                 : 'border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50'
                                                 }`}
@@ -1675,18 +1673,17 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                 onChange={() => setSafetyPrefs(prev => ({ ...prev, [pref.key]: !prev[pref.key] }))}
                                                 className="sr-only"
                                             />
-                                            <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-all ${safetyPrefs[pref.key]
+                                            <div className={`w-4 h-4 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-all ${safetyPrefs[pref.key]
                                                 ? 'bg-green-500 border-green-500'
                                                 : 'border-gray-300 dark:border-zinc-600'
                                                 }`}>
                                                 {safetyPrefs[pref.key] && (
-                                                    <span className="material-icons-outlined text-white" style={{ fontSize: '14px' }}>check</span>
+                                                    <span className="material-icons-outlined text-white" style={{ fontSize: '12px' }}>check</span>
                                                 )}
                                             </div>
-                                            <span className="material-icons-outlined text-sm text-gray-500 dark:text-gray-400">{pref.icon}</span>
                                             <div className="flex-1 min-w-0">
-                                                <div className="text-xs font-bold dark:text-white">{pref.label}</div>
-                                                <div className="text-[10px] text-gray-400 dark:text-gray-500">{pref.desc}</div>
+                                                <div className="text-[11px] font-bold dark:text-white leading-tight">{pref.label}</div>
+                                                <div className="text-[9px] text-gray-400 dark:text-gray-500 leading-tight">{pref.desc}</div>
                                             </div>
                                         </label>
                                     ))}
@@ -1697,55 +1694,94 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
 
 
 
-                        {/* Vehicle Categories */}
-                        <div className="px-4 py-2">
-                            {VEHICLE_CATEGORIES.map(cat => {
-                                const price = categoryPrices.get(cat.id) || 0;
-                                const route = availableRoutes[selectedRouteIndex];
-                                const soloPrice = route ? Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate) : 0;
-                                const co2 = route ? calculateCO2(route.distance, cat.id) : 0;
-                                const co2Pool = route ? calculateCO2(route.distance, 'pool') : 0;
-                                const etaMin = route ? Math.round(route.duration / 60) : 0;
+                        {/* General Accessibility Toggle (Solo & Pooled) */}
+                        <div className="px-4 mt-3">
+                            <label
+                                className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${safetyPrefs.accessible
+                                    ? 'border-green-400 bg-green-50 dark:bg-green-900/20 dark:border-green-700'
+                                    : 'border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50'
+                                    }`}
+                            >
+                                <input
+                                    type="checkbox"
+                                    checked={safetyPrefs.accessible}
+                                    onChange={() => setSafetyPrefs(prev => ({ ...prev, accessible: !prev.accessible }))}
+                                    className="sr-only"
+                                />
+                                <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all ${safetyPrefs.accessible
+                                    ? 'bg-green-500 border-green-500'
+                                    : 'border-gray-300 dark:border-zinc-600'
+                                    }`}>
+                                    {safetyPrefs.accessible && (
+                                        <span className="material-icons-outlined text-white" style={{ fontSize: '16px' }}>check</span>
+                                    )}
+                                </div>
+                                <span className="material-icons-outlined text-lg text-gray-500 dark:text-gray-400">accessible</span>
+                                <div className="flex-1 min-w-0">
+                                    <div className="text-sm font-bold dark:text-white">Request Accessible Vehicle</div>
+                                    <div className="text-[10px] text-gray-400 dark:text-gray-500">Wheelchair access or extra assistance</div>
+                                </div>
+                            </label>
+                        </div>
 
-                                return (
-                                    <button
-                                        key={cat.id}
-                                        onClick={() => setSelectedCategory(cat.id)}
-                                        className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 mb-3 transition-all ${selectedCategory === cat.id
-                                            ? 'border-black dark:border-white bg-gray-50 dark:bg-zinc-800'
-                                            : 'border-transparent hover:bg-gray-50 dark:hover:bg-zinc-800'
-                                            }`}
-                                    >
-                                        <div className="w-14 h-14 rounded-2xl bg-gray-100 dark:bg-zinc-700 flex items-center justify-center">
-                                            <span className="material-icons-outlined text-2xl text-gray-700 dark:text-white">
-                                                {cat.icon}
-                                            </span>
-                                        </div>
-                                        <div className="flex-1 text-left">
-                                            <div className="font-bold text-base dark:text-white">{cat.label}</div>
-                                            <div className="text-xs text-gray-500 dark:text-gray-400">
-                                                {etaMin} min • {cat.capacity} seats
+                        {/* Vehicle Categories */}
+                        <div className="px-4 py-3">
+                            <h3 className="text-xs font-black text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-3">Available Vehicles</h3>
+                            <div className="space-y-2">
+                                {VEHICLE_CATEGORIES.map(cat => {
+                                    const price = categoryPrices.get(cat.id) || 0;
+                                    const route = availableRoutes[selectedRouteIndex];
+                                    const soloPrice = route ? Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate) : 0;
+                                    const co2 = route ? calculateCO2(route.distance, cat.id) : 0;
+                                    const co2Pool = route ? calculateCO2(route.distance, 'pool') : 0;
+                                    const etaMin = route ? Math.round(route.duration / 60) : 0;
+
+                                    return (
+                                        <button
+                                            key={cat.id}
+                                            onClick={() => setSelectedCategory(cat.id)}
+                                            className={`w-full flex items-center gap-4 p-3.5 rounded-2xl border-2 transition-all ${selectedCategory === cat.id
+                                                ? 'border-green-500 bg-green-50/50 dark:bg-green-900/10'
+                                                : 'border-gray-100 dark:border-zinc-800 hover:border-gray-200 dark:hover:border-zinc-700'
+                                                }`}
+                                        >
+                                            <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 transition-colors ${selectedCategory === cat.id ? 'bg-green-500 text-white' : 'bg-gray-100 dark:bg-zinc-800 text-gray-500'}`}>
+                                                <span className="material-icons-outlined text-2xl">
+                                                    {cat.icon}
+                                                </span>
                                             </div>
-                                            {rideMode === 'Pooled' ? (
-                                                <div className="mt-1 inline-flex items-center gap-1 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-200 text-xs font-semibold px-2 py-0.5 rounded-full">
-                                                    🌱 Save {co2 - co2Pool}g CO₂
+                                            <div className="flex-1 text-left min-w-0">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="font-black text-sm dark:text-white truncate">{cat.label}</span>
+                                                    <span className="text-[10px] bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-gray-400 px-1.5 py-0.5 rounded font-bold">
+                                                        {cat.capacity} seats
+                                                    </span>
                                                 </div>
-                                            ) : (
-                                                <div className="mt-1 text-xs text-gray-400">~{co2}g CO₂</div>
-                                            )}
-                                        </div>
-                                        <div className="text-right">
-                                            <div className="font-bold text-lg dark:text-white">₹{price}</div>
-                                            {rideMode === 'Pooled' && soloPrice > price && (
-                                                <div className="text-xs text-gray-400 line-through">₹{soloPrice}</div>
-                                            )}
-                                            {selectedCategory === cat.id && (
-                                                <div className="text-green-500 text-xs mt-1">✓</div>
-                                            )}
-                                        </div>
-                                    </button>
-                                );
-                            })}
+                                                <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
+                                                    {etaMin} min away • {cat.description}
+                                                </div>
+                                                {rideMode === 'Pooled' ? (
+                                                    <div className="mt-1 text-[9px] font-bold text-green-600 dark:text-green-400 flex items-center gap-1">
+                                                        <span className="material-icons-outlined text-[11px]">eco</span>
+                                                        Save {co2 - co2Pool}g CO₂
+                                                    </div>
+                                                ) : (
+                                                    <div className="mt-1 text-[9px] font-bold text-gray-400 flex items-center gap-1">
+                                                        <span className="material-icons-outlined text-[10px]">cloud</span>
+                                                        {co2}g CO₂
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="text-right">
+                                                <div className={`font-black text-base ${selectedCategory === cat.id ? 'text-green-600 dark:text-green-400' : 'text-gray-900 dark:text-white'}`}>₹{price}</div>
+                                                {rideMode === 'Pooled' && soloPrice > price && (
+                                                    <div className="text-[10px] text-gray-400 line-through font-bold">₹{soloPrice}</div>
+                                                )}
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
                         </div>
                     </div>{/* end scrollable area */}
 
