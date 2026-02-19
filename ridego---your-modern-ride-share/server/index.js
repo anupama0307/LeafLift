@@ -1722,8 +1722,6 @@ app.post('/api/rides', async (req, res) => {
                 routeIndex: ride.routeIndex,
                 bookingTime: ride.bookingTime
             };
-        }
-
             // Send to drivers within radius
             for (const [driverId, entry] of onlineDrivers) {
                 if (!entry.location) continue;

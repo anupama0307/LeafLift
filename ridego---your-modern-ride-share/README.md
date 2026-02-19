@@ -111,7 +111,7 @@ The project execution followed an agile methodology with iterative development a
 3.  **Environment Configuration**
     Create a `.env` file in the root directory with the following keys:
     ```
-    PORT=5000
+    PORT=5001
     VITE_DEV_PORT=3005
     VITE_API_BASE_URL=http://localhost:5000
     MONGODB_URI=your_mongodb_connection_string

@@ -5,7 +5,8 @@ import {
   getRedirectResult,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
-  sendPasswordResetEmail
+  sendPasswordResetEmail,
+  updatePassword
 } from 'firebase/auth';
 import { auth, googleProvider } from '../src/firebase';
 
@@ -61,6 +62,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [step, setStep] = useState<AuthStep>('NAME');
 
   // OTP countdown timer
   useEffect(() => {
@@ -328,8 +330,12 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     setError(null);
 
     try {
-      // If not OAuth user, create Firebase account
-      if (!oauthUser) {
+      // If OAuth user, set their password; if not, create account
+      if (oauthUser) {
+        if (auth.currentUser) {
+          await updatePassword(auth.currentUser, password);
+        }
+      } else {
         await createUserWithEmailAndPassword(auth, email, password);
       }
 
@@ -377,11 +383,9 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) return 'Please enter a valid email';
     if (!phone.trim() || phone.length < 10) return 'Please enter a valid 10-digit phone number';
-    if (!oauthUser) {
-      if (!password) return 'Password is required';
-      if (password.length < 6) return 'Password must be at least 6 characters';
-      if (password !== confirmPassword) return 'Passwords do not match';
-    }
+    if (!password) return 'Password is required';
+    if (password.length < 6) return 'Password must be at least 6 characters';
+    if (password !== confirmPassword) return 'Passwords do not match';
     if (!dob) return 'Date of birth is required';
     if (!gender) return 'Please select your gender';
     if (role === 'DRIVER') {
@@ -402,6 +406,10 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     setError(null);
     setOtpPurpose('signup');
     sendEmailOTP(email);
+  };
+
+  const handleSignup = (data?: any) => {
+    handleSignupSubmit();
   };
 
   // --- Shared Components ---
@@ -464,12 +472,6 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
 
   const renderWelcome = () => (
     <div className="flex-1 px-6 pt-12 flex flex-col animate-in fade-in duration-300">
-      <div className="flex justify-end mb-4">
-        <button onClick={toggleTheme} className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full">
-          <span className="material-icons-outlined text-sm">{isDark ? 'light_mode' : 'dark_mode'}</span>
-        </button>
-      </div>
-
       {/* Logo */}
       <div className="mb-8 flex justify-center">
         <div className="relative">
@@ -503,12 +505,9 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
 
   const renderSignIn = () => (
     <div className="flex-1 px-6 pt-4 pb-10 flex flex-col animate-in fade-in duration-300 overflow-y-auto">
-      <div className="flex justify-between items-center mb-2">
+      <div className="flex justify-start items-center mb-2">
         <button onClick={() => { setMode('WELCOME'); setError(null); setSuccessMessage(null); }} className="p-2 -ml-2 rounded-full hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors">
           <span className="material-icons-outlined text-black dark:text-white">arrow_back</span>
-        </button>
-        <button onClick={toggleTheme} className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full">
-          <span className="material-icons-outlined text-sm">{isDark ? 'light_mode' : 'dark_mode'}</span>
         </button>
       </div>
 
@@ -592,12 +591,9 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
 
   const renderSignupForm = () => (
     <div className="flex-1 px-6 pt-4 pb-10 flex flex-col animate-in fade-in duration-300 overflow-y-auto">
-      <div className="flex justify-between items-center mb-2">
+      <div className="flex justify-start items-center mb-2">
         <button onClick={() => { setMode('WELCOME'); setError(null); setSuccessMessage(null); }} className="p-2 -ml-2 rounded-full hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors">
           <span className="material-icons-outlined text-black dark:text-white">arrow_back</span>
-        </button>
-        <button onClick={toggleTheme} className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full">
-          <span className="material-icons-outlined text-sm">{isDark ? 'light_mode' : 'dark_mode'}</span>
         </button>
       </div>
 
@@ -631,18 +627,16 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
         <div className="flex gap-3">
           <button
             onClick={() => setRole('RIDER')}
-            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${
-              role === 'RIDER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
-            }`}
+            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${role === 'RIDER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
+              }`}
           >
             <span className="material-icons-outlined">directions_car</span>
             Rider
           </button>
           <button
             onClick={() => setRole('DRIVER')}
-            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${
-              role === 'DRIVER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
-            }`}
+            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${role === 'DRIVER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
+              }`}
           >
             <span className="material-icons-outlined">local_taxi</span>
             Driver
@@ -748,9 +742,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
               <button
                 key={g}
                 onClick={() => setGender(g)}
-                className={`h-12 rounded-xl flex items-center justify-center font-bold text-sm border-2 transition-all ${
-                  gender === g ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-transparent bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
-                }`}
+                className={`h-12 rounded-xl flex items-center justify-center font-bold text-sm border-2 transition-all ${gender === g ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-transparent bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
+                  }`}
               >
                 {g}
               </button>
@@ -889,12 +882,9 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
 
   const renderOAuthComplete = () => (
     <div className="flex-1 px-6 pt-4 pb-10 flex flex-col animate-in fade-in duration-300 overflow-y-auto">
-      <div className="flex justify-between items-center mb-2">
+      <div className="flex justify-start items-center mb-2">
         <button onClick={() => { setMode('WELCOME'); setOauthUser(null); setError(null); }} className="p-2 -ml-2 rounded-full hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors">
           <span className="material-icons-outlined text-black dark:text-white">arrow_back</span>
-        </button>
-        <button onClick={toggleTheme} className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full">
-          <span className="material-icons-outlined text-sm">{isDark ? 'light_mode' : 'dark_mode'}</span>
         </button>
       </div>
 
@@ -908,18 +898,16 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
         <div className="flex gap-3">
           <button
             onClick={() => setRole('RIDER')}
-            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${
-              role === 'RIDER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
-            }`}
+            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${role === 'RIDER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
+              }`}
           >
             <span className="material-icons-outlined">directions_car</span>
             Rider
           </button>
           <button
             onClick={() => setRole('DRIVER')}
-            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${
-              role === 'DRIVER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
-            }`}
+            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${role === 'DRIVER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
+              }`}
           >
             <span className="material-icons-outlined">local_taxi</span>
             Driver
@@ -965,6 +953,33 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
           </div>
         </div>
 
+        {/* Password */}
+        <div>
+          <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">Create Password</label>
+          <div className="relative">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 pr-12 text-black dark:text-white font-medium focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
+              placeholder="Min 6 characters"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500">
+              <span className="material-icons-outlined text-xl">{showPassword ? 'visibility_off' : 'visibility'}</span>
+            </button>
+          </div>
+        </div>
+        <div>
+          <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">Confirm Password</label>
+          <input
+            type="password"
+            className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
+            placeholder="Re-enter password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+          />
+        </div>
+
         {/* DOB */}
         <div>
           <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">Date of Birth</label>
@@ -984,9 +999,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
               <button
                 key={g}
                 onClick={() => setGender(g)}
-                className={`h-12 rounded-xl flex items-center justify-center font-bold text-sm border-2 transition-all ${
-                  gender === g ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-transparent bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
-                }`}
+                className={`h-12 rounded-xl flex items-center justify-center font-bold text-sm border-2 transition-all ${gender === g ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-transparent bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
+                  }`}
               >
                 {g}
               </button>
@@ -1123,8 +1137,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
 
   return (
     <div className="flex-1 flex flex-col bg-white dark:bg-black overflow-y-auto">
-      <div className="h-12 w-full flex items-center justify-between px-6 pt-2">
-        <span className="text-black dark:text-white font-bold text-sm">9:41</span>
+      <div className="h-12 w-full flex items-center justify-end px-6 pt-2">
         <button onClick={toggleTheme} className="flex items-center gap-1.5 bg-gray-100 dark:bg-zinc-800 px-3 py-1.5 rounded-full hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors">
           <span className="material-icons-outlined text-base text-leaf-600 dark:text-leaf-400">
             {isDark ? 'light_mode' : 'dark_mode'}

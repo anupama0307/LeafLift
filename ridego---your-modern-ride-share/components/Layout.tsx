@@ -39,7 +39,7 @@ const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScre
       {!isSpecialScreen && (
         <div className="flex justify-between items-center px-8 pt-4 pb-2">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-black dark:text-white">9:41</span>
+            {/* Time removed */}
             {user?.privacySettings?.locationSharing && (
               <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-leaf-50 dark:bg-leaf-900/30 border border-leaf-100 dark:border-leaf-800/30">
                 <span className="flex h-1.5 w-1.5 relative">
