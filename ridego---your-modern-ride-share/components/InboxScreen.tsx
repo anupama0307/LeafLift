@@ -69,7 +69,7 @@ const InboxScreen: React.FC<InboxScreenProps> = ({ onSelectChat }) => {
       <div className="flex justify-between items-center mt-6 mb-6">
         <h1 className="text-4xl font-bold tracking-tight">Inbox</h1>
         <button className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full">
-           <span className="material-icons-outlined text-xl">filter_list</span>
+          <span className="material-icons-outlined text-xl">filter_list</span>
         </button>
       </div>
 

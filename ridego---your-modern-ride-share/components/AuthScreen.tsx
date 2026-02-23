@@ -63,7 +63,6 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [step, setStep] = useState<AuthStep>('NAME');
-
   // OTP countdown timer
   useEffect(() => {
     if (otpTimer <= 0) return;
