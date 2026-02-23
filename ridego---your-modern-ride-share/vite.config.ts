@@ -9,6 +9,7 @@ export default defineConfig(({ mode }) => {
     server: {
       port: parseInt(env.VITE_DEV_PORT || '3005', 10),
       host: '0.0.0.0',
+      allowedHosts: true,
       headers: {
         'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
       },

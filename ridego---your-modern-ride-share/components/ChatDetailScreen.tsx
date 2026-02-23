@@ -130,11 +130,10 @@ const ChatDetailScreen: React.FC<ChatDetailScreenProps> = ({ chatId, onBack }) =
           const isMine = m.senderRole === user?.role;
           return (
             <div key={`${m.createdAt}-${idx}`} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${
-                isMine
+              <div className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${isMine
                   ? 'bg-black text-white dark:bg-white dark:text-black'
                   : 'bg-gray-100 dark:bg-zinc-800 dark:text-white'
-              }`}>
+                }`}>
                 {m.message}
               </div>
             </div>
