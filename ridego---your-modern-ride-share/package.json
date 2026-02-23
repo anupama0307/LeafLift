@@ -9,7 +9,8 @@
         "preview": "vite preview",
         "test": "npx vitest run",
         "test:routing": "npx vitest run tests/feature2-frontend-routing.test.tsx",
-        "test:watch": "npx vitest"
+        "test:watch": "npx vitest",
+        "ngrok": "node start-ngrok.js"
     },
     "dependencies": {
         "@types/leaflet": "^1.9.21",
@@ -21,6 +22,7 @@
         "socket.io-client": "^4.8.1"
     },
     "devDependencies": {
+        "@ngrok/ngrok": "^1.7.0",
         "@playwright/test": "^1.58.2",
         "@testing-library/jest-dom": "^6.9.1",
         "@testing-library/react": "^16.3.2",
