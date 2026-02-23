@@ -1,6 +1,8 @@
 const express = require('express');
 // Use the SAME mongoose instance as the models in ../../server/models/
 const mongoose = require('../../server/node_modules/mongoose');
+const swaggerUi = require('swagger-ui-express');
+const swaggerJsdoc = require('swagger-jsdoc');
 const cors = require('cors');
 const path = require('path');
 const Redis = require('ioredis');
@@ -54,23 +56,23 @@ try {
         redis = null;
     });
     redis.on('connect', () => console.log('✅ Redis connected'));
-    redis.on('error', () => {}); // suppress repeated error logs
+    redis.on('error', () => { }); // suppress repeated error logs
 } catch (e) {
     console.warn('⚠️  Redis not available — running without cache');
     redis = null;
 }
 
 // ─── Helper: cache get/set ───────────────────────────────────────────────
-const cacheGet = async(key) => {
+const cacheGet = async (key) => {
     if (!redis) return null;
     try {
         const val = await redis.get(key);
         return val ? JSON.parse(val) : null;
     } catch { return null; }
 };
-const cacheSet = async(key, data, ttl = 300) => {
+const cacheSet = async (key, data, ttl = 300) => {
     if (!redis) return;
-    try { await redis.set(key, JSON.stringify(data), 'EX', ttl); } catch {}
+    try { await redis.set(key, JSON.stringify(data), 'EX', ttl); } catch { }
 };
 
 // ─── Mongoose models (reuse main app schemas) ──────────────────────────
@@ -92,6 +94,27 @@ const MAIN_SERVER_URL = process.env.MAIN_SERVER_URL || 'http://localhost:5001';
 
 app.use(cors());
 app.use(express.json());
+
+const swaggerOptions = {
+    definition: {
+        openapi: '3.0.0',
+        info: {
+            title: 'LeafLift Admin API',
+            version: '1.0.0',
+            description: 'API Documentation for LeafLift Admin Application',
+        },
+        servers: [
+            {
+                url: `http://localhost:${PORT}`,
+                description: 'Admin server',
+            },
+        ],
+    },
+    apis: [path.join(__dirname, './index.js')],
+};
+
+const swaggerDocs = swaggerJsdoc(swaggerOptions);
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
 
 // ─── Bridge: push notifications to drivers via main server (port 5001) ──
 async function pushToDrivers(payload) {
@@ -160,7 +183,7 @@ app.use('/api/admin', (req, res, next) => {
 // ═══════════════════════════════════════════════════════════════════
 // SEED: Create demo data for admin dashboard
 // ═══════════════════════════════════════════════════════════════════
-app.post('/api/admin/seed', async(req, res) => {
+app.post('/api/admin/seed', async (req, res) => {
     try {
         const existingRides = await Ride.countDocuments();
         if (existingRides > 50) {
@@ -196,7 +219,7 @@ app.post('/api/admin/seed', async(req, res) => {
                     dob: new Date('1990-01-15'),
                 });
             }
-            await User.insertMany(driverDocs, { ordered: false }).catch(() => {});
+            await User.insertMany(driverDocs, { ordered: false }).catch(() => { });
             drivers = await User.find({ role: 'DRIVER' }).select('_id').lean();
         }
 
@@ -215,7 +238,7 @@ app.post('/api/admin/seed', async(req, res) => {
                     dob: new Date('1995-06-20'),
                 });
             }
-            await User.insertMany(riderDocs, { ordered: false }).catch(() => {});
+            await User.insertMany(riderDocs, { ordered: false }).catch(() => { });
             riders = await User.find({ role: 'RIDER' }).select('_id').lean();
         }
 
@@ -283,7 +306,7 @@ app.post('/api/admin/seed', async(req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // EXPORT REPORT (CSV)
 // ═══════════════════════════════════════════════════════════════════
-app.get('/api/admin/export/rides', async(req, res) => {
+app.get('/api/admin/export/rides', async (req, res) => {
     try {
         const { format = 'csv', period = 'month' } = req.query;
         let dateFilter = {};
@@ -336,7 +359,7 @@ app.post('/api/admin/config/peak', (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // HEATMAP POINTS (lat/lng for map rendering)
 // ═══════════════════════════════════════════════════════════════════
-app.get('/api/admin/heatmap/points', async(req, res) => {
+app.get('/api/admin/heatmap/points', async (req, res) => {
     try {
         const cached = await cacheGet('admin:heatmap-points');
         if (cached) return res.json(cached);
@@ -390,7 +413,7 @@ app.get('/api/admin/heatmap/points', async(req, res) => {
             if (deficit > 10) heatLevel = 'critical';
             else if (deficit > 5) heatLevel = 'high';
             else if (deficit > 2) heatLevel = 'medium';
-            return {...reg, rides: nearby, drivers: driverCount, deficit, heatLevel };
+            return { ...reg, rides: nearby, drivers: driverCount, deficit, heatLevel };
         });
 
         const result = { riders: riders.slice(0, 300), drivers: [...uniqueDrivers.values()], regions: regionSummary, updatedAt: new Date().toISOString() };
@@ -405,7 +428,17 @@ app.get('/api/admin/heatmap/points', async(req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 // 1. DASHBOARD OVERVIEW
 // ═══════════════════════════════════════════════════════════════════════
-app.get('/api/admin/overview', async(req, res) => {
+/**
+ * @openapi
+ * /api/admin/overview:
+ *   get:
+ *     summary: Get dashboard overview statistics
+ *     tags: [Admin]
+ *     responses:
+ *       200:
+ *         description: Overview stats
+ */
+app.get('/api/admin/overview', async (req, res) => {
     try {
         const cached = await cacheGet('admin:overview');
         if (cached) return res.json(cached);
@@ -456,7 +489,17 @@ app.get('/api/admin/overview', async(req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 // 2. PEAK HOURS (4.2)
 // ═══════════════════════════════════════════════════════════════════════
-app.get('/api/admin/peak-hours', async(req, res) => {
+/**
+ * @openapi
+ * /api/admin/peak-hours:
+ *   get:
+ *     summary: Get peak hour data for the last week
+ *     tags: [Admin]
+ *     responses:
+ *       200:
+ *         description: Peak hour stats
+ */
+app.get('/api/admin/peak-hours', async (req, res) => {
     try {
         const cached = await cacheGet('admin:peak-hours');
         if (cached) return res.json(cached);
@@ -494,7 +537,17 @@ app.get('/api/admin/peak-hours', async(req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 // 3. DEMAND BY REGION (4.1)
 // ═══════════════════════════════════════════════════════════════════════
-app.get('/api/admin/demand/regions', async(req, res) => {
+/**
+ * @openapi
+ * /api/admin/demand/regions:
+ *   get:
+ *     summary: Get demand statistics by region
+ *     tags: [Admin]
+ *     responses:
+ *       200:
+ *         description: Region demand data
+ */
+app.get('/api/admin/demand/regions', async (req, res) => {
     try {
         const cached = await cacheGet('admin:demand-regions');
         if (cached) return res.json(cached);
@@ -547,7 +600,7 @@ app.get('/api/admin/demand/regions', async(req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 // 4. DRIVER ALERTS (4.3)
 // ═══════════════════════════════════════════════════════════════════════
-app.get('/api/admin/driver-alerts', async(req, res) => {
+app.get('/api/admin/driver-alerts', async (req, res) => {
     try {
         const alerts = await Notification.find({ type: 'SYSTEM' })
             .sort({ createdAt: -1 })
@@ -571,7 +624,7 @@ app.get('/api/admin/driver-alerts', async(req, res) => {
 });
 
 // POST: Send surge alert to drivers in a zone
-app.post('/api/admin/driver-alerts/broadcast', async(req, res) => {
+app.post('/api/admin/driver-alerts/broadcast', async (req, res) => {
     try {
         const { zone, message } = req.body;
         const drivers = await User.find({ role: 'DRIVER' }).select('_id').lean();
@@ -593,7 +646,7 @@ app.post('/api/admin/driver-alerts/broadcast', async(req, res) => {
 });
 
 // PATCH: Acknowledge a driver alert
-app.patch('/api/admin/driver-alerts/:id/acknowledge', async(req, res) => {
+app.patch('/api/admin/driver-alerts/:id/acknowledge', async (req, res) => {
     try {
         const { id } = req.params;
         const notif = await Notification.findByIdAndUpdate(id, { read: true }, { new: true });
@@ -611,7 +664,7 @@ app.patch('/api/admin/driver-alerts/:id/acknowledge', async(req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 
 // Send notification to a specific driver
-app.post('/api/admin/notifications/send', async(req, res) => {
+app.post('/api/admin/notifications/send', async (req, res) => {
     try {
         const { driverId, title, message, type } = req.body;
         if (!driverId || !message) return res.status(400).json({ error: 'driverId and message are required' });
@@ -637,7 +690,7 @@ app.post('/api/admin/notifications/send', async(req, res) => {
 });
 
 // Send suggestion to a specific driver
-app.post('/api/admin/suggestions/send', async(req, res) => {
+app.post('/api/admin/suggestions/send', async (req, res) => {
     try {
         const { driverId, suggestion, zone } = req.body;
         if (!driverId || !suggestion) return res.status(400).json({ error: 'driverId and suggestion are required' });
@@ -662,7 +715,7 @@ app.post('/api/admin/suggestions/send', async(req, res) => {
 });
 
 // Broadcast notification to ALL drivers
-app.post('/api/admin/notifications/broadcast', async(req, res) => {
+app.post('/api/admin/notifications/broadcast', async (req, res) => {
     try {
         const { title, message, type } = req.body;
         if (!message) return res.status(400).json({ error: 'message is required' });
@@ -687,7 +740,7 @@ app.post('/api/admin/notifications/broadcast', async(req, res) => {
 });
 
 // List all drivers (for the admin notification UI)
-app.get('/api/admin/drivers', async(req, res) => {
+app.get('/api/admin/drivers', async (req, res) => {
     try {
         const cached = await cacheGet('admin:drivers-list');
         if (cached) return res.json(cached);
@@ -705,7 +758,7 @@ app.get('/api/admin/drivers', async(req, res) => {
 });
 
 // Get sent notifications history (admin view)
-app.get('/api/admin/notifications/sent', async(req, res) => {
+app.get('/api/admin/notifications/sent', async (req, res) => {
     try {
         const notifications = await Notification.find({ 'data.fromAdmin': true })
             .sort({ createdAt: -1 })
@@ -722,21 +775,21 @@ app.get('/api/admin/notifications/sent', async(req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 // 5. POOLING STATS (4.4)
 // ═══════════════════════════════════════════════════════════════════════
-app.get('/api/admin/pooling/stats', async(req, res) => {
+app.get('/api/admin/pooling/stats', async (req, res) => {
     try {
         const cached = await cacheGet('admin:pooling-stats');
         if (cached) return res.json(cached);
 
         const monthlyAgg = await Ride.aggregate([{
-                $group: {
-                    _id: { $dateToString: { format: '%Y-%m', date: '$createdAt' } },
-                    totalRequests: { $sum: { $cond: ['$isPooled', 1, 0] } },
-                    matched: { $sum: { $cond: [{ $and: ['$isPooled', { $eq: ['$status', 'COMPLETED'] }] }, 1, 0] } },
-                    total: { $sum: 1 }
-                }
-            },
-            { $sort: { _id: 1 } },
-            { $limit: 7 }
+            $group: {
+                _id: { $dateToString: { format: '%Y-%m', date: '$createdAt' } },
+                totalRequests: { $sum: { $cond: ['$isPooled', 1, 0] } },
+                matched: { $sum: { $cond: [{ $and: ['$isPooled', { $eq: ['$status', 'COMPLETED'] }] }, 1, 0] } },
+                total: { $sum: 1 }
+            }
+        },
+        { $sort: { _id: 1 } },
+        { $limit: 7 }
         ]);
 
         const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -762,7 +815,7 @@ app.get('/api/admin/pooling/stats', async(req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 // 6. FLEET / VEHICLE UTILIZATION (4.5)
 // ═══════════════════════════════════════════════════════════════════════
-app.get('/api/admin/fleet/utilization', async(req, res) => {
+app.get('/api/admin/fleet/utilization', async (req, res) => {
     try {
         const { period } = req.query; // today, week, month
         const cacheKey = `admin:fleet:${period || 'week'}`;
@@ -781,7 +834,7 @@ app.get('/api/admin/fleet/utilization', async(req, res) => {
 
         const totalDrivers = await User.countDocuments({ role: 'DRIVER' });
 
-        const result = await Promise.all(categories.map(async(cat) => {
+        const result = await Promise.all(categories.map(async (cat) => {
             const rides = await Ride.countDocuments({ vehicleCategory: cat, ...dateFilter });
             const completedRides = await Ride.countDocuments({ vehicleCategory: cat, status: 'COMPLETED', ...dateFilter });
             const distAgg = await Ride.aggregate([
@@ -817,22 +870,22 @@ app.get('/api/admin/fleet/utilization', async(req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 // 7. SUSTAINABILITY / ECO STATS (4.7)
 // ═══════════════════════════════════════════════════════════════════════
-app.get('/api/admin/eco/stats', async(req, res) => {
+app.get('/api/admin/eco/stats', async (req, res) => {
     try {
         const cached = await cacheGet('admin:eco-stats');
         if (cached) return res.json(cached);
 
         const monthlyAgg = await Ride.aggregate([{
-                $group: {
-                    _id: { $dateToString: { format: '%Y-%m', date: '$createdAt' } },
-                    co2Saved: { $sum: { $ifNull: ['$co2Saved', 0] } },
-                    co2Emitted: { $sum: { $ifNull: ['$co2Emissions', 0] } },
-                    poolSaved: { $sum: { $cond: ['$isPooled', { $ifNull: ['$co2Saved', 0] }, 0] } },
-                    greenTrips: { $sum: { $cond: [{ $gt: ['$co2Saved', 0] }, 1, 0] } },
-                }
-            },
-            { $sort: { _id: 1 } },
-            { $limit: 7 }
+            $group: {
+                _id: { $dateToString: { format: '%Y-%m', date: '$createdAt' } },
+                co2Saved: { $sum: { $ifNull: ['$co2Saved', 0] } },
+                co2Emitted: { $sum: { $ifNull: ['$co2Emissions', 0] } },
+                poolSaved: { $sum: { $cond: ['$isPooled', { $ifNull: ['$co2Saved', 0] }, 0] } },
+                greenTrips: { $sum: { $cond: [{ $gt: ['$co2Saved', 0] }, 1, 0] } },
+            }
+        },
+        { $sort: { _id: 1 } },
+        { $limit: 7 }
         ]);
 
         const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -859,7 +912,7 @@ app.get('/api/admin/eco/stats', async(req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 // 8. HISTORICAL RIDE LOGS FOR PATTERN ANALYSIS (4.6)
 // ═══════════════════════════════════════════════════════════════════════
-app.get('/api/admin/rides/patterns', async(req, res) => {
+app.get('/api/admin/rides/patterns', async (req, res) => {
     try {
         const cached = await cacheGet('admin:ride-patterns');
         if (cached) return res.json(cached);
@@ -905,7 +958,7 @@ function timeAgo(date) {
 // ═══════════════════════════════════════════════════════════════════════
 // 9. ML DEMAND PREDICTION (4.1.2, 4.6)
 // ═══════════════════════════════════════════════════════════════════════
-app.get('/api/admin/ml/predict-demand', async(req, res) => {
+app.get('/api/admin/ml/predict-demand', async (req, res) => {
     try {
         const { region, hour, day } = req.query;
         const targetHour = parseInt(hour) || new Date().getHours();
@@ -980,7 +1033,7 @@ app.get('/api/admin/ml/predict-demand', async(req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 // 10. BOTTLENECK ANALYSIS (4.6.2)
 // ═══════════════════════════════════════════════════════════════════════
-app.get('/api/admin/ml/bottlenecks', async(req, res) => {
+app.get('/api/admin/ml/bottlenecks', async (req, res) => {
     try {
         const cached = await cacheGet('admin:bottlenecks');
         if (cached) return res.json(cached);
@@ -1061,7 +1114,7 @@ app.get('/api/admin/ml/bottlenecks', async(req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 // 11. FLEET OPTIMIZATION INSIGHTS (4.6.3)
 // ═══════════════════════════════════════════════════════════════════════
-app.get('/api/admin/ml/fleet-insights', async(req, res) => {
+app.get('/api/admin/ml/fleet-insights', async (req, res) => {
     try {
         const cached = await cacheGet('admin:fleet-insights');
         if (cached) return res.json(cached);
@@ -1087,33 +1140,33 @@ app.get('/api/admin/ml/fleet-insights', async(req, res) => {
         const topCategory = (categoryAgg[0] && categoryAgg[0]._id) || 'CAR';
 
         const insights = [{
-                type: 'PEAK_DEMAND_DAYS',
-                title: 'Peak Demand Days',
-                value: peakDays.join(', '),
-                insight: `${peakDays[0]} has highest demand - schedule more drivers`,
-                impact: 'high'
-            },
-            {
-                type: 'PEAK_HOURS',
-                title: 'Rush Hour Windows',
-                value: `${peakHours[0]}:00 - ${peakHours[0] + 1}:00`,
-                insight: 'Pre-position drivers 30 mins before peak',
-                impact: 'high'
-            },
-            {
-                type: 'TOP_VEHICLE',
-                title: 'Most Requested Vehicle',
-                value: topCategory,
-                insight: `${topCategory} accounts for ${(categoryAgg[0] && categoryAgg[0].count) || 0} rides - ensure adequate supply`,
-                impact: 'medium'
-            },
-            {
-                type: 'REVENUE_OPPORTUNITY',
-                title: 'Revenue Optimization',
-                value: `₹${Math.round(((dayAgg[0] && dayAgg[0].revenue) || 0) / 100) * 100}/day potential`,
-                insight: 'Dynamic pricing during peak can increase revenue 15-20%',
-                impact: 'medium'
-            }
+            type: 'PEAK_DEMAND_DAYS',
+            title: 'Peak Demand Days',
+            value: peakDays.join(', '),
+            insight: `${peakDays[0]} has highest demand - schedule more drivers`,
+            impact: 'high'
+        },
+        {
+            type: 'PEAK_HOURS',
+            title: 'Rush Hour Windows',
+            value: `${peakHours[0]}:00 - ${peakHours[0] + 1}:00`,
+            insight: 'Pre-position drivers 30 mins before peak',
+            impact: 'high'
+        },
+        {
+            type: 'TOP_VEHICLE',
+            title: 'Most Requested Vehicle',
+            value: topCategory,
+            insight: `${topCategory} accounts for ${(categoryAgg[0] && categoryAgg[0].count) || 0} rides - ensure adequate supply`,
+            impact: 'medium'
+        },
+        {
+            type: 'REVENUE_OPPORTUNITY',
+            title: 'Revenue Optimization',
+            value: `₹${Math.round(((dayAgg[0] && dayAgg[0].revenue) || 0) / 100) * 100}/day potential`,
+            insight: 'Dynamic pricing during peak can increase revenue 15-20%',
+            impact: 'medium'
+        }
         ];
 
         const result = { insights, generatedAt: new Date().toISOString() };
