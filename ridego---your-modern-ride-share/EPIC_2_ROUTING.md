@@ -18,6 +18,9 @@ This epic focuses on minimizing travel time and environmental impact through int
 ### 3. Smart Re-routing
 - **Auto-Reroute**: System automatically checks for faster alternatives if delays exceed a preset threshold.
 - **User Choice**: Riders are often presented with the option to confirm a route change if multiple viable paths exist.
+
+## Note
+- Documentation touch-up: February 24, 2026 (no logic changes).
 - **Sustainability Flag**: Highlighting routes that are greener due to less idling time.
 
 ## Technical Architecture

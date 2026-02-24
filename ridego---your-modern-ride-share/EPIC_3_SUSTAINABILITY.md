@@ -18,6 +18,9 @@ This epic aims to motivate users to make eco-conscious travel choices by visuali
 - **Data Collection**: Logging basic acceleration and braking patterns (future input for eco-scores).
 - **Green Route Selection**: Marking routes with fewer stops/starts as "Eco-Friendly".
 
+## Note
+- Documentation touch-up: February 24, 2026 (no logic changes).
+
 ## Technical Architecture
 
 ### Frontend Components

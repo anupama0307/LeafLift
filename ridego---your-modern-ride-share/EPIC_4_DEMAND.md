@@ -19,6 +19,9 @@ This epic focuses on utilizing historical data and real-time trends to optimize 
 
 ## Technical Architecture
 
+## Note
+- Documentation touch-up: February 24, 2026 (no logic changes).
+
 ### Frontend Components
 - `DemandScreen.tsx` (Admin): Main interface for viewing prediction data.
 - `PoolingAnalytics.tsx` (Admin): Tracks pooling success rates and savings.
