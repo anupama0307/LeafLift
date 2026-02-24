@@ -29,7 +29,7 @@ const DemandScreen: React.FC = () => {
       if (regRes.ok) setRegions(await regRes.json());
       if (peakRes.ok) setPeaks(await peakRes.json());
       if (alertRes.ok) setAlerts(await alertRes.json());
-      try { const mlRes = await fetch('/api/admin/ml/predict-demand'); if (mlRes.ok) { const d = await mlRes.json(); setForecasts(d.predictions || []); } } catch {}
+      try { const mlRes = await fetch('/api/admin/ml/predict-demand'); if (mlRes.ok) { const d = await mlRes.json(); setForecasts(d.predictions || []); } } catch { }
     } catch (e) { console.error('Demand fetch error:', e); }
     finally {
       // Fallback data when server is unavailable
@@ -44,8 +44,8 @@ const DemandScreen: React.FC = () => {
         { name: 'Jaipur - MI Road', rides: 15, drivers: 18, deficit: -3, heatLevel: 'low', lat: 26.9124, lng: 75.7873 },
       ]);
       setPeaks(prev => prev.length ? prev : Array.from({ length: 24 }, (_, i) => {
-        const base = [8,5,3,2,3,7,18,42,65,48,32,28,25,22,27,35,48,68,58,40,30,22,15,10];
-        return { hour: i, count: base[i] + Math.floor(Math.random() * 6), isPeak: [7,8,9,17,18].includes(i) };
+        const base = [8, 5, 3, 2, 3, 7, 18, 42, 65, 48, 32, 28, 25, 22, 27, 35, 48, 68, 58, 40, 30, 22, 15, 10];
+        return { hour: i, count: base[i] + Math.floor(Math.random() * 6), isPeak: [7, 8, 9, 17, 18].includes(i) };
       }));
       setAlerts(prev => prev.length ? prev : [
         { id: 'a1', type: 'shortage', message: 'Critical driver shortage in Mumbai Andheri - 26 rides unmatched', severity: 'critical', region: 'Mumbai - Andheri', timestamp: new Date().toISOString(), acknowledged: false },
@@ -149,7 +149,7 @@ const DemandScreen: React.FC = () => {
   const unackAlerts = alerts.filter(a => !a.acknowledged);
 
   const handleAck = async (id: string) => {
-    try { const res = await fetch(`/api/admin/driver-alerts/${id}/acknowledge`, { method: 'PATCH' }); if (res.ok) setAlerts(prev => prev.map(a => a.id === id ? { ...a, acknowledged: true } : a)); } catch {}
+    try { const res = await fetch(`/api/admin/driver-alerts/${id}/acknowledge`, { method: 'PATCH' }); if (res.ok) setAlerts(prev => prev.map(a => a.id === id ? { ...a, acknowledged: true } : a)); } catch { }
   };
 
   if (loading) return <div className="flex items-center justify-center h-64"><div className="size-8 border-3 border-blue-500/20 border-t-blue-500 rounded-full animate-spin"></div></div>;
