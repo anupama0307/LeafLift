@@ -19,6 +19,9 @@ This epic aims to build user trust and prioritize safety as a core platform valu
 - **Accessibility Options**: Filtering for wheelchair-accessible vehicles.
 - **Driver Info**: Showing driver ratings and vehicle details explicitly before booking.
 
+## Note
+- Documentation touch-up: February 24, 2026 (no logic changes).
+
 ## Technical Architecture
 
 ### Frontend Components
