@@ -38,6 +38,9 @@ This epic focuses on enabling efficient ride-sharing by matching users with simi
 
 ## User Stories Status
 - [x] **1.1 Match users with similar directions** (Implemented Basic Matching)
+
+## Note
+- Documentation touch-up: February 24, 2026 (no logic changes).
 - [x] **1.2 Flexible pickup time windows** (Implemented Time Range Selector)
 - [x] **1.3 Occupancy indicator** (Implemented in Active Ride UI)
 - [x] **1.4 Compare savings** (Implemented Price Comparison UI)
