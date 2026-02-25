@@ -63,11 +63,22 @@ function isRideInPendingProposal(rideId) {
 const app = express();
 let PORT = parseInt(process.env.PORT, 10) || 5001;
 const httpServer = http.createServer(app);
+const allowedCorsOrigins = (process.env.CORS_ORIGIN || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+const isAllowedSocketOrigin = (origin) => {
+    if (!origin) return true;
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+    if (/^https?:\/\/[a-z0-9-]+\.ngrok(-free)?\.(app|dev)$/i.test(origin)) return true;
+    return allowedCorsOrigins.includes(origin);
+};
+
 const io = new Server(httpServer, {
     cors: {
         origin: (origin, callback) => {
-            // Allow any localhost origin (any port), plus no-origin requests (e.g. Postman, curl)
-            if (!origin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+            if (isAllowedSocketOrigin(origin)) {
                 callback(null, true);
             } else {
                 callback(new Error('Not allowed by CORS'));

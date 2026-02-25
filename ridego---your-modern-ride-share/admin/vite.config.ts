@@ -4,21 +4,29 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, path.resolve(__dirname, '..'), '');
+  const adminApiTarget = env.ADMIN_API_URL || 'http://localhost:5002';
+  const mlApiTarget = env.ML_API_URL || 'http://localhost:8000';
 
   return {
     server: {
-      port: 3006,
+      port: parseInt(env.ADMIN_DEV_PORT || '3006', 10),
       host: '0.0.0.0',
       proxy: {
         '/api/admin': {
-          target: 'http://localhost:5002',
+          target: adminApiTarget,
           changeOrigin: true,
           secure: false,
         },
         '/api/ml': {
-          target: 'http://localhost:8000',
+          target: mlApiTarget,
           changeOrigin: true,
           secure: false,
+        },
+        '/socket.io': {
+          target: adminApiTarget,
+          changeOrigin: true,
+          secure: false,
+          ws: true,
         }
       }
     },

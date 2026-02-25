@@ -4,6 +4,7 @@ import HeatmapModal from './HeatmapModal';
 import MLInsightsPanel from './MLInsightsPanel';
 
 const API = '/api/admin';
+const ADMIN_SOCKET_URL = import.meta.env.VITE_ADMIN_SOCKET_URL || window.location.origin;
 
 interface Stats {
   totalRides: number;
@@ -66,7 +67,7 @@ const DashboardHome: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const socketInstance = io('http://localhost:5002', { transports: ['websocket', 'polling'] });
+    const socketInstance = io(ADMIN_SOCKET_URL, { transports: ['websocket', 'polling'] });
     socketInstance.on('stats-update', (data: RealtimeUpdate) => { setRealtimeData(data); setLastUpdate(new Date()); });
     setSocket(socketInstance);
     return () => { socketInstance.disconnect(); };
