@@ -797,6 +797,25 @@ app.put('/api/users/:userId', async (req, res) => {
     }
 });
 
+// Delete user account
+app.delete('/api/users/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const user = await User.findByIdAndDelete(userId);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        // Cleanup related data
+        await Ride.deleteMany({ $or: [{ riderId: userId }, { driverId: userId }] });
+        await Notification.deleteMany({ userId: userId });
+
+        console.log(`🗑️ Account deleted: ${user.email} (${userId})`);
+        res.json({ message: 'Account deleted successfully' });
+    } catch (error) {
+        console.error('Delete account error:', error);
+        res.status(500).json({ message: 'Error deleting account' });
+    }
+});
+
 // ── Driver Daily Route ──
 app.post('/api/driver/route', async (req, res) => {
     console.log('📬 Received route update request:', JSON.stringify(req.body, null, 2));
@@ -1378,6 +1397,8 @@ app.get('/api/driver/:userId/active-ride', async (req, res) => {
                 vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                 photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
                 isVerified: driver.isVerified,
+                upiId: driver.upiId,
+                upiQrCodeUrl: driver.upiQrCodeUrl,
                 maskedPhone: maskPhone(driver.phone)
             } : null,
             rider: rider ? {
@@ -1414,6 +1435,8 @@ app.get('/api/rider/:userId/active-ride', async (req, res) => {
                 vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                 photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
                 isVerified: driver.isVerified,
+                upiId: driver.upiId,
+                upiQrCodeUrl: driver.upiQrCodeUrl,
                 maskedPhone: maskPhone(driver.phone)
             } : null,
             rider: rider ? {
@@ -1982,6 +2005,8 @@ app.post('/api/rides/:rideId/accept', async (req, res) => {
                         vehicle: [driver.vehicleMake || 'Car', driver.vehicleModel || ''].filter(Boolean).join(' '),
                         vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                         photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
+                        upiId: driver.upiId,
+                        upiQrCodeUrl: driver.upiQrCodeUrl,
                         maskedPhone: maskPhone(driver.phone)
                     } : null,
                     rider: groupRider ? {
@@ -2008,6 +2033,8 @@ app.post('/api/rides/:rideId/accept', async (req, res) => {
                 vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                 photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
                 isVerified: driver.isVerified,
+                upiId: driver.upiId,
+                upiQrCodeUrl: driver.upiQrCodeUrl,
                 maskedPhone: maskPhone(driver.phone)
             } : null,
             rider: rider ? {

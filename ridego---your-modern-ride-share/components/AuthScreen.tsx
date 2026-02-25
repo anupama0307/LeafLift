@@ -295,6 +295,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     }
   };
 
+  /* 
+  // handleNext is currently unused and was causing lint errors due to missing state
   const handleNext = () => {
     if (step === 'NAME') setStep('DOB');
     else if (step === 'DOB') setStep('GENDER');
@@ -309,6 +311,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
       handleSignup({ role, firstName, lastName, phone, dob, gender, license, licenseUrl, aadhar, aadharUrl });
     }
   };
+  */
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, type: 'license' | 'aadhar') => {
     const file = e.target.files?.[0];
@@ -328,11 +331,27 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     setError(null);
 
     try {
-      // If not OAuth user, create Firebase account
+      // 1. Firebase Auth Step
       if (!oauthUser) {
-        await createUserWithEmailAndPassword(auth, email, password);
+        try {
+          await createUserWithEmailAndPassword(auth, email, password);
+        } catch (fbErr: any) {
+          // If already in Firebase, it might be a "ghost" user (deleted from DB but not Firebase)
+          if (fbErr.code === 'auth/email-already-in-use') {
+            console.log('User already exists in Firebase. Attempting to sign in to sync with database...');
+            try {
+              await signInWithEmailAndPassword(auth, email, password);
+            } catch (signInErr: any) {
+              // Password mismatch or other issue
+              throw fbErr;
+            }
+          } else {
+            throw fbErr;
+          }
+        }
       }
 
+      // 2. Database Record Step
       const userData: any = {
         role,
         firstName,
@@ -355,11 +374,13 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(userData),
       });
+
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Signup failed');
 
       onAuthSuccess(data.user);
     } catch (err: any) {
+      console.error('Signup process error:', err);
       if (err.code === 'auth/email-already-in-use') {
         setError('Email already registered. Try signing in instead.');
       } else {
@@ -631,18 +652,16 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
         <div className="flex gap-3">
           <button
             onClick={() => setRole('RIDER')}
-            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${
-              role === 'RIDER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
-            }`}
+            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${role === 'RIDER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
+              }`}
           >
             <span className="material-icons-outlined">directions_car</span>
             Rider
           </button>
           <button
             onClick={() => setRole('DRIVER')}
-            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${
-              role === 'DRIVER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
-            }`}
+            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${role === 'DRIVER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
+              }`}
           >
             <span className="material-icons-outlined">local_taxi</span>
             Driver
@@ -748,9 +767,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
               <button
                 key={g}
                 onClick={() => setGender(g)}
-                className={`h-12 rounded-xl flex items-center justify-center font-bold text-sm border-2 transition-all ${
-                  gender === g ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-transparent bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
-                }`}
+                className={`h-12 rounded-xl flex items-center justify-center font-bold text-sm border-2 transition-all ${gender === g ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-transparent bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
+                  }`}
               >
                 {g}
               </button>
@@ -908,18 +926,16 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
         <div className="flex gap-3">
           <button
             onClick={() => setRole('RIDER')}
-            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${
-              role === 'RIDER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
-            }`}
+            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${role === 'RIDER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
+              }`}
           >
             <span className="material-icons-outlined">directions_car</span>
             Rider
           </button>
           <button
             onClick={() => setRole('DRIVER')}
-            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${
-              role === 'DRIVER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
-            }`}
+            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${role === 'DRIVER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
+              }`}
           >
             <span className="material-icons-outlined">local_taxi</span>
             Driver
@@ -984,9 +1000,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
               <button
                 key={g}
                 onClick={() => setGender(g)}
-                className={`h-12 rounded-xl flex items-center justify-center font-bold text-sm border-2 transition-all ${
-                  gender === g ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-transparent bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
-                }`}
+                className={`h-12 rounded-xl flex items-center justify-center font-bold text-sm border-2 transition-all ${gender === g ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-transparent bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
+                  }`}
               >
                 {g}
               </button>

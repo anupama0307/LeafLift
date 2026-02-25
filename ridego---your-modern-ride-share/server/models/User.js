@@ -30,6 +30,8 @@ const userSchema = new mongoose.Schema({
     isVerified: { type: Boolean, default: false },
     verificationStatus: { type: String, enum: ['PENDING', 'APPROVED', 'REJECTED'], default: 'PENDING' },
     verificationDate: { type: Date },
+    upiId: { type: String },
+    upiQrCodeUrl: { type: String },
     accessibilitySupport: [String], // e.g. ['Wheelchair', 'Hearing Impaired Assistance']
     // Wallet
     walletBalance: { type: Number, default: 0 },
