@@ -136,3 +136,9 @@ The project execution followed an agile methodology with iterative development a
     ```bash
     npm test
     ```
+
+## Best Practices & Security
+
+-   **Environment Variables**: Never commit your `.env` file containing sensitive API keys. Use the provided `.env.example` as a template.
+-   **Code Consistency**: We follow standard TypeScript and React patterns. Consistency in naming and structure helps maintain the codebase.
+-   **Security**: All backend endpoints are protected via JWT or Firebase authentication where necessary. Ensure to validate all incoming data to prevent security vulnerabilities.
