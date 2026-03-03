@@ -78,6 +78,22 @@ const io = new Server(httpServer, {
 
 const onlineDrivers = new Map();
 
+// Helper to update driver busy status
+const setDriverBusy = (driverId, isBusy) => {
+    if (!driverId) return;
+    const sId = driverId.toString();
+    const entry = onlineDrivers.get(sId);
+    if (entry) {
+        entry.isBusy = isBusy;
+        onlineDrivers.set(sId, entry);
+        console.log(`📡 Driver ${sId} isBusy set to: ${isBusy}`);
+    } else {
+        // Even if not online, track busy status if we can (though unlikely to be helpful without socket)
+        onlineDrivers.set(sId, { socketIds: new Set(), location: null, isBusy });
+    }
+};
+
+
 const maskPhone = (phone) => {
     if (!phone) return 'XXXXXX';
     const cleaned = phone.toString();
@@ -109,18 +125,38 @@ app.use(cors());
 app.use(express.json());
 
 io.on('connection', (socket) => {
-    socket.on('register', ({ userId, role }) => {
-        if (userId) {
-            socket.data.userId = userId;
-            socket.join(`user:${userId}`);
-        }
+    socket.on('register', async ({ userId, role }) => {
+        if (!userId) return;
+        const sId = userId.toString();
+        socket.data.userId = sId;
+        socket.join(`user:${sId}`);
+
         if (role === 'DRIVER') {
             socket.data.role = 'DRIVER';
             socket.join('drivers:online');
-            // Track this socket in onlineDrivers so location-filtered emits work
-            const entry = onlineDrivers.get(userId) || { socketIds: new Set(), location: null };
+
+            let isBusy = false;
+            try {
+                // Check if this driver already has an active ride to restore isBusy=true
+                const activeRideCount = await Ride.countDocuments({
+                    driverId: sId,
+                    status: { $in: ['ACCEPTED', 'ARRIVED', 'IN_PROGRESS'] }
+                });
+                isBusy = activeRideCount > 0;
+            } catch (err) {
+                console.error('Error checking active rides on register:', err);
+                // Fallback: stay as-is or default to false
+            }
+
+            const entry = onlineDrivers.get(sId) || {
+                socketIds: new Set(),
+                location: null
+            };
+            entry.isBusy = isBusy;
             entry.socketIds.add(socket.id);
-            onlineDrivers.set(userId, entry);
+            onlineDrivers.set(sId, entry);
+
+            console.log(`🚗 Driver ${sId} registered (Busy: ${entry.isBusy})`);
         }
         if (role === 'RIDER') {
             socket.data.role = 'RIDER';
@@ -138,16 +174,18 @@ io.on('connection', (socket) => {
 
     socket.on('driver:location', ({ driverId, lat, lng }) => {
         if (!driverId || typeof lat !== 'number' || typeof lng !== 'number') return;
-        const entry = onlineDrivers.get(driverId) || { socketIds: new Set(), location: null, lastUpdate: 0 };
+        const sId = driverId.toString();
+        const entry = onlineDrivers.get(sId) || { socketIds: new Set(), location: null, lastUpdate: 0, isBusy: false };
 
         // Throttle: max 1 update per second to prevent flooding
         const now = Date.now();
-        if (now - (entry.lastUpdate || 0) < 1000) return;
-
-        entry.location = { lat, lng, updatedAt: new Date() };
+        if (now - entry.lastUpdate < 1000) return;
         entry.lastUpdate = now;
-        onlineDrivers.set(driverId, entry);
-        io.to('riders:online').emit('nearby:driver:update', { driverId, lat, lng });
+        entry.location = { lat, lng };
+        onlineDrivers.set(sId, entry);
+        if (!entry.isBusy) {
+            io.to('riders:online').emit('nearby:driver:update', { driverId, lat, lng });
+        }
     });
 
     socket.on('driver:offline', ({ driverId }) => {
@@ -170,6 +208,7 @@ io.on('connection', (socket) => {
 
         // Send only to drivers within radius instead of broadcasting to all
         for (const [driverId, entry] of onlineDrivers.entries()) {
+            if (entry.isBusy === true) continue;
             if (!entry.location || typeof entry.location.lat !== 'number') {
                 // Driver has no GPS yet, skip
                 continue;
@@ -345,6 +384,7 @@ async function confirmPoolMatch(proposal, io) {
         if (rideB.pickup && typeof rideB.pickup.lat === 'number' && typeof rideB.pickup.lng === 'number') {
             let sentCount = 0;
             for (const [driverId, entry] of onlineDrivers.entries()) {
+                if (entry.isBusy === true) continue;
                 if (!entry.location || typeof entry.location.lat !== 'number') continue;
                 const dist = getDistanceKm(entry.location.lat, entry.location.lng, rideB.pickup.lat, rideB.pickup.lng);
                 if (dist !== null && dist <= RIDE_BROADCAST_RADIUS_KM) {
@@ -356,7 +396,13 @@ async function confirmPoolMatch(proposal, io) {
             }
             console.log(`🤝 Pool ride:request sent to ${sentCount} nearby drivers (${poolPayload.poolGroupRiders.length} riders, ₹${poolPayload.fare})`);
         } else {
-            io.to('drivers:online').emit('ride:request', poolPayload);
+            // Fallback: broadcast to all online drivers who are NOT busy
+            for (const [driverId, entry] of onlineDrivers.entries()) {
+                if (entry.isBusy === true) continue;
+                for (const sid of entry.socketIds) {
+                    io.to(sid).emit('ride:request', poolPayload);
+                }
+            }
         }
     } catch (err) {
         console.error('❌ confirmPoolMatch error:', err);
@@ -385,6 +431,7 @@ async function broadcastIndividualRide(rideId, io) {
         if (ride.pickup && typeof ride.pickup.lat === 'number' && typeof ride.pickup.lng === 'number') {
             let sentCount = 0;
             for (const [driverId, entry] of onlineDrivers.entries()) {
+                if (entry.isBusy === true) continue;
                 if (!entry.location || typeof entry.location.lat !== 'number') continue;
                 const dist = getDistanceKm(entry.location.lat, entry.location.lng, ride.pickup.lat, ride.pickup.lng);
                 if (dist !== null && dist <= RIDE_BROADCAST_RADIUS_KM) {
@@ -396,7 +443,13 @@ async function broadcastIndividualRide(rideId, io) {
             }
             console.log(`📡 Re-broadcast ride ${rideId} to ${sentCount} nearby drivers`);
         } else {
-            io.to('drivers:online').emit('ride:request', ridePayload);
+            // Fallback: broadcast to all online drivers who are NOT busy
+            for (const [driverId, entry] of onlineDrivers.entries()) {
+                if (entry.isBusy === true) continue;
+                for (const sid of entry.socketIds) {
+                    io.to(sid).emit('ride:request', ridePayload);
+                }
+            }
         }
     } catch (err) {
         console.error('❌ broadcastIndividualRide error:', err);
@@ -1067,6 +1120,7 @@ app.post('/api/rides', async (req, res) => {
             if (ride.pickup && typeof ride.pickup.lat === 'number' && typeof ride.pickup.lng === 'number') {
                 let sentCount = 0;
                 for (const [driverId, entry] of onlineDrivers.entries()) {
+                    if (entry.isBusy === true) continue;
                     if (!entry.location || typeof entry.location.lat !== 'number') continue;
                     const dist = getDistanceKm(entry.location.lat, entry.location.lng, ride.pickup.lat, ride.pickup.lng);
                     if (dist !== null && dist <= RIDE_BROADCAST_RADIUS_KM) {
@@ -1078,7 +1132,13 @@ app.post('/api/rides', async (req, res) => {
                 }
                 console.log(`ride:request sent to ${sentCount} nearby drivers (within ${RIDE_BROADCAST_RADIUS_KM}km)`);
             } else {
-                io.to('drivers:online').emit('ride:request', ridePayload);
+                // Fallback: broadcast to all online drivers who are NOT busy
+                for (const [driverId, entry] of onlineDrivers.entries()) {
+                    if (entry.isBusy === true) continue;
+                    for (const sid of entry.socketIds) {
+                        io.to(sid).emit('ride:request', ridePayload);
+                    }
+                }
             }
         }
 
@@ -1236,12 +1296,12 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
             const result = isRiderOnRoute(ride.routePolyline, riderPickup, riderDropoff, bufferKmNum);
             if (result.match) {
                 const riderInfo = ride.userId || {};
-                
+
                 // Filter by gender preference
                 if (genderPreference && genderPreference !== 'any') {
                     const rideGenderPref = ride.safetyPreferences?.genderPreference || 'any';
                     const riderGender = riderInfo.gender?.toLowerCase();
-                    
+
                     // Skip if gender preferences don't match
                     if (rideGenderPref !== 'any' && rideGenderPref !== genderPreference) {
                         continue;
@@ -1250,7 +1310,7 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
                         continue;
                     }
                 }
-                
+
                 matched.push({
                     _id: ride._id,
                     rideId: ride._id,
@@ -1292,12 +1352,12 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
             const dropoffDist = getDistanceKm(destLatNum, destLngNum, ride.dropoff.lat, ride.dropoff.lng);
             if (pickupDist !== null && pickupDist <= 3 && dropoffDist !== null && dropoffDist <= 3) {
                 const riderInfo = ride.userId || {};
-                
+
                 // Filter by gender preference
                 if (genderPreference && genderPreference !== 'any') {
                     const rideGenderPref = ride.safetyPreferences?.genderPreference || 'any';
                     const riderGender = riderInfo.gender?.toLowerCase();
-                    
+
                     // Skip if gender preferences don't match
                     if (rideGenderPref !== 'any' && rideGenderPref !== genderPreference) {
                         continue;
@@ -1306,7 +1366,7 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
                         continue;
                     }
                 }
-                
+
                 matched.push({
                     _id: ride._id,
                     rideId: ride._id,
@@ -1409,6 +1469,10 @@ app.post('/api/rides/:rideId/cancel', async (req, res) => {
         }
         await ride.save();
 
+        if (previousDriverId) {
+            setDriverBusy(previousDriverId, false);
+        }
+
         // Notify the other party via socket
         const cancelPayload = {
             rideId: ride._id,
@@ -1493,8 +1557,8 @@ app.post('/api/rides/:rideId/cancel', async (req, res) => {
                 const excludeDriverIds = new Set((reSearchRide.previousDriverIds || []).map(id => id.toString()));
 
                 for (const [driverId, entry] of onlineDrivers.entries()) {
-                    // Skip the driver who just canceled
-                    if (excludeDriverIds.has(driverId)) continue;
+                    // Skip the driver who just canceled or any busy driver
+                    if (excludeDriverIds.has(driverId) || entry.isBusy === true) continue;
                     if (!entry.location || typeof entry.location.lat !== 'number') continue;
 
                     const dist = getDistanceKm(
@@ -1568,10 +1632,11 @@ app.post('/api/drivers/online', async (req, res) => {
     const { driverId, location } = req.body;
     if (!driverId) return res.status(400).json({ message: 'driverId required' });
 
-    const entry = onlineDrivers.get(driverId) || { socketIds: new Set(), location: null };
+    const sId = driverId.toString();
+    const entry = onlineDrivers.get(sId) || { socketIds: new Set(), location: null, isBusy: false };
     if (req.body.socketId) entry.socketIds.add(req.body.socketId);
     entry.location = location || entry.location;
-    onlineDrivers.set(driverId, entry);
+    onlineDrivers.set(sId, entry);
     res.json({ ok: true, onlineDrivers: onlineDrivers.size });
 });
 
@@ -1604,6 +1669,9 @@ app.post('/api/rides/:rideId/accept', async (req, res) => {
         ride.driverId = driverId;
         ride.status = 'ACCEPTED';
         ride.etaToPickup = etaToPickup;
+
+        // Mark driver as busy
+        setDriverBusy(driverId, true);
 
         // Store original ETA as baseline for delay detection
         const etaMatch = etaToPickup && etaToPickup.match(/(\d+)/);
@@ -1900,6 +1968,9 @@ app.post('/api/rides/:rideId/pool-stop-reached', async (req, res) => {
         if (allDropoffsComplete) {
             ride.status = 'COMPLETED';
             await ride.save();
+
+            // Mark driver as free
+            if (ride.driverId) setDriverBusy(ride.driverId, false);
         }
 
         // Notify all riders in this pool group about progress
@@ -2066,6 +2137,9 @@ app.post('/api/rides/:rideId/complete', async (req, res) => {
         ride.paymentStatus = 'PAID';
         ride.riderConfirmedComplete = false; // Will be confirmed by rider
         await ride.save();
+
+        // Mark driver as free
+        if (ride.driverId) setDriverBusy(ride.driverId, false);
 
         // Emit confirmation request to rider
         const distStr = ride.distance || '0';
@@ -2354,6 +2428,9 @@ app.post('/api/rides/:rideId/confirm-complete', async (req, res) => {
             ride.currentFare = ride.completedFare || ride.currentFare;
             await ride.save();
 
+            // Mark driver as free
+            if (ride.driverId) setDriverBusy(ride.driverId, false);
+
             // Update user stats
             const distKm = (ride.actualDistanceMeters || 0) / 1000;
             await User.findByIdAndUpdate(ride.userId, {
@@ -2473,7 +2550,7 @@ app.get('/api/drivers/nearby', async (req, res) => {
 
         const drivers = [];
         for (const [driverId, entry] of onlineDrivers.entries()) {
-            if (!entry.location) continue;
+            if (entry.isBusy || !entry.location) continue;
             const dist = getDistanceKm(latNum, lngNum, entry.location.lat, entry.location.lng);
             if (dist !== null && dist <= radiusNum) {
                 drivers.push({ driverId, location: entry.location, distance: Math.round(dist * 10) / 10 });
