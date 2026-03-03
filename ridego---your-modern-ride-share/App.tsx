@@ -14,14 +14,18 @@ import { auth } from './src/firebase';
 import { signOut } from 'firebase/auth';
 
 const App: React.FC = () => {
+  // Application Authentication State
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [user, setUser] = useState<any>(null);
+
+  // Navigation and UI State
   const [currentScreen, setCurrentScreen] = useState<AppScreen>(AppScreen.AUTH);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [selectedVehicleCategory, setSelectedVehicleCategory] = useState<string | undefined>(undefined);
   const [scheduleInfo, setScheduleInfo] = useState<{ scheduledFor: string; forName?: string; forPhone?: string } | undefined>(undefined);
 
+  // Load user session from local storage on initial mount
   useEffect(() => {
     const savedUser = localStorage.getItem('leaflift_user');
     if (savedUser) {
