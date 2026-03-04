@@ -199,9 +199,10 @@ io.on('connection', (socket) => {
         if (!rideId || !pickup || !pickup.lat || !pickup.lng) return;
         socket.data.searchRideId = rideId;
 
-        // Broadcast ALL rides (including pooled) to nearby drivers so they are visible
-        // during the pool proposal acceptance window. Once both riders accept,
-        // confirmPoolMatch() will remove individual rides and send the combined pool request.
+        // Don't broadcast individual pooled rides to drivers via rider:search.
+        // Pooled rides are sent to drivers as a combined "2 riders" request
+        // after BOTH riders accept the pool proposal (via confirmPoolMatch → ride:request).
+        if (isPooled) return;
 
         const NEARBY_RADIUS_KM = 6;
         const payload = { rideId, riderId, pickup, dropoff, fare, isPooled };
@@ -351,9 +352,6 @@ async function confirmPoolMatch(proposal, io) {
             message: 'Pool confirmed! Searching for a driver...'
         });
 
-        // Remove individual ride requests from drivers before sending combined pool ride
-        io.to('drivers:online').emit('nearby:rider:remove', { rideId: rideAId.toString() });
-        io.to('drivers:online').emit('nearby:rider:remove', { rideId: rideBId.toString() });
 
         // Now broadcast consolidated pool ride request to nearby drivers
         const RIDE_BROADCAST_RADIUS_KM = 6;
@@ -1832,7 +1830,7 @@ app.get('/api/rides/nearby', async (req, res) => {
         const rides = await Ride.find({
             status: 'SEARCHING',
             createdAt: { $gte: staleThreshold }
-        }).sort({ bookingTime: -1 });
+        }).populate('userId', 'firstName lastName').sort({ bookingTime: -1 });
 
         // Auto-cancel old stale SEARCHING rides
         await Ride.updateMany(
@@ -1847,16 +1845,53 @@ app.get('/api/rides/nearby', async (req, res) => {
         // Filter out rides that are in pending pool proposals (not yet confirmed)
         const nonPendingRides = rides.filter(ride => !isRideInPendingProposal(ride._id));
 
+        let resultRides = nonPendingRides;
         if (latNum !== null && lngNum !== null) {
-            const filtered = nonPendingRides.filter((ride) => {
+            resultRides = nonPendingRides.filter((ride) => {
                 if (!ride.pickup || typeof ride.pickup.lat !== 'number') return false;
                 const dist = getDistanceKm(latNum, lngNum, ride.pickup.lat, ride.pickup.lng);
                 return dist !== null && dist <= radiusNum;
             });
-            return res.json(filtered);
         }
 
-        res.json(nonPendingRides);
+        // Group confirmed pool rides (those with a poolGroupId) into combined entries
+        const poolGroups = new Map();
+        const finalRides = [];
+        for (const ride of resultRides) {
+            if (ride.poolGroupId) {
+                if (!poolGroups.has(ride.poolGroupId)) {
+                    poolGroups.set(ride.poolGroupId, []);
+                }
+                poolGroups.get(ride.poolGroupId).push(ride);
+            } else {
+                finalRides.push(ride);
+            }
+        }
+
+        // Convert pool groups into combined ride entries
+        for (const [groupId, groupRides] of poolGroups.entries()) {
+            const primaryRide = groupRides[0];
+            const totalFare = groupRides.reduce((sum, r) => sum + (r.currentFare || r.fare || 0), 0);
+            const combinedRide = {
+                ...primaryRide.toObject(),
+                fare: totalFare,
+                currentFare: totalFare,
+                isPooled: true,
+                poolGroupId: groupId,
+                poolGroupRiders: groupRides.map(r => {
+                    const rUser = r.userId;
+                    return {
+                        name: rUser?.firstName ? `${rUser.firstName} ${rUser.lastName || ''}`.trim() : 'Rider',
+                        pickup: r.pickup,
+                        dropoff: r.dropoff,
+                        rideId: r._id.toString()
+                    };
+                })
+            };
+            finalRides.push(combinedRide);
+        }
+
+        res.json(finalRides);
     } catch (error) {
         console.error('Error fetching nearby rides:', error);
         res.status(500).json({ message: 'Error fetching nearby rides', details: error.message });
