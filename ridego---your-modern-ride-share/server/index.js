@@ -1824,7 +1824,7 @@ app.get('/api/rides/driver/:driverId', async (req, res) => {
  *               items:
  *                 $ref: '#/components/schemas/Ride'
  */
-app.get('/api/rides/nearby', authenticateToken, async (req, res) => {
+app.get('/api/rides/nearby', async (req, res) => {
     try {
         const { lat, lng, radius = 6 } = req.query;
         // Only return rides created in the last 5 minutes to avoid stale requests
