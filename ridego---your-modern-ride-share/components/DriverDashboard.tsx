@@ -238,11 +238,21 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
         fare: payload.fare,
         isPooled: payload.isPooled
       };
-      if (!isWithinRadius(request)) {
-        removeRequestMarker(request.rideId);
-        setRequests((prev) => prev.filter((r) => r.rideId !== request.rideId));
-        if (selectedRequest?.rideId === request.rideId) setSelectedRequest(null);
-        return;
+      // Use driverLocationRef to avoid stale closure (driverLocation is null at mount)
+      const loc = driverLocationRef.current;
+      if (loc && request.pickup && typeof request.pickup.lat === 'number') {
+        const R = 6371;
+        const toR = (v: number) => (v * Math.PI) / 180;
+        const dLat = toR(request.pickup.lat - loc.lat);
+        const dLon = toR(request.pickup.lng - loc.lng);
+        const a = Math.sin(dLat / 2) ** 2 + Math.cos(toR(loc.lat)) * Math.cos(toR(request.pickup.lat)) * Math.sin(dLon / 2) ** 2;
+        const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        if (dist > 6) {
+          removeRequestMarker(request.rideId);
+          setRequests((prev) => prev.filter((r) => r.rideId !== request.rideId));
+          setSelectedRequest(prev => (prev?.rideId === request.rideId ? null : prev));
+          return;
+        }
       }
       addOrUpdateRequestMarker(request);
       setRequests((prev) => {

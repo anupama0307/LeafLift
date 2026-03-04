@@ -199,10 +199,9 @@ io.on('connection', (socket) => {
         if (!rideId || !pickup || !pickup.lat || !pickup.lng) return;
         socket.data.searchRideId = rideId;
 
-        // NEVER broadcast pooled rides to drivers via rider:search
-        // Pooled rides are only sent to drivers after BOTH riders accept the pool proposal
-        // via confirmPoolMatch(). Drivers should never see individual pool rides.
-        if (isPooled) return;
+        // Broadcast ALL rides (including pooled) to nearby drivers so they are visible
+        // during the pool proposal acceptance window. Once both riders accept,
+        // confirmPoolMatch() will remove individual rides and send the combined pool request.
 
         const NEARBY_RADIUS_KM = 6;
         const payload = { rideId, riderId, pickup, dropoff, fare, isPooled };
@@ -351,6 +350,10 @@ async function confirmPoolMatch(proposal, io) {
             poolFare: riderBFare,
             message: 'Pool confirmed! Searching for a driver...'
         });
+
+        // Remove individual ride requests from drivers before sending combined pool ride
+        io.to('drivers:online').emit('nearby:rider:remove', { rideId: rideAId.toString() });
+        io.to('drivers:online').emit('nearby:rider:remove', { rideId: rideBId.toString() });
 
         // Now broadcast consolidated pool ride request to nearby drivers
         const RIDE_BROADCAST_RADIUS_KM = 6;
