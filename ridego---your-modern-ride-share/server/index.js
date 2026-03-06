@@ -67,7 +67,7 @@ const io = new Server(httpServer, {
     cors: {
         origin: [
             "https://leaflift-production.up.railway.app", // Railway backend
-            "https://your-frontend-domain.com", // Replace with your actual frontend domain
+            "https://leafliftvercel.vercel.app/", // Replace with your actual frontend domain
             /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/ // Localhost for dev
         ],
         methods: ['GET', 'POST', 'PUT'],
