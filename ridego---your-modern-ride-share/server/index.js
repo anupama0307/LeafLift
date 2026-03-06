@@ -65,14 +65,11 @@ let PORT = parseInt(process.env.PORT, 10) || 5001;
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
     cors: {
-        origin: (origin, callback) => {
-            // Allow any localhost origin (any port), plus no-origin requests (e.g. Postman, curl)
-            if (!origin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
-                callback(null, true);
-            } else {
-                callback(new Error('Not allowed by CORS'));
-            }
-        },
+        origin: [
+            "https://leaflift-production.up.railway.app", // Railway backend
+            "https://your-frontend-domain.com", // Replace with your actual frontend domain
+            /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/ // Localhost for dev
+        ],
         methods: ['GET', 'POST', 'PUT'],
         credentials: true
     }
