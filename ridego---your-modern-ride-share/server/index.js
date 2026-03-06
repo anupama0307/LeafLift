@@ -1,4 +1,43 @@
-﻿const express = require('express');
+﻿// Get scheduled rides for a user
+app.get('/api/rides/scheduled/:userId', async (req, res) => {
+    try {
+        const userId = req.params.userId;
+        // Replace with your Ride model and query logic
+        const scheduledRides = await Ride.find({ user: userId, status: 'scheduled' });
+        res.json(scheduledRides);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching scheduled rides', error: error.message });
+    }
+});
+
+// Get nearby rides for drivers
+app.get('/api/rides/nearby', async (req, res) => {
+    try {
+        const { lat, lng, radius = 6 } = req.query;
+        const latNum = Number(lat);
+        const lngNum = Number(lng);
+        const radiusNum = Number(radius) || 6;
+
+        if (isNaN(latNum) || isNaN(lngNum)) {
+            return res.status(400).json({ message: 'lat and lng required' });
+        }
+
+        // Replace with your Ride model and geospatial query logic
+        const nearbyRides = await Ride.find({
+            status: 'pending',
+            'pickup.location': {
+                $near: {
+                    $geometry: { type: 'Point', coordinates: [lngNum, latNum] },
+                    $maxDistance: radiusNum * 1000
+                }
+            }
+        });
+        res.json(nearbyRides);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching nearby rides', error: error.message });
+    }
+});
+const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
