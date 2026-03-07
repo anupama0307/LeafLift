@@ -35,3 +35,8 @@ jobs:
       - name: Run backend tests
         working-directory: ./ridego---your-modern-ride-share/server
         run: npm test
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          OLA_MAPS_API_KEY: ${{ secrets.OLA_MAPS_API_KEY }}
+          OTP_EMAIL_USER: ${{ secrets.OTP_EMAIL_USER }}
+          OTP_EMAIL_PASS: ${{ secrets.OTP_EMAIL_PASS }}
