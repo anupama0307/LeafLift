@@ -20,6 +20,7 @@ vi.mock('firebase/auth', () => ({
     createUserWithEmailAndPassword: vi.fn(),
     signInWithPopup: vi.fn(),
     GoogleAuthProvider: vi.fn(),
+    getRedirectResult: vi.fn().mockResolvedValue(null),
 }));
 
 // Mock socket.io-client
