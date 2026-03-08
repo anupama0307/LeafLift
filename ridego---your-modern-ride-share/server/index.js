@@ -33,13 +33,24 @@ setInterval(() => {
 }, 10 * 60 * 1000);
 
 // Email transporter for sending OTPs
+const smtpLookup = (hostname, options, callback) => {
+    dns.lookup(hostname, { family: 4, all: false }, callback);
+};
+
 const emailTransporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST || 'smtp.gmail.com',
     port: Number(process.env.SMTP_PORT || 587),
     secure: String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true',
+    family: 4,
+    lookup: smtpLookup,
+    connectionTimeout: 20000,
+    greetingTimeout: 20000,
+    socketTimeout: 30000,
+    dnsTimeout: 10000,
     requireTLS: true,
     tls: {
         family: 4,
+        servername: process.env.SMTP_HOST || 'smtp.gmail.com',
     },
     auth: {
         user: process.env.OTP_EMAIL_USER,
