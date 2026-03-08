@@ -53,7 +53,7 @@ jobs:
       - name: Deploy backend to Railway
         run: |
           npm install -g @railway/cli
-          railway up --no-cache
+          railway up
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         working-directory: ./ridego---your-modern-ride-share/server
