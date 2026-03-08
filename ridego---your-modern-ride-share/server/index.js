@@ -864,13 +864,20 @@ app.post('/api/send-otp', async (req, res) => {
             </div>
         `;
 
+        const otpBypassEnabled = String(process.env.OTP_BYPASS_FOR_DEMO || 'false').toLowerCase() === 'true';
+        if (otpBypassEnabled) {
+            console.log(`📧 [DEMO-BYPASS] OTP for ${email}: ${otp}`);
+            return res.json({ message: 'OTP generated (demo mode)', demoOtp: otp });
+        }
+
         let sent = false;
         let lastError = null;
 
         if (process.env.OTP_EMAIL_USER && process.env.OTP_EMAIL_PASS) {
             try {
+                const smtpFrom = process.env.OTP_FROM_EMAIL || process.env.OTP_EMAIL_USER;
                 await emailTransporter.sendMail({
-                    from: `"LeafLift" <${process.env.OTP_EMAIL_USER}>`,
+                    from: `"LeafLift" <${smtpFrom}>`,
                     to: email,
                     subject: 'LeafLift - Email Verification OTP',
                     html: emailHtml,
