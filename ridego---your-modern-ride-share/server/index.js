@@ -864,16 +864,57 @@ app.post('/api/send-otp', async (req, res) => {
             </div>
         `;
 
+        let sent = false;
+        let lastError = null;
+
         if (process.env.OTP_EMAIL_USER && process.env.OTP_EMAIL_PASS) {
-            await emailTransporter.sendMail({
-                from: `"LeafLift" <${process.env.OTP_EMAIL_USER}>`,
-                to: email,
-                subject: 'LeafLift - Email Verification OTP',
-                html: emailHtml,
-            });
-            console.log(`📧 OTP sent via SMTP to ${email}`);
-        } else {
-            console.log(`📧 [DEV] OTP for ${email}: ${otp}`);
+            try {
+                await emailTransporter.sendMail({
+                    from: `"LeafLift" <${process.env.OTP_EMAIL_USER}>`,
+                    to: email,
+                    subject: 'LeafLift - Email Verification OTP',
+                    html: emailHtml,
+                });
+                sent = true;
+                console.log(`📧 OTP sent via SMTP to ${email}`);
+            } catch (smtpError) {
+                lastError = smtpError;
+                console.warn(`⚠️ SMTP OTP send failed for ${email}: ${smtpError.message}`);
+            }
+        }
+
+        if (!sent && process.env.RESEND_API_KEY) {
+            try {
+                await axios.post(
+                    'https://api.resend.com/emails',
+                    {
+                        from: process.env.OTP_FROM_EMAIL || 'onboarding@resend.dev',
+                        to: [email],
+                        subject: 'LeafLift - Email Verification OTP',
+                        html: emailHtml,
+                    },
+                    {
+                        headers: {
+                            Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+                            'Content-Type': 'application/json',
+                        },
+                        timeout: 20000,
+                    }
+                );
+                sent = true;
+                console.log(`📧 OTP sent via Resend fallback to ${email}`);
+            } catch (resendError) {
+                lastError = resendError;
+                console.warn(`⚠️ Resend OTP fallback failed for ${email}: ${resendError.message}`);
+            }
+        }
+
+        if (!sent) {
+            if (process.env.NODE_ENV !== 'production') {
+                console.log(`📧 [DEV] OTP for ${email}: ${otp}`);
+            } else {
+                throw lastError || new Error('No OTP provider configured');
+            }
         }
 
         res.json({ message: 'OTP sent successfully' });
