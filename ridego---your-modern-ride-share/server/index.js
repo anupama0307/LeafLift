@@ -18,8 +18,6 @@ require('dotenv').config();
 
 const axios = require('axios');
 const User = require('./models/User');
-const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const OTP_FROM_EMAIL = process.env.OTP_FROM_EMAIL || 'onboarding@resend.dev';
 
 // In-memory OTP store (use Redis in production)
 const otpStore = new Map();
@@ -867,25 +865,7 @@ app.post('/api/send-otp', async (req, res) => {
             </div>
         `;
 
-        if (RESEND_API_KEY) {
-            await axios.post(
-                'https://api.resend.com/emails',
-                {
-                    from: OTP_FROM_EMAIL,
-                    to: [email],
-                    subject: 'LeafLift - Email Verification OTP',
-                    html: emailHtml,
-                },
-                {
-                    headers: {
-                        Authorization: `Bearer ${RESEND_API_KEY}`,
-                        'Content-Type': 'application/json',
-                    },
-                    timeout: 20000,
-                }
-            );
-            console.log(`📧 OTP sent via Resend to ${email}`);
-        } else if (process.env.OTP_EMAIL_USER && process.env.OTP_EMAIL_PASS) {
+        if (process.env.OTP_EMAIL_USER && process.env.OTP_EMAIL_PASS) {
             await emailTransporter.sendMail({
                 from: `"LeafLift" <${process.env.OTP_EMAIL_USER}>`,
                 to: email,
