@@ -40,6 +40,35 @@ interface RideChatMessage {
 const NEARBY_RADIUS_KM = 6;
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
+const toDateTimeInputValue = (date: Date) => {
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    const hh = String(date.getHours()).padStart(2, '0');
+    const min = String(date.getMinutes()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+};
+
+const roundToNextFiveMinutes = (date: Date) => {
+    const rounded = new Date(date);
+    rounded.setSeconds(0, 0);
+    const minutes = rounded.getMinutes();
+    const next = Math.ceil(minutes / 5) * 5;
+    if (next === 60) {
+        rounded.setHours(rounded.getHours() + 1, 0, 0, 0);
+    } else {
+        rounded.setMinutes(next, 0, 0);
+    }
+    return rounded;
+};
+
+const formatDateTimeLabel = (iso?: string) => {
+    if (!iso) return '';
+    const parsed = new Date(iso);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return parsed.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+};
+
 const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVehicleCategory, scheduleInfo }) => {
     const [destination, setDestination] = useState('');
     const [pickup, setPickup] = useState('Current Location');
@@ -63,6 +92,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [passengers, setPassengers] = useState(1);
     const [maxPassengers, setMaxPassengers] = useState(4);
     const [safetyPrefs, setSafetyPrefs] = useState({ womenOnly: false, verifiedOnly: false, noSmoking: false, genderPreference: 'any' as 'any' | 'male' | 'female' });
+    const [accessibilityOptions, setAccessibilityOptions] = useState<string[]>([]);
     const [confirmCompleteData, setConfirmCompleteData] = useState<any>(null);
 
     const [isNoDriversFound, setIsNoDriversFound] = useState(false);
@@ -77,7 +107,12 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         matchedRider: { name: string; pickup: any; dropoff: any };
         originalFare: number;
         poolFare: number;
+        confirmedPickupSlot?: string;
+        confirmedWindowStart?: string;
+        confirmedWindowEnd?: string;
     } | null>(null);
+    const [pickupWindowStart, setPickupWindowStart] = useState('');
+    const [pickupWindowEnd, setPickupWindowEnd] = useState('');
     const [poolStopUpdates, setPoolStopUpdates] = useState<any[]>([]);
     const poolMatchedRef = useRef(false);
 
@@ -161,6 +196,14 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             if (cat) setSelectedCategory(cat.id);
         }
     }, [initialVehicleCategory]);
+
+    useEffect(() => {
+        if (pickupWindowStart && pickupWindowEnd) return;
+        const start = roundToNextFiveMinutes(new Date(Date.now() + 5 * 60 * 1000));
+        const end = new Date(start.getTime() + 20 * 60 * 1000);
+        setPickupWindowStart(toDateTimeInputValue(start));
+        setPickupWindowEnd(toDateTimeInputValue(end));
+    }, [pickupWindowStart, pickupWindowEnd]);
 
     // ─── Auto-switch to Solo for BIKE/AUTO (no pooling) ───
     useEffect(() => {
@@ -367,7 +410,10 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                     poolGroupId: payload.poolGroupId,
                     matchedRider: payload.matchedRider,
                     originalFare: payload.originalFare || 0,
-                    poolFare: payload.poolFare || 0
+                    poolFare: payload.poolFare || 0,
+                    confirmedPickupSlot: payload.confirmedPickupSlot,
+                    confirmedWindowStart: payload.confirmedWindowStart,
+                    confirmedWindowEnd: payload.confirmedWindowEnd
                 });
                 if (payload.poolFare) {
                     setCurrentFare(payload.poolFare);
@@ -1102,6 +1148,25 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         const selectedRoute = availableRoutes[selectedRouteIndex];
         const price = categoryPrices.get(selectedCategory) || 0;
         const cat = VEHICLE_CATEGORIES.find(c => c.id === selectedCategory);
+        let parsedWindowStart: Date | null = null;
+        let parsedWindowEnd: Date | null = null;
+
+        if (rideMode === 'Pooled') {
+            if (!pickupWindowStart || !pickupWindowEnd) {
+                alert('Please choose a pickup time window for pooled rides.');
+                setIsRequesting(false);
+                return;
+            }
+
+            parsedWindowStart = new Date(pickupWindowStart);
+            parsedWindowEnd = new Date(pickupWindowEnd);
+
+            if (Number.isNaN(parsedWindowStart.getTime()) || Number.isNaN(parsedWindowEnd.getTime()) || parsedWindowEnd <= parsedWindowStart) {
+                alert('Pickup window is invalid. End time must be after start time.');
+                setIsRequesting(false);
+                return;
+            }
+        }
 
         const rideData = {
             userId: user._id,
@@ -1120,6 +1185,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                 ? calculateCO2(selectedRoute?.distance || 0, selectedCategory) - calculateCO2(selectedRoute?.distance || 0, 'pool')
                 : 0,
             isPooled: rideMode === 'Pooled',
+            ...(rideMode === 'Pooled' && parsedWindowStart && parsedWindowEnd ? {
+                pickupWindowStart: parsedWindowStart.toISOString(),
+                pickupWindowEnd: parsedWindowEnd.toISOString()
+            } : {}),
+            ...(accessibilityOptions.length > 0 ? { accessibilityOptions } : {}),
             passengers,
             maxPassengers: rideMode === 'Pooled' ? maxPassengers : passengers,
             ...(rideMode === 'Pooled' ? { safetyPreferences: safetyPrefs } : {}),
@@ -1269,6 +1339,10 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         setMaskedDriverPhone(null);
         setDestination('');
         setDropoffCoords(null);
+        const resetStart = roundToNextFiveMinutes(new Date(Date.now() + 5 * 60 * 1000));
+        const resetEnd = new Date(resetStart.getTime() + 20 * 60 * 1000);
+        setPickupWindowStart(toDateTimeInputValue(resetStart));
+        setPickupWindowEnd(toDateTimeInputValue(resetEnd));
         setAvailableRoutes([]);
         setConfirmCompleteData(null);
         if (driverMarkerRef.current) { driverMarkerRef.current.remove(); driverMarkerRef.current = null; }
@@ -1440,7 +1514,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
 
             {/* ── Ride Options Sheet ── */}
             {rideStatus === 'IDLE' && showOptions && (
-                <div className="absolute bottom-0 left-0 right-0 z-40 bg-white dark:bg-zinc-900 rounded-t-3xl shadow-2xl max-h-[75vh] flex flex-col">
+                <div className="absolute bottom-0 left-0 right-0 z-40 bg-white dark:bg-zinc-900 rounded-t-3xl shadow-2xl max-h-[75vh] overflow-y-auto">
                     <div className="w-12 h-1 bg-gray-300 rounded-full mx-auto my-3" />
                     <div className="px-4 pb-3">
                         <h2 className="text-xl font-bold mb-1 dark:text-white">Choose a ride</h2>
@@ -1694,6 +1768,54 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             </div>
                         )}
 
+                        {/* Accessibility Options */}
+                        <div className="px-4 mt-3">
+                            <span className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-2 block">Accessibility Needs:</span>
+                            <div className="grid grid-cols-1 gap-2">
+                                {[
+                                    { key: 'Wheelchair', icon: 'accessible' },
+                                    { key: 'Hearing Assistance', icon: 'hearing' },
+                                    { key: 'Elderly Assistance', icon: 'elderly' },
+                                ].map(opt => {
+                                    const selected = accessibilityOptions.includes(opt.key);
+                                    return (
+                                        <label
+                                            key={opt.key}
+                                            className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition-all ${selected
+                                                ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-700'
+                                                : 'border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50'
+                                                }`}
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                checked={selected}
+                                                onChange={() => {
+                                                    setAccessibilityOptions(prev =>
+                                                        prev.includes(opt.key)
+                                                            ? prev.filter(v => v !== opt.key)
+                                                            : [...prev, opt.key]
+                                                    );
+                                                }}
+                                                className="sr-only"
+                                            />
+                                            <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-all ${selected
+                                                ? 'bg-blue-500 border-blue-500'
+                                                : 'border-gray-300 dark:border-zinc-600'
+                                                }`}>
+                                                {selected && (
+                                                    <span className="material-icons-outlined text-white" style={{ fontSize: '14px' }}>check</span>
+                                                )}
+                                            </div>
+                                            <span className="material-icons-outlined text-sm text-gray-500 dark:text-gray-400">{opt.icon}</span>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="text-xs font-bold dark:text-white">{opt.key}</div>
+                                            </div>
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
 
 
 
@@ -1751,6 +1873,35 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
 
                     {/* Footer */}
                     <div className="p-4 border-t border-gray-200 dark:border-zinc-800">
+                        {rideMode === 'Pooled' && (
+                            <div className="mb-3 p-3 bg-amber-50 dark:bg-amber-900/15 border border-amber-200 dark:border-amber-800 rounded-xl">
+                                <div className="flex items-center gap-2 mb-2">
+                                    <span className="material-icons-outlined text-amber-600 dark:text-amber-400 text-sm">schedule</span>
+                                    <span className="text-xs font-black text-amber-700 dark:text-amber-300 uppercase tracking-widest">Pickup Window</span>
+                                </div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label className="text-[10px] font-black text-gray-500 dark:text-zinc-400 uppercase tracking-widest">Start</label>
+                                        <input
+                                            type="datetime-local"
+                                            value={pickupWindowStart}
+                                            onChange={(e) => setPickupWindowStart(e.target.value)}
+                                            className="mt-1 w-full bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-lg px-2 py-2 text-xs font-bold dark:text-white"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] font-black text-gray-500 dark:text-zinc-400 uppercase tracking-widest">End</label>
+                                        <input
+                                            type="datetime-local"
+                                            value={pickupWindowEnd}
+                                            onChange={(e) => setPickupWindowEnd(e.target.value)}
+                                            className="mt-1 w-full bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-lg px-2 py-2 text-xs font-bold dark:text-white"
+                                        />
+                                    </div>
+                                </div>
+                                <p className="mt-2 text-[10px] font-bold text-amber-700 dark:text-amber-300">Used for pool matching and confirmed pickup slot.</p>
+                            </div>
+                        )}
                         {scheduleInfo && (
                             <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl flex items-center gap-2">
                                 <span className="material-icons-outlined text-blue-500 text-lg">schedule</span>
@@ -1927,6 +2078,23 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                 <span className="text-xs font-black text-gray-400 dark:text-gray-500 line-through">₹{poolMatchInfo.originalFare}</span>
                                                 <span className="text-lg font-black text-leaf-600 dark:text-leaf-400">₹{poolMatchInfo.poolFare}</span>
                                                 <span className="text-[10px] font-black text-leaf-600 dark:text-leaf-400 uppercase tracking-widest">per person</span>
+                                            </div>
+                                        )}
+
+                                        {poolMatchInfo.confirmedPickupSlot && (
+                                            <div className="w-full bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl px-4 py-3 mb-2 text-left">
+                                                <div className="flex items-center gap-2 mb-1">
+                                                    <span className="material-icons-outlined text-blue-600 dark:text-blue-400 text-sm">event_available</span>
+                                                    <span className="text-[10px] font-black text-blue-700 dark:text-blue-300 uppercase tracking-widest">Confirmed Pickup Slot</span>
+                                                </div>
+                                                <p className="text-sm font-black text-blue-700 dark:text-blue-300">
+                                                    {formatDateTimeLabel(poolMatchInfo.confirmedPickupSlot)}
+                                                </p>
+                                                {poolMatchInfo.confirmedWindowStart && poolMatchInfo.confirmedWindowEnd && (
+                                                    <p className="text-[10px] font-bold text-blue-600 dark:text-blue-400 mt-0.5">
+                                                        Within window: {formatDateTimeLabel(poolMatchInfo.confirmedWindowStart)} – {formatDateTimeLabel(poolMatchInfo.confirmedWindowEnd)}
+                                                    </p>
+                                                )}
                                             </div>
                                         )}
 

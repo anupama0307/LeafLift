@@ -174,25 +174,21 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
       addOrUpdateRequestMarker(request);
       setRequests((prev) => {
         const rideIdStr = String(payload.rideId);
+        // Dedupe by rideId (use string comparison to handle ObjectId vs string)
+        if (prev.some((r) => String(r.rideId) === rideIdStr)) return prev;
 
-        // Handle consolidated pool requests FIRST (before dedup check)
-        // because the combined ride reuses an individual ride's rideId
         if (request.isPooled && request.poolGroupRiders && request.poolGroupRiders.length > 0) {
           // This is a consolidated pool request — remove any existing individual requests
           // that belong to riders in this pool (by their individual rideIds)
           const poolRiderIds = new Set(request.poolGroupRiders.map((r: any) => String(r.rideId)));
-          // Also filter by poolGroupId if present, and remove the old individual ride with same rideId
+          // Also filter by poolGroupId if present
           const filtered = prev.filter((r) => {
             if (request.poolGroupId && r.poolGroupId && String(r.poolGroupId) === String(request.poolGroupId)) return false;
             if (poolRiderIds.has(String(r.rideId))) return false;
-            if (String(r.rideId) === rideIdStr) return false;
             return true;
           });
           return [request, ...filtered];
         }
-
-        // Dedupe by rideId for non-pool rides
-        if (prev.some((r) => String(r.rideId) === rideIdStr)) return prev;
         return [request, ...prev];
       });
     };
@@ -242,21 +238,11 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
         fare: payload.fare,
         isPooled: payload.isPooled
       };
-      // Use driverLocationRef to avoid stale closure (driverLocation is null at mount)
-      const loc = driverLocationRef.current;
-      if (loc && request.pickup && typeof request.pickup.lat === 'number') {
-        const R = 6371;
-        const toR = (v: number) => (v * Math.PI) / 180;
-        const dLat = toR(request.pickup.lat - loc.lat);
-        const dLon = toR(request.pickup.lng - loc.lng);
-        const a = Math.sin(dLat / 2) ** 2 + Math.cos(toR(loc.lat)) * Math.cos(toR(request.pickup.lat)) * Math.sin(dLon / 2) ** 2;
-        const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        if (dist > 6) {
-          removeRequestMarker(request.rideId);
-          setRequests((prev) => prev.filter((r) => r.rideId !== request.rideId));
-          setSelectedRequest(prev => (prev?.rideId === request.rideId ? null : prev));
-          return;
-        }
+      if (!isWithinRadius(request)) {
+        removeRequestMarker(request.rideId);
+        setRequests((prev) => prev.filter((r) => r.rideId !== request.rideId));
+        if (selectedRequest?.rideId === request.rideId) setSelectedRequest(null);
+        return;
       }
       addOrUpdateRequestMarker(request);
       setRequests((prev) => {
@@ -573,10 +559,8 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
           rideId: ride._id,
           pickup: ride.pickup,
           dropoff: ride.dropoff,
-          fare: ride.currentFare || ride.fare,
-          isPooled: ride.isPooled,
-          poolGroupId: ride.poolGroupId || null,
-          poolGroupRiders: ride.poolGroupRiders || null
+          fare: ride.fare,
+          isPooled: ride.isPooled
         }));
         // Clear ALL old markers before setting new state
         requestMarkersRef.current.forEach(m => m.remove());

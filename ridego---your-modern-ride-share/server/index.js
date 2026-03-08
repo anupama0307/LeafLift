@@ -125,6 +125,40 @@ const estimateEtaMinutes = (distanceKm, speedKmh = 28) => {
     return `${minutes} min`;
 };
 
+const DEFAULT_POOL_WINDOW_MINUTES = 20;
+
+const toValidDate = (value) => {
+    if (!value) return null;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const normalizePickupWindow = (rideLike) => {
+    const start = toValidDate(rideLike?.pickupWindowStart)
+        || toValidDate(rideLike?.bookingTime)
+        || toValidDate(rideLike?.createdAt)
+        || new Date();
+
+    const maybeEnd = toValidDate(rideLike?.pickupWindowEnd);
+    const end = (maybeEnd && maybeEnd > start)
+        ? maybeEnd
+        : new Date(start.getTime() + DEFAULT_POOL_WINDOW_MINUTES * 60 * 1000);
+
+    return { start, end };
+};
+
+const getPickupWindowOverlap = (windowA, windowB) => {
+    const start = new Date(Math.max(windowA.start.getTime(), windowB.start.getTime()));
+    const end = new Date(Math.min(windowA.end.getTime(), windowB.end.getTime()));
+    if (start >= end) return null;
+    return { start, end };
+};
+
+const pickConfirmedPickupSlot = (overlapWindow) => {
+    const midpointMs = overlapWindow.start.getTime() + Math.floor((overlapWindow.end.getTime() - overlapWindow.start.getTime()) / 2);
+    return new Date(midpointMs);
+};
+
 // --- New: Simulated Background Check API ---
 const performBackgroundCheck = async (userData) => {
     console.log(`🔍 Starting background check for: ${userData.firstName} ${userData.lastName}`);
@@ -313,7 +347,18 @@ io.on('connection', (socket) => {
 // ─── Helper: Confirm pool match after both riders accept ───
 async function confirmPoolMatch(proposal, io) {
     try {
-        const { groupId, rideAId, rideBId, riderAId, riderBId, riderAFare, riderBFare } = proposal;
+        const {
+            groupId,
+            rideAId,
+            rideBId,
+            riderAId,
+            riderBId,
+            riderAFare,
+            riderBFare,
+            confirmedPickupSlot,
+            confirmedWindowStart,
+            confirmedWindowEnd,
+        } = proposal;
 
         const rideA = await Ride.findById(rideAId);
         const rideB = await Ride.findById(rideBId);
@@ -325,10 +370,12 @@ async function confirmPoolMatch(proposal, io) {
         // Save pool group ID and fares to DB
         rideA.poolGroupId = groupId;
         rideA.currentFare = riderAFare;
+        if (confirmedPickupSlot) rideA.confirmedPickupSlot = confirmedPickupSlot;
         await rideA.save();
 
         rideB.poolGroupId = groupId;
         rideB.currentFare = riderBFare;
+        if (confirmedPickupSlot) rideB.confirmedPickupSlot = confirmedPickupSlot;
         await rideB.save();
 
         console.log(`🤝 Pool confirmed! Group ${groupId}: Rider ${riderAId} ↔ Rider ${riderBId}`);
@@ -354,6 +401,9 @@ async function confirmPoolMatch(proposal, io) {
             rideId: rideAId,
             originalFare: rideA.fare,
             poolFare: riderAFare,
+            confirmedPickupSlot: confirmedPickupSlot ? new Date(confirmedPickupSlot).toISOString() : null,
+            confirmedWindowStart: confirmedWindowStart ? new Date(confirmedWindowStart).toISOString() : null,
+            confirmedWindowEnd: confirmedWindowEnd ? new Date(confirmedWindowEnd).toISOString() : null,
             message: 'Pool confirmed! Searching for a driver...'
         });
 
@@ -367,6 +417,9 @@ async function confirmPoolMatch(proposal, io) {
             rideId: rideBId,
             originalFare: rideB.fare,
             poolFare: riderBFare,
+            confirmedPickupSlot: confirmedPickupSlot ? new Date(confirmedPickupSlot).toISOString() : null,
+            confirmedWindowStart: confirmedWindowStart ? new Date(confirmedWindowStart).toISOString() : null,
+            confirmedWindowEnd: confirmedWindowEnd ? new Date(confirmedWindowEnd).toISOString() : null,
             message: 'Pool confirmed! Searching for a driver...'
         });
 
@@ -1608,6 +1661,25 @@ app.post('/api/rides', async (req, res) => {
             payload.bookingTime = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
         }
 
+        if (payload.pickupWindowStart) {
+            const parsedStart = new Date(payload.pickupWindowStart);
+            payload.pickupWindowStart = Number.isNaN(parsedStart.getTime()) ? null : parsedStart;
+        }
+
+        if (payload.pickupWindowEnd) {
+            const parsedEnd = new Date(payload.pickupWindowEnd);
+            payload.pickupWindowEnd = Number.isNaN(parsedEnd.getTime()) ? null : parsedEnd;
+        }
+
+        if (payload.isPooled) {
+            const baseStart = payload.pickupWindowStart || payload.bookingTime || new Date();
+            payload.pickupWindowStart = baseStart;
+            payload.pickupWindowEnd =
+                payload.pickupWindowEnd && payload.pickupWindowEnd > baseStart
+                    ? payload.pickupWindowEnd
+                    : new Date(baseStart.getTime() + DEFAULT_POOL_WINDOW_MINUTES * 60 * 1000);
+        }
+
         if (!payload.currentFare && payload.fare) {
             payload.currentFare = payload.fare;
         }
@@ -1634,6 +1706,9 @@ app.post('/api/rides', async (req, res) => {
 
         // ─── Pool Matching: find other SEARCHING pooled rides with nearby pickup/dropoff ───
         let poolMatch = null;
+        let confirmedPickupSlot = null;
+        let confirmedWindowStart = null;
+        let confirmedWindowEnd = null;
         const POOL_PICKUP_RADIUS_KM = 10;   // Generous 10km pickup radius
         const POOL_DROPOFF_RADIUS_KM = 20;  // Generous 20km dropoff radius
         if (ride.isPooled && ride.pickup?.lat && ride.dropoff?.lat) {
@@ -1648,8 +1723,16 @@ app.post('/api/rides', async (req, res) => {
                 }).populate('userId', 'firstName lastName email phone');
 
                 console.log(`🔍 Pool matching: found ${candidateRides.length} candidate rides for rider ${ride.userId}`);
+                const newRideWindow = normalizePickupWindow(ride);
 
                 for (const candidate of candidateRides) {
+                    const candidateWindow = normalizePickupWindow(candidate);
+                    const overlapWindow = getPickupWindowOverlap(newRideWindow, candidateWindow);
+                    if (!overlapWindow) {
+                        console.log(`  ⏰ Candidate ${candidate._id}: no overlapping pickup window`);
+                        continue;
+                    }
+
                     const pickupDist = getDistanceKm(
                         ride.pickup.lat, ride.pickup.lng,
                         candidate.pickup.lat, candidate.pickup.lng
@@ -1665,6 +1748,9 @@ app.post('/api/rides', async (req, res) => {
                         pickupDist <= POOL_PICKUP_RADIUS_KM &&
                         dropoffDist <= POOL_DROPOFF_RADIUS_KM) {
                         poolMatch = candidate;
+                        confirmedWindowStart = overlapWindow.start;
+                        confirmedWindowEnd = overlapWindow.end;
+                        confirmedPickupSlot = pickConfirmedPickupSlot(overlapWindow);
                         console.log(`  ✅ MATCHED! Rider ${ride.userId} ↔ Rider ${candidate.userId._id || candidate.userId}`);
                         break;
                     }
@@ -1698,6 +1784,9 @@ app.post('/api/rides', async (req, res) => {
                         riderBFare: newRiderPoolFare,
                         rideA: poolMatch,
                         rideB: ride,
+                        confirmedPickupSlot,
+                        confirmedWindowStart,
+                        confirmedWindowEnd,
                         createdAt: Date.now(),
                         timeout: null
                     };
@@ -1730,6 +1819,9 @@ app.post('/api/rides', async (req, res) => {
                         rideId: poolMatch._id,
                         originalFare: poolMatch.fare,
                         poolFare: existingRiderPoolFare,
+                        confirmedPickupSlot: confirmedPickupSlot ? confirmedPickupSlot.toISOString() : null,
+                        confirmedWindowStart: confirmedWindowStart ? confirmedWindowStart.toISOString() : null,
+                        confirmedWindowEnd: confirmedWindowEnd ? confirmedWindowEnd.toISOString() : null,
                         message: `${newRider?.firstName || 'A rider'} wants to pool with you!`
                     });
 
@@ -1746,6 +1838,9 @@ app.post('/api/rides', async (req, res) => {
                         rideId: ride._id,
                         originalFare: ride.fare,
                         poolFare: newRiderPoolFare,
+                        confirmedPickupSlot: confirmedPickupSlot ? confirmedPickupSlot.toISOString() : null,
+                        confirmedWindowStart: confirmedWindowStart ? confirmedWindowStart.toISOString() : null,
+                        confirmedWindowEnd: confirmedWindowEnd ? confirmedWindowEnd.toISOString() : null,
                         message: `Matched with ${matchedRiderName} for pooling!`
                     });
 

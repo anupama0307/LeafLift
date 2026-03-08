@@ -180,6 +180,18 @@ const RideSchema = new mongoose.Schema({
         type: Date,
         default: Date.now
     },
+    pickupWindowStart: {
+        type: Date,
+        default: null
+    },
+    pickupWindowEnd: {
+        type: Date,
+        default: null
+    },
+    confirmedPickupSlot: {
+        type: Date,
+        default: null
+    },
     // Cancellation tracking
     canceledBy: {
         type: String,
