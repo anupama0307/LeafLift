@@ -1,8 +1,14 @@
-import { MAPPLS_CONFIG } from '../../constants';
+/// <reference types="vite/client" />
 import { MapplsPlace, MapplsRoute, RouteInfo } from '../../types';
 
 let accessToken: string | null = null;
 let tokenExpiry: number = 0;
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+
+function buildApiUrl(path: string): string {
+    if (!API_BASE_URL) return path;
+    return `${API_BASE_URL}${path}`;
+}
 
 // Get OAuth token from our Backend Proxy
 async function getAccessToken(): Promise<string> {
@@ -11,7 +17,7 @@ async function getAccessToken(): Promise<string> {
     }
 
     try {
-        const response = await fetch('/api/mappls/token', {
+        const response = await fetch(buildApiUrl('/api/mappls/token'), {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -45,7 +51,7 @@ export async function searchPlaces(query: string, location?: string): Promise<Ma
             url += `&location=${location}`;
         }
 
-        const response = await fetch(url, {
+        const response = await fetch(buildApiUrl(url), {
             method: 'GET',
         });
 
@@ -82,7 +88,7 @@ export async function getPlaceDetails(eloc: string): Promise<{ latitude: number;
     try {
         console.log(`🔍 Fetching details for eLoc: ${eloc}`);
         const url = `/api/mappls/place/${eloc}`;
-        const response = await fetch(url);
+        const response = await fetch(buildApiUrl(url));
 
         if (!response.ok) {
             console.error(`❌ Place details failed with status: ${response.status}`);
@@ -132,7 +138,7 @@ export async function getRoute(
 
         const url = `/api/mappls/route?start=${start}&end=${end}`;
 
-        const response = await fetch(url, {
+        const response = await fetch(buildApiUrl(url), {
             method: 'GET',
         });
 
@@ -190,10 +196,8 @@ export function formatRouteInfo(route: MapplsRoute): RouteInfo {
 // Reverse Geocode
 export async function reverseGeocode(lat: number, lng: number): Promise<string> {
     try {
-        const token = await getAccessToken();
-
         const response = await fetch(
-            `https://apis.mappls.com/advancedmaps/v1/${MAPPLS_CONFIG.REST_API_KEY}/rev_geocode?lat=${lat}&lng=${lng}&access_token=${token}`,
+            buildApiUrl(`/api/mappls/reverse?lat=${lat}&lng=${lng}`),
             {
                 method: 'GET',
             }

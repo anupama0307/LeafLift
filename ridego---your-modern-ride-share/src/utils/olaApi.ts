@@ -1,6 +1,12 @@
 import { OlaPlace, OlaRoute, RouteInfo } from '../../types';
 
 // Note: OLA API key is handled by the backend proxy (/api/ola/*) - not needed here
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+
+function buildApiUrl(path: string): string {
+    if (!API_BASE_URL) return path;
+    return `${API_BASE_URL}${path}`;
+}
 
 // ✅ Autocomplete Search
 export async function searchPlaces(query: string, location?: string): Promise<OlaPlace[]> {
@@ -12,7 +18,7 @@ export async function searchPlaces(query: string, location?: string): Promise<Ol
             url += `&location=${location}`;
         }
 
-        const response = await fetch(url);
+        const response = await fetch(buildApiUrl(url));
 
         if (!response.ok) {
             console.error(`Search failed: ${response.status}`);
@@ -62,7 +68,7 @@ export async function getRoute(
             body.waypoints = waypoints.map(wp => `${wp.lat},${wp.lng}`);
         }
 
-        const response = await fetch('/api/ola/directions', {
+        const response = await fetch(buildApiUrl('/api/ola/directions'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
@@ -102,7 +108,7 @@ export async function getRoute(
 export async function reverseGeocode(lat: number, lng: number): Promise<string> {
     try {
         const latlng = `${lat},${lng}`;
-        const response = await fetch(`/api/ola/reverse-geocode?latlng=${latlng}`);
+        const response = await fetch(buildApiUrl(`/api/ola/reverse-geocode?latlng=${latlng}`));
 
         if (!response.ok) {
             console.error(`Reverse geocode failed: ${response.status}`);
