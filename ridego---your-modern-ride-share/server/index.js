@@ -3,10 +3,15 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
 const http = require('http');
+const dns = require('dns');
 const { Server } = require('socket.io');
 const nodemailer = require('nodemailer');
 const { setupSwagger } = require('./swagger');
 const jwt = require('jsonwebtoken');
+
+if (typeof dns.setDefaultResultOrder === 'function') {
+    dns.setDefaultResultOrder('ipv4first');
+}
 
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 require('dotenv').config();
@@ -29,7 +34,13 @@ setInterval(() => {
 
 // Email transporter for sending OTPs
 const emailTransporter = nodemailer.createTransport({
-    service: 'gmail',
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: Number(process.env.SMTP_PORT || 587),
+    secure: String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true',
+    requireTLS: true,
+    tls: {
+        family: 4,
+    },
     auth: {
         user: process.env.OTP_EMAIL_USER,
         pass: process.env.OTP_EMAIL_PASS,
