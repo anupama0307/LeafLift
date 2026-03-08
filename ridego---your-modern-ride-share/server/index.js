@@ -18,6 +18,8 @@ require('dotenv').config();
 
 const axios = require('axios');
 const User = require('./models/User');
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const OTP_FROM_EMAIL = process.env.OTP_FROM_EMAIL || 'onboarding@resend.dev';
 
 // In-memory OTP store (use Redis in production)
 const otpStore = new Map();
@@ -854,26 +856,44 @@ app.post('/api/send-otp', async (req, res) => {
 
         otpStore.set(email, { otp, expiresAt });
 
-        // Check if email transporter is configured
-        if (process.env.OTP_EMAIL_USER && process.env.OTP_EMAIL_PASS) {
+        const emailHtml = `
+            <div style="font-family: Arial, sans-serif; max-width: 400px; margin: 0 auto; padding: 20px;">
+                <h2 style="color: #16a34a;">LeafLift</h2>
+                <p>Your email verification code is:</p>
+                <div style="background: #f3f4f6; padding: 20px; text-align: center; border-radius: 12px; margin: 20px 0;">
+                    <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #111;">${otp}</span>
+                </div>
+                <p style="color: #666; font-size: 14px;">This code expires in 5 minutes. Do not share it with anyone.</p>
+            </div>
+        `;
+
+        if (RESEND_API_KEY) {
+            await axios.post(
+                'https://api.resend.com/emails',
+                {
+                    from: OTP_FROM_EMAIL,
+                    to: [email],
+                    subject: 'LeafLift - Email Verification OTP',
+                    html: emailHtml,
+                },
+                {
+                    headers: {
+                        Authorization: `Bearer ${RESEND_API_KEY}`,
+                        'Content-Type': 'application/json',
+                    },
+                    timeout: 20000,
+                }
+            );
+            console.log(`📧 OTP sent via Resend to ${email}`);
+        } else if (process.env.OTP_EMAIL_USER && process.env.OTP_EMAIL_PASS) {
             await emailTransporter.sendMail({
                 from: `"LeafLift" <${process.env.OTP_EMAIL_USER}>`,
                 to: email,
                 subject: 'LeafLift - Email Verification OTP',
-                html: `
-                    <div style="font-family: Arial, sans-serif; max-width: 400px; margin: 0 auto; padding: 20px;">
-                        <h2 style="color: #16a34a;">LeafLift</h2>
-                        <p>Your email verification code is:</p>
-                        <div style="background: #f3f4f6; padding: 20px; text-align: center; border-radius: 12px; margin: 20px 0;">
-                            <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #111;">${otp}</span>
-                        </div>
-                        <p style="color: #666; font-size: 14px;">This code expires in 5 minutes. Do not share it with anyone.</p>
-                    </div>
-                `,
+                html: emailHtml,
             });
-            console.log(`📧 OTP sent to ${email}`);
+            console.log(`📧 OTP sent via SMTP to ${email}`);
         } else {
-            // Dev fallback: log OTP to console
             console.log(`📧 [DEV] OTP for ${email}: ${otp}`);
         }
 
