@@ -71,51 +71,39 @@ jobs:
         working-directory: ./ridego---your-modern-ride-share
         run: npm install
 
-      - name: Resolve Vercel org and project IDs
+      - name: Build and deploy to Vercel
         working-directory: ./ridego---your-modern-ride-share
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
-          # Fetch user info – for personal accounts the user ID is the org ID
+          # Resolve org ID (personal account: use user ID; team: use defaultTeamId)
           USER_JSON=$(curl -sf -H "Authorization: Bearer $VERCEL_TOKEN" https://api.vercel.com/v2/user)
           ORG_ID=$(echo "$USER_JSON" | python3 -c "import sys,json; u=json.load(sys.stdin)['user']; print(u.get('defaultTeamId') or u['id'])")
 
-          # List all projects and find the one matching this repo
+          # Find matching project
           PROJECTS_JSON=$(curl -sf -H "Authorization: Bearer $VERCEL_TOKEN" "https://api.vercel.com/v9/projects?limit=100")
-          echo "All Vercel projects:"
-          echo "$PROJECTS_JSON" | python3 -c "import sys,json; [print('  ', p['name'], '->', p['id']) for p in json.load(sys.stdin).get('projects',[])]"
+          echo "Vercel projects found:"
+          echo "$PROJECTS_JSON" | python3 -c "import sys,json; [print(' -', p['name'], p['id']) for p in json.load(sys.stdin).get('projects',[])]"
 
           PROJECT_ID=$(echo "$PROJECTS_JSON" | python3 -c "
           import sys, json
-          data = json.load(sys.stdin)
-          projects = data.get('projects', [])
-          # Try to match by name (case-insensitive, partial match on 'ridego' or 'leaflift')
+          projects = json.load(sys.stdin).get('projects', [])
           for p in projects:
-              name = p['name'].lower()
-              if 'ridego' in name or 'leaflift' in name:
-                  print(p['id'])
-                  break
+              if 'ridego' in p['name'].lower() or 'leaflift' in p['name'].lower():
+                  print(p['id']); break
           else:
-              # Fall back to first project
-              if projects:
-                  print(projects[0]['id'])
+              print(projects[0]['id']) if projects else None
           ")
 
-          echo "Resolved ORG_ID=$ORG_ID"
-          echo "Resolved PROJECT_ID=$PROJECT_ID"
+          echo "ORG_ID=$ORG_ID  PROJECT_ID=$PROJECT_ID"
 
-          # Write .vercel/project.json so Vercel CLI knows which project to use
-          mkdir -p .vercel
-          echo "{\"orgId\":\"$ORG_ID\",\"projectId\":\"$PROJECT_ID\"}" > .vercel/project.json
+          # Export so all subsequent vercel CLI calls pick them up
+          export VERCEL_ORG_ID="$ORG_ID"
+          export VERCEL_PROJECT_ID="$PROJECT_ID"
 
-      - name: Build for Vercel
-        working-directory: ./ridego---your-modern-ride-share
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: vercel build --prod --token=$VERCEL_TOKEN
+          # Pull project settings (env vars, framework detection, etc.)
+          vercel pull --yes --environment=production --token=$VERCEL_TOKEN
 
-      - name: Deploy to Vercel (production)
-        working-directory: ./ridego---your-modern-ride-share
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN
+          # Build and deploy
+          vercel build --prod --token=$VERCEL_TOKEN
+          vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN
