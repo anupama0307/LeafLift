@@ -47,16 +47,8 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Deploy backend to Railway
-        run: |
-          npm install -g @railway/cli
-          railway up
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        working-directory: ./ridego---your-modern-ride-share/server
+      - name: Backend deploys via Railway GitHub integration
+        run: echo "Railway auto-deploys the backend when this push hits main. No extra step needed here."
 
   deploy-frontend-vercel:
     needs: frontend-and-backend-tests
