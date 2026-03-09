@@ -7,7 +7,7 @@ interface AccountScreenProps {
   onUserUpdate?: (updatedUser: any) => void;
 }
 
-type AccountSubScreen = 'MAIN' | 'SETTINGS' | 'SAFETY_PRIVACY' | 'HELP' | 'WALLET' | 'TRIPS' | 'CO2_HISTORY';
+type AccountSubScreen = 'MAIN' | 'SETTINGS' | 'SAFETY_PRIVACY' | 'HELP' | 'WALLET' | 'TRIPS' | 'CO2_HISTORY' | 'SUSTAINABILITY';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
@@ -58,6 +58,9 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
   const [co2History, setCo2History] = useState<any>(null);
   const [co2HistoryLoading, setCo2HistoryLoading] = useState(false);
 
+  // Sustainability trend data (last 7 completed rides)
+  const [sustainabilityTrends, setSustainabilityTrends] = useState<Array<{ date: string; co2Saved: number; co2Emitted: number; distance: number }>>([]);
+
   useEffect(() => {
     if (!user?._id) return;
     fetch(`${API_BASE_URL}/api/users/${user._id}/stats`)
@@ -67,6 +70,10 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
     fetch(`${API_BASE_URL}/api/users/${user._id}/wallet`)
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setWalletBalance(d.balance || d.walletBalance || 0); })
+      .catch(() => {});
+    fetch(`${API_BASE_URL}/api/users/${user._id}/sustainability/trends`)
+      .then(r => r.ok ? r.json() : [])
+      .then(d => { if (Array.isArray(d)) setSustainabilityTrends(d); })
       .catch(() => {});
   }, [user]);
 
@@ -1106,6 +1113,207 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
     );
   };
 
+  // --- Impact Tier Helper (3.7.3) ---
+  const getImpactTier = (co2SavedGrams: number) => {
+    if (co2SavedGrams >= 20000) return { emoji: '🌳', label: 'Eco Champion', description: "You've saved over 20 kg of CO₂ — incredible!", color: 'from-green-500 to-emerald-700' };
+    if (co2SavedGrams >= 5000) return { emoji: '🌿', label: 'Green Rider', description: 'Halfway to Eco Champion — keep pooling!', color: 'from-green-400 to-teal-500' };
+    return { emoji: '🌱', label: 'Seedling', description: 'Every shared ride helps the planet grow.', color: 'from-teal-400 to-cyan-600' };
+  };
+
+  // --- Sustainability Screen (US 3.7) ---
+  const renderSustainability = () => {
+    const tier = getImpactTier(stats?.totalCO2Saved || 0);
+    const totalSaved = stats?.totalCO2Saved || 0;
+    const totalEmitted = stats?.totalCO2Emitted || 0;
+    const total = totalSaved + totalEmitted;
+    const savedRatio = total > 0 ? totalSaved / total : 0;
+
+    // SVG donut constants
+    const R = 48, CX = 64, CY = 64;
+    const circ = 2 * Math.PI * R;
+    const savedArc = savedRatio * circ;
+
+    // SVG bar chart: max value across all trend entries
+    const maxTrend = Math.max(...sustainabilityTrends.flatMap(t => [t.co2Saved, t.co2Emitted]), 1);
+
+    return (
+      <div className="px-5 pb-24 animate-in fade-in duration-300 bg-white dark:bg-black min-h-full">
+        <SubScreenHeader title="Eco Impact" onBack={() => setSubScreen('MAIN')} />
+
+        {/* 3.7.3 — Impact Tier Hero Card */}
+        <div className={`bg-gradient-to-br ${tier.color} p-6 rounded-3xl mb-6 text-white text-center shadow-xl relative overflow-hidden`}>
+          <div className="relative z-10">
+            <span className="text-6xl leading-none">{tier.emoji}</span>
+            <h2 className="text-2xl font-black mt-2">{tier.label}</h2>
+            <p className="text-sm opacity-80 mt-1">{tier.description}</p>
+            <div className="mt-4 bg-white/20 rounded-2xl px-4 py-2 inline-block">
+              <p className="text-lg font-black">{((totalSaved) / 1000).toFixed(2)} kg CO₂ saved lifetime</p>
+            </div>
+          </div>
+          <div className="absolute -right-6 -bottom-6 opacity-10">
+            <span className="material-icons-outlined" style={{ fontSize: 120 }}>park</span>
+          </div>
+        </div>
+
+        {/* 3.7.3 — Color-Coded Metrics */}
+        <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-zinc-500 mb-3 px-1">Your Impact Numbers</h3>
+        <div className="grid grid-cols-2 gap-3 mb-6">
+          <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-2xl border-l-4 border-green-500">
+            <div className="flex items-center gap-1.5 mb-1">
+              <span className="material-icons-outlined text-green-500 text-base">eco</span>
+              <span className="text-[9px] font-black uppercase tracking-wide text-green-700 dark:text-green-400">CO₂ Saved</span>
+            </div>
+            <p className="text-2xl font-black text-green-600 dark:text-green-400">
+              {(totalSaved / 1000).toFixed(2)}<span className="text-sm font-bold ml-1">kg</span>
+            </p>
+            <p className="text-[10px] text-gray-500 dark:text-zinc-500 mt-0.5">vs solo driving</p>
+          </div>
+          <div className="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-2xl border-l-4 border-orange-500">
+            <div className="flex items-center gap-1.5 mb-1">
+              <span className="material-icons-outlined text-orange-500 text-base">cloud</span>
+              <span className="text-[9px] font-black uppercase tracking-wide text-orange-700 dark:text-orange-400">CO₂ Emitted</span>
+            </div>
+            <p className="text-2xl font-black text-orange-600 dark:text-orange-400">
+              {(totalEmitted / 1000).toFixed(2)}<span className="text-sm font-bold ml-1">kg</span>
+            </p>
+            <p className="text-[10px] text-gray-500 dark:text-zinc-500 mt-0.5">total emissions</p>
+          </div>
+          <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-2xl border-l-4 border-blue-500">
+            <div className="flex items-center gap-1.5 mb-1">
+              <span className="material-icons-outlined text-blue-500 text-base">directions_car</span>
+              <span className="text-[9px] font-black uppercase tracking-wide text-blue-700 dark:text-blue-400">Trips</span>
+            </div>
+            <p className="text-2xl font-black text-blue-600 dark:text-blue-400">{stats?.totalTrips || 0}</p>
+            <p className="text-[10px] text-gray-500 dark:text-zinc-500 mt-0.5">rides completed</p>
+          </div>
+          <div className="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-2xl border-l-4 border-purple-500">
+            <div className="flex items-center gap-1.5 mb-1">
+              <span className="material-icons-outlined text-purple-500 text-base">straighten</span>
+              <span className="text-[9px] font-black uppercase tracking-wide text-purple-700 dark:text-purple-400">Distance</span>
+            </div>
+            <p className="text-2xl font-black text-purple-600 dark:text-purple-400">
+              {stats ? stats.totalKmTraveled.toFixed(0) : 0}<span className="text-sm font-bold ml-1">km</span>
+            </p>
+            <p className="text-[10px] text-gray-500 dark:text-zinc-500 mt-0.5">total traveled</p>
+          </div>
+        </div>
+
+        {/* 3.7.1 — Donut Chart: Net Impact Ratio */}
+        <div className="bg-gray-50 dark:bg-zinc-900/50 rounded-2xl border border-gray-100 dark:border-zinc-800 p-5 mb-6">
+          <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-zinc-500 mb-4">Net Impact Ratio</h3>
+          <div className="flex items-center gap-6">
+            <svg viewBox="0 0 128 128" className="w-28 h-28 flex-shrink-0" aria-label="CO₂ savings ratio">
+              {/* Track */}
+              <circle cx={CX} cy={CY} r={R} fill="none" stroke="#fed7aa" strokeWidth="16" />
+              {/* Saved arc — rotated to start at 12 o'clock */}
+              <circle
+                cx={CX} cy={CY} r={R}
+                fill="none"
+                stroke="#22c55e"
+                strokeWidth="16"
+                strokeDasharray={`${savedArc} ${circ}`}
+                strokeLinecap="round"
+                transform={`rotate(-90 ${CX} ${CY})`}
+              />
+              <text x={CX} y={CY - 5} textAnchor="middle" fontSize="15" fontWeight="900" fill="#16a34a">{Math.round(savedRatio * 100)}%</text>
+              <text x={CX} y={CY + 10} textAnchor="middle" fontSize="8" fill="#6b7280">saved</text>
+            </svg>
+            <div className="flex-1 space-y-3">
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-green-500 flex-shrink-0"></div>
+                <div>
+                  <p className="text-[10px] font-black uppercase text-gray-500 dark:text-zinc-400">CO₂ Saved</p>
+                  <p className="text-sm font-black text-green-600 dark:text-green-400">{(totalSaved / 1000).toFixed(2)} kg</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-orange-400 flex-shrink-0"></div>
+                <div>
+                  <p className="text-[10px] font-black uppercase text-gray-500 dark:text-zinc-400">CO₂ Emitted</p>
+                  <p className="text-sm font-black text-orange-600 dark:text-orange-400">{(totalEmitted / 1000).toFixed(2)} kg</p>
+                </div>
+              </div>
+              {total > 0 && (
+                <p className="text-[10px] text-gray-400 dark:text-zinc-500 leading-relaxed">
+                  {savedRatio >= 0.5 ? 'You saved more than you emitted! 🎉' : 'Pool more rides to tip the scale! 💪'}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* 3.7.2 — SVG Bar Chart: Last 7 Rides */}
+        <div className="bg-gray-50 dark:bg-zinc-900/50 rounded-2xl border border-gray-100 dark:border-zinc-800 p-4 mb-6">
+          <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 dark:text-zinc-500 mb-4">Last 7 Rides — CO₂ per Trip (g)</h3>
+          {sustainabilityTrends.length === 0 ? (
+            <div className="text-center py-10">
+              <span className="material-icons-outlined text-4xl text-gray-300 dark:text-zinc-700 block mb-2">bar_chart</span>
+              <p className="text-sm font-bold text-gray-400 dark:text-zinc-500">Complete rides to see your trend</p>
+            </div>
+          ) : (
+            <>
+              <svg viewBox="0 0 320 130" className="w-full" aria-label="CO₂ per trip bar chart">
+                {/* Y-axis gridlines */}
+                {[0, 0.25, 0.5, 0.75, 1].map((frac, gi) => {
+                  const y = 100 - frac * 90;
+                  return (
+                    <g key={gi}>
+                      <line x1="36" y1={y} x2="310" y2={y} stroke="#e5e7eb" strokeWidth="0.5" />
+                      <text x="32" y={y + 3} textAnchor="end" fontSize="7" fill="#9ca3af">
+                        {Math.round(frac * maxTrend)}
+                      </text>
+                    </g>
+                  );
+                })}
+                {/* X-axis baseline */}
+                <line x1="36" y1="100" x2="310" y2="100" stroke="#d1d5db" strokeWidth="1" />
+                {/* Grouped bars */}
+                {sustainabilityTrends.map((t, i) => {
+                  const n = sustainabilityTrends.length;
+                  const groupW = 274 / n;
+                  const cx = 36 + (i + 0.5) * groupW;
+                  const bw = Math.min(groupW * 0.28, 12);
+                  const savedH = Math.max((t.co2Saved / maxTrend) * 90, t.co2Saved > 0 ? 1 : 0);
+                  const emittedH = Math.max((t.co2Emitted / maxTrend) * 90, t.co2Emitted > 0 ? 1 : 0);
+                  const label = new Date(t.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+                  return (
+                    <g key={i}>
+                      <rect x={cx - bw - 1} y={100 - savedH} width={bw} height={savedH} rx="2" fill="#22c55e" opacity="0.85" />
+                      <rect x={cx + 1} y={100 - emittedH} width={bw} height={emittedH} rx="2" fill="#f97316" opacity="0.85" />
+                      <text x={cx} y="120" textAnchor="middle" fontSize="6.5" fill="#9ca3af">{label}</text>
+                    </g>
+                  );
+                })}
+              </svg>
+              {/* Legend */}
+              <div className="flex gap-5 mt-3 justify-center">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded-sm bg-green-500"></div>
+                  <span className="text-[10px] font-bold text-gray-500 dark:text-zinc-400">CO₂ Saved</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded-sm bg-orange-400"></div>
+                  <span className="text-[10px] font-bold text-gray-500 dark:text-zinc-400">CO₂ Emitted</span>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Eco Tip */}
+        <div className="bg-leaf-50 dark:bg-leaf-900/20 rounded-2xl p-4 border border-leaf-100 dark:border-leaf-900/40">
+          <div className="flex gap-3">
+            <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400 text-xl mt-0.5">tips_and_updates</span>
+            <div>
+              <p className="text-xs font-black text-leaf-700 dark:text-leaf-400 uppercase tracking-wide mb-1">Eco Tip</p>
+              <p className="text-sm text-gray-600 dark:text-zinc-400">Choose pooled rides whenever possible — carpooling can cut CO₂ emissions by up to 50% per trip.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // --- Route to sub-screens ---
   if (subScreen === 'SETTINGS') return renderSettings();
   if (subScreen === 'SAFETY_PRIVACY') return renderSafetyPrivacy();
@@ -1113,6 +1321,7 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
   if (subScreen === 'WALLET') return renderWallet();
   if (subScreen === 'TRIPS') return renderTrips();
   if (subScreen === 'CO2_HISTORY') return renderCO2History();
+  if (subScreen === 'SUSTAINABILITY') return renderSustainability();
 
   if (isDriver) {
     return (
@@ -1272,58 +1481,60 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
         </div>
       )}
 
-      {/* CO2 & Trips Stats */}
-      <div className="grid grid-cols-2 gap-3 mb-6">
-        <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-2xl col-span-2">
-          {/* 3.6.2 — cumulative CO₂ saved; 3.6.3 — tier badge */}
-          {(() => {
-            const savedG  = stats?.totalCO2Saved || 0;
-            const savedKg = (savedG / 1000).toFixed(1);
-            const tier    = savedG >= 5000 ? { emoji: '🌳', label: 'Tree',     desc: 'Climate champion — 5+ kg saved!',    bar: 100 }
-                          : savedG >= 500  ? { emoji: '🌿', label: 'Sapling',  desc: `${(savedG / 1000).toFixed(2)} / 5.00 kg to Tree`,      bar: Math.round(((savedG - 500) / 4500) * 100) }
-                          :                  { emoji: '🌱', label: 'Seedling', desc: `${(savedG / 1000).toFixed(2)} / 0.50 kg to Sapling`,    bar: Math.round((savedG / 500) * 100) };
-            return (
-              <>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="material-icons-outlined text-green-500">eco</span>
-                    <p className="text-xs font-bold text-gray-500 dark:text-gray-400">CO₂ Saved (Cumulative)</p>
-                  </div>
-                  <span className="text-[11px] font-black px-2 py-0.5 rounded-full bg-green-200 dark:bg-green-800 text-green-800 dark:text-green-200">
-                    {tier.emoji} {tier.label}
-                  </span>
+
+      {/* CO2 & Trips Stats (3.7.3 — color-coded impact metrics) */}
+      {(() => {
+        const tier = getImpactTier(stats?.totalCO2Saved || 0);
+        return (
+          <>
+            {/* Eco Impact Tier Banner — tappable shortcut to full sustainability screen */}
+            <button
+              onClick={() => setSubScreen('SUSTAINABILITY')}
+              className={`w-full bg-gradient-to-r ${tier.color} p-4 rounded-2xl mb-3 text-white flex items-center justify-between shadow-md active:scale-95 transition-transform`}
+            >
+              <div className="flex items-center gap-3">
+                <span className="text-3xl leading-none">{tier.emoji}</span>
+                <div className="text-left">
+                  <p className="text-[10px] font-black uppercase tracking-widest opacity-80">{tier.label}</p>
+                  <p className="text-base font-black">{((stats?.totalCO2Saved || 0) / 1000).toFixed(1)} kg CO₂ saved</p>
                 </div>
-                <p className="text-3xl font-black text-green-600 dark:text-green-400 mb-1">{savedKg}<span className="text-sm font-bold"> kg</span></p>
-                <p className="text-[10px] text-gray-500 dark:text-gray-400 mb-2">{tier.desc}</p>
-                <div className="h-2 bg-green-100 dark:bg-green-900 rounded-full overflow-hidden">
-                  <div className="h-2 bg-green-500 rounded-full transition-all duration-700" style={{ width: `${Math.min(tier.bar, 100)}%` }} />
-                </div>
-              </>
-            );
-          })()}
-        </div>
-        <div className="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-2xl">
-          <span className="material-icons-outlined text-orange-500 mb-1">cloud</span>
-          <p className="text-2xl font-black text-orange-600 dark:text-orange-400">
-            {stats ? `${(stats.totalCO2Emitted / 1000).toFixed(1)}kg` : '0kg'}
-          </p>
-          <p className="text-xs font-bold text-gray-500 dark:text-gray-400">CO₂ Emitted</p>
-        </div>
-        <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-2xl">
-          <span className="material-icons-outlined text-blue-500 mb-1">directions_car</span>
-          <p className="text-2xl font-black text-blue-600 dark:text-blue-400">
-            {stats?.totalTrips || 0}
-          </p>
-          <p className="text-xs font-bold text-gray-500 dark:text-gray-400">Total Trips</p>
-        </div>
-        <div className="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-2xl col-span-2">
-          <span className="material-icons-outlined text-purple-500 mb-1">straighten</span>
-          <p className="text-2xl font-black text-purple-600 dark:text-purple-400">
-            {stats ? `${(stats.totalKmTraveled).toFixed(0)}km` : '0km'}
-          </p>
-          <p className="text-xs font-bold text-gray-500 dark:text-gray-400">Total Distance Traveled</p>
-        </div>
-      </div>
+              </div>
+              <span className="material-icons-outlined opacity-80">chevron_right</span>
+            </button>
+            {/* Color-coded metric tiles */}
+            <div className="grid grid-cols-2 gap-3 mb-6">
+              <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-2xl border-l-4 border-green-500">
+                <span className="material-icons-outlined text-green-500 mb-1 text-base">eco</span>
+                <p className="text-2xl font-black text-green-600 dark:text-green-400">
+                  {stats ? `${(stats.totalCO2Saved / 1000).toFixed(1)}kg` : '0kg'}
+                </p>
+                <p className="text-xs font-bold text-gray-500 dark:text-gray-400">CO₂ Saved</p>
+              </div>
+              <div className="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-2xl border-l-4 border-orange-500">
+                <span className="material-icons-outlined text-orange-500 mb-1 text-base">cloud</span>
+                <p className="text-2xl font-black text-orange-600 dark:text-orange-400">
+                  {stats ? `${(stats.totalCO2Emitted / 1000).toFixed(1)}kg` : '0kg'}
+                </p>
+                <p className="text-xs font-bold text-gray-500 dark:text-gray-400">CO₂ Emitted</p>
+              </div>
+              <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-2xl border-l-4 border-blue-500">
+                <span className="material-icons-outlined text-blue-500 mb-1 text-base">directions_car</span>
+                <p className="text-2xl font-black text-blue-600 dark:text-blue-400">
+                  {stats?.totalTrips || 0}
+                </p>
+                <p className="text-xs font-bold text-gray-500 dark:text-gray-400">Total Trips</p>
+              </div>
+              <div className="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-2xl border-l-4 border-purple-500">
+                <span className="material-icons-outlined text-purple-500 mb-1 text-base">straighten</span>
+                <p className="text-2xl font-black text-purple-600 dark:text-purple-400">
+                  {stats ? `${(stats.totalKmTraveled).toFixed(0)}km` : '0km'}
+                </p>
+                <p className="text-xs font-bold text-gray-500 dark:text-gray-400">Traveled</p>
+              </div>
+            </div>
+          </>
+        );
+      })()}
 
       <div className="grid grid-cols-2 gap-3 mb-8">
         <button onClick={() => setSubScreen('HELP')} className="bg-[#f3f3f3] dark:bg-zinc-900 p-4 rounded-2xl text-center hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors active:scale-95">
@@ -1345,6 +1556,7 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
       </div>
 
       <div className="space-y-1">
+        <MenuButton icon="eco" title="Eco Impact" subtitle={`${getImpactTier(stats?.totalCO2Saved || 0).emoji} View sustainability charts`} onClick={() => setSubScreen('SUSTAINABILITY')} />
         <MenuButton icon="settings" title="Settings" onClick={() => setSubScreen('SETTINGS')} />
         <MenuButton icon="security" title="Safety & Privacy" onClick={() => setSubScreen('SAFETY_PRIVACY')} />
         <MenuButton icon="logout" title="Sign out" destructive onClick={onSignOut} />

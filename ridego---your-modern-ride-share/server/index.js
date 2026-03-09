@@ -1,4 +1,4 @@
-﻿const express = require('express');
+const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
@@ -403,13 +403,19 @@ async function confirmPoolMatch(proposal, io) {
         }
 
         // Notify both riders that pool is confirmed
-        const riderAUser = await User.findById(riderAId).select('firstName lastName');
-        const riderBUser = await User.findById(riderBId).select('firstName lastName');
+        const riderAUser = await User.findById(riderAId).select('firstName lastName isVerified');
+        const riderBUser = await User.findById(riderBId).select('firstName lastName isVerified');
 
         io.to(`user:${riderAId}`).emit('pool:confirmed', {
             poolGroupId: groupId,
             matchedRider: {
                 name: `${riderBUser?.firstName || 'Rider'} ${riderBUser?.lastName || ''}`.trim(),
+                isVerified: riderBUser?.isVerified || false,
+                safetyTags: [
+                    ...(riderBUser?.isVerified ? ['verified'] : []),
+                    ...(rideB.safetyPreferences?.noSmoking ? ['noSmoking'] : []),
+                    ...(rideB.safetyPreferences?.womenOnly || rideB.safetyPreferences?.genderPreference === 'female' ? ['womenOnly'] : []),
+                ],
                 pickup: rideB.pickup,
                 dropoff: rideB.dropoff
             },
@@ -426,6 +432,12 @@ async function confirmPoolMatch(proposal, io) {
             poolGroupId: groupId,
             matchedRider: {
                 name: `${riderAUser?.firstName || 'Rider'} ${riderAUser?.lastName || ''}`.trim(),
+                isVerified: riderAUser?.isVerified || false,
+                safetyTags: [
+                    ...(riderAUser?.isVerified ? ['verified'] : []),
+                    ...(rideA.safetyPreferences?.noSmoking ? ['noSmoking'] : []),
+                    ...(rideA.safetyPreferences?.womenOnly || rideA.safetyPreferences?.genderPreference === 'female' ? ['womenOnly'] : []),
+                ],
                 pickup: rideA.pickup,
                 dropoff: rideA.dropoff
             },
@@ -1778,16 +1790,84 @@ app.post('/api/rides', async (req, res) => {
                     isPooled: true,
                     'pickup.lat': { $exists: true },
                     'dropoff.lat': { $exists: true }
-                }).populate('userId', 'firstName lastName email phone');
+                }).populate('userId', 'firstName lastName email phone gender isVerified');
 
                 console.log(`🔍 Pool matching: found ${candidateRides.length} candidate rides for rider ${ride.userId}`);
                 const newRideWindow = normalizePickupWindow(ride);
+
+                // Fetch the new rider's gender and verification status for strict matching
+                const newRiderUser = await User.findById(ride.userId).select('gender isVerified');
+                const newRiderGender = newRiderUser?.gender || 'Unknown';
+                // Resolve gender preference — womenOnly flag takes precedence
+                const newRiderPref = (ride.safetyPreferences?.womenOnly ? 'female' : null) ||
+                    ride.safetyPreferences?.genderPreference || ride.genderPreference || 'Any';
 
                 for (const candidate of candidateRides) {
                     const candidateWindow = normalizePickupWindow(candidate);
                     const overlapWindow = getPickupWindowOverlap(newRideWindow, candidateWindow);
                     if (!overlapWindow) {
                         console.log(`  ⏰ Candidate ${candidate._id}: no overlapping pickup window`);
+                        continue;
+                    }
+
+                    // Strict Gender Check
+                    const candidateRiderGender = candidate.userId.gender || 'Unknown';
+                    const candidatePref = (candidate.safetyPreferences?.womenOnly ? 'female' : null) ||
+                        candidate.safetyPreferences?.genderPreference || candidate.genderPreference || 'Any';
+
+                    const newPrefStr = (newRiderPref || '').toLowerCase();
+                    const candPrefStr = (candidatePref || '').toLowerCase();
+                    const newGenStr = (newRiderGender || '').toLowerCase();
+                    const candGenStr = (candidateRiderGender || '').toLowerCase();
+
+                    console.log(`[GENDER-DEBUG] Rider A (${candidate._id}): Gender=${candGenStr}, Pref=${candPrefStr}`);
+                    console.log(`[GENDER-DEBUG] Rider B (${ride._id}): Gender=${newGenStr}, Pref=${newPrefStr}`);
+
+                    // If new rider wants female only
+                    if (newPrefStr.includes('female') && candGenStr !== 'female') {
+                        console.log(`  🚫 Candidate ${candidate._id} rejected: new rider strictly wants Female. CandGender=${candGenStr}`);
+                        continue;
+                    }
+                    // If new rider wants male only
+                    if ((newPrefStr === 'male' || newPrefStr === 'male only') && candGenStr !== 'male') {
+                        console.log(`  🚫 Candidate ${candidate._id} rejected: new rider strictly wants Male. CandGender=${candGenStr}`);
+                        continue;
+                    }
+
+                    // If candidate wants female only
+                    if (candPrefStr.includes('female') && newGenStr !== 'female') {
+                        console.log(`  🚫 Candidate ${candidate._id} rejected: candidate strictly wants Female. NewGender=${newGenStr}`);
+                        continue;
+                    }
+                    // If candidate wants male only
+                    if ((candPrefStr === 'male' || candPrefStr === 'male only') && newGenStr !== 'male') {
+                        console.log(`  🚫 Candidate ${candidate._id} rejected: candidate strictly wants Male. NewGender=${newGenStr}`);
+                        continue;
+                    }
+
+                    // ── US 1.6.2: Verified-Only Filter ──────────────────────────────────────
+                    const newRiderVerifiedOnly = ride.safetyPreferences?.verifiedOnly || false;
+                    const candRiderVerifiedOnly = candidate.safetyPreferences?.verifiedOnly || false;
+                    const candidateIsVerified = candidate.userId?.isVerified || false;
+                    const newRiderIsVerified = newRiderUser?.isVerified || false;
+                    if (newRiderVerifiedOnly && !candidateIsVerified) {
+                        console.log(`  🚫 Candidate ${candidate._id} rejected: new rider requires Verified Only. CandVerified=${candidateIsVerified}`);
+                        continue;
+                    }
+                    if (candRiderVerifiedOnly && !newRiderIsVerified) {
+                        console.log(`  🚫 Candidate ${candidate._id} rejected: candidate requires Verified Only. NewVerified=${newRiderIsVerified}`);
+                        continue;
+                    }
+
+                    // ── US 1.6.2: No-Smoking Compatibility Filter (strict mutual) ────────────
+                    const newRiderNoSmoking = ride.safetyPreferences?.noSmoking || false;
+                    const candRiderNoSmoking = candidate.safetyPreferences?.noSmoking || false;
+                    if (newRiderNoSmoking && !candRiderNoSmoking) {
+                        console.log(`  🚫 Candidate ${candidate._id} rejected: new rider requires No Smoking but candidate has no smoke-free preference.`);
+                        continue;
+                    }
+                    if (candRiderNoSmoking && !newRiderNoSmoking) {
+                        console.log(`  🚫 Candidate ${candidate._id} rejected: candidate requires No Smoking but new rider has no smoke-free preference.`);
                         continue;
                     }
 
@@ -1823,10 +1903,10 @@ app.post('/api/rides', async (req, res) => {
                     const newRiderPoolFare = Math.round((ride.currentFare || ride.fare) * 0.65);
                     const existingRiderPoolFare = Math.round((poolMatch.currentFare || poolMatch.fare) * 0.65);
 
-                    // Fetch both riders' info (including gender)
-                    const newRider = await User.findById(ride.userId).select('firstName lastName gender');
+                    // Fetch both riders' info (including gender and verification)
+                    const newRider = await User.findById(ride.userId).select('firstName lastName gender isVerified');
                     const existingRiderId = poolMatch.userId._id || poolMatch.userId;
-                    const existingRiderUser = poolMatch.userId.firstName ? poolMatch.userId : await User.findById(existingRiderId).select('firstName lastName gender');
+                    const existingRiderUser = poolMatch.userId.firstName ? poolMatch.userId : await User.findById(existingRiderId).select('firstName lastName gender isVerified');
 
                     // Store pending proposal (don't save to DB yet)
                     const proposal = {
@@ -1871,6 +1951,12 @@ app.post('/api/rides', async (req, res) => {
                         matchedRider: {
                             name: `${newRider?.firstName || 'Rider'} ${newRider?.lastName || ''}`.trim(),
                             gender: newRider?.gender || 'Not specified',
+                            isVerified: newRider?.isVerified || false,
+                            safetyTags: [
+                                ...(newRider?.isVerified ? ['verified'] : []),
+                                ...(ride.safetyPreferences?.noSmoking ? ['noSmoking'] : []),
+                                ...(ride.safetyPreferences?.womenOnly || ride.safetyPreferences?.genderPreference === 'female' ? ['womenOnly'] : []),
+                            ],
                             pickup: ride.pickup,
                             dropoff: ride.dropoff
                         },
@@ -1890,6 +1976,12 @@ app.post('/api/rides', async (req, res) => {
                         matchedRider: {
                             name: matchedRiderName,
                             gender: existingRiderUser?.gender || 'Not specified',
+                            isVerified: existingRiderUser?.isVerified || false,
+                            safetyTags: [
+                                ...(existingRiderUser?.isVerified ? ['verified'] : []),
+                                ...(poolMatch.safetyPreferences?.noSmoking ? ['noSmoking'] : []),
+                                ...(poolMatch.safetyPreferences?.womenOnly || poolMatch.safetyPreferences?.genderPreference === 'female' ? ['womenOnly'] : []),
+                            ],
                             pickup: poolMatch.pickup,
                             dropoff: poolMatch.dropoff
                         },
@@ -4360,6 +4452,40 @@ app.get('/api/rides/:rideId/telemetry', async (req, res) => {
     } catch (error) {
         console.error('Telemetry GET error:', error);
         res.status(500).json({ message: 'Error fetching telemetry' });
+    }
+});
+
+/**
+ * @swagger
+ * /api/users/{userId}/sustainability/trends:
+ *   get:
+ *     summary: Get per-ride CO2 trend data (last 7 completed rides)
+ *     tags: [Users]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Array of trend data points
+ */
+app.get('/api/users/:userId/sustainability/trends', async (req, res) => {
+    try {
+        const rides = await Ride.find({ userId: req.params.userId, status: 'COMPLETED' })
+            .sort({ createdAt: -1 })
+            .limit(7)
+            .select('co2Saved co2Emitted createdAt distance');
+        const trends = rides.reverse().map(r => ({
+            date: r.createdAt,
+            co2Saved: r.co2Saved || 0,
+            co2Emitted: r.co2Emitted || 0,
+            distance: r.distance || 0
+        }));
+        res.json(trends);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching sustainability trends' });
     }
 });
 

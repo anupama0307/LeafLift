@@ -99,13 +99,13 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [isNoDriversFound, setIsNoDriversFound] = useState(false);
     const [poolProposal, setPoolProposal] = useState<{
         proposalId: string;
-        matchedRider: { name: string; gender: string; pickup: any; dropoff: any };
+        matchedRider: { name: string; gender: string; isVerified: boolean; safetyTags: string[]; pickup: any; dropoff: any };
         originalFare: number;
         poolFare: number;
     } | null>(null);
     const [poolMatchInfo, setPoolMatchInfo] = useState<{
         poolGroupId: string;
-        matchedRider: { name: string; pickup: any; dropoff: any };
+        matchedRider: { name: string; isVerified: boolean; safetyTags: string[]; pickup: any; dropoff: any };
         originalFare: number;
         poolFare: number;
         confirmedPickupSlot?: string;
@@ -398,6 +398,8 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                     matchedRider: {
                         name: payload.matchedRider.name,
                         gender: payload.matchedRider.gender || 'Not specified',
+                        isVerified: payload.matchedRider.isVerified || false,
+                        safetyTags: payload.matchedRider.safetyTags || [],
                         pickup: payload.matchedRider.pickup,
                         dropoff: payload.matchedRider.dropoff
                     },
@@ -414,7 +416,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             if (payload?.matchedRider) {
                 setPoolMatchInfo({
                     poolGroupId: payload.poolGroupId,
-                    matchedRider: payload.matchedRider,
+                    matchedRider: {
+                        ...payload.matchedRider,
+                        isVerified: payload.matchedRider.isVerified || false,
+                        safetyTags: payload.matchedRider.safetyTags || [],
+                    },
                     originalFare: payload.originalFare || 0,
                     poolFare: payload.poolFare || 0,
                     confirmedPickupSlot: payload.confirmedPickupSlot,
@@ -1851,7 +1857,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                         ].map(opt => (
                                             <button
                                                 key={opt.value}
-                                                onClick={() => setSafetyPrefs(prev => ({ ...prev, genderPreference: opt.value }))}
+                                                onClick={() => setSafetyPrefs(prev => ({ ...prev, genderPreference: opt.value, womenOnly: opt.value === 'female' }))}
                                                 className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl border-2 transition-all ${
                                                     safetyPrefs.genderPreference === opt.value
                                                         ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
@@ -1874,9 +1880,41 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 </div>
 
                                 <div className="flex flex-col gap-2">
+                                    {/* Women Only — convenience shortcut for Female gender preference */}
+                                    <label
+                                        className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition-all ${
+                                            safetyPrefs.womenOnly
+                                                ? 'border-pink-400 bg-pink-50 dark:bg-pink-900/20 dark:border-pink-700'
+                                                : 'border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50'
+                                        }`}
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            checked={safetyPrefs.womenOnly}
+                                            onChange={() => setSafetyPrefs(prev => {
+                                                const next = !prev.womenOnly;
+                                                return { ...prev, womenOnly: next, genderPreference: next ? 'female' : 'any' };
+                                            })}
+                                            className="sr-only"
+                                        />
+                                        <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-all ${
+                                            safetyPrefs.womenOnly ? 'bg-pink-500 border-pink-500' : 'border-gray-300 dark:border-zinc-600'
+                                        }`}>
+                                            {safetyPrefs.womenOnly && (
+                                                <span className="material-icons-outlined text-white" style={{ fontSize: '14px' }}>check</span>
+                                            )}
+                                        </div>
+                                        <span className={`material-icons-outlined text-sm ${
+                                            safetyPrefs.womenOnly ? 'text-pink-500' : 'text-gray-500 dark:text-gray-400'
+                                        }`}>female</span>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="text-xs font-bold dark:text-white">Women Only</div>
+                                            <div className="text-[10px] text-gray-400 dark:text-gray-500">Match only with women riders</div>
+                                        </div>
+                                    </label>
                                     {[
-                                        { key: 'verifiedOnly' as const, label: 'Verified Riders', icon: 'verified_user', desc: 'Only verified profiles' },
-                                        { key: 'noSmoking' as const, label: 'No Smoking', icon: 'smoke_free', desc: 'Smoke-free ride' },
+                                        { key: 'verifiedOnly' as const, label: 'Verified Riders', icon: 'verified_user', desc: 'Only verified profiles', color: 'blue' },
+                                        { key: 'noSmoking' as const, label: 'No Smoking', icon: 'smoke_free', desc: 'Smoke-free ride', color: 'green' },
                                     ].map(pref => (
                                         <label
                                             key={pref.key}
@@ -2174,8 +2212,26 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                 </div>
                                                 <div className="flex-1 text-left">
                                                     <div className="text-sm font-black text-gray-900 dark:text-white">{poolProposal.matchedRider.name}</div>
-                                                    <div className="flex items-center gap-2">
+                                                    <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                                                         <span className="text-[10px] font-bold text-gray-500 dark:text-gray-400 capitalize">{poolProposal.matchedRider.gender}</span>
+                                                        {poolProposal.matchedRider.isVerified && (
+                                                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 rounded-full">
+                                                                <span className="material-icons-outlined text-blue-600 dark:text-blue-400" style={{ fontSize: '10px' }}>verified_user</span>
+                                                                <span className="text-[9px] font-bold text-blue-600 dark:text-blue-400">Verified</span>
+                                                            </span>
+                                                        )}
+                                                        {poolProposal.matchedRider.safetyTags?.includes('noSmoking') && (
+                                                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 rounded-full">
+                                                                <span className="material-icons-outlined text-green-600 dark:text-green-400" style={{ fontSize: '10px' }}>smoke_free</span>
+                                                                <span className="text-[9px] font-bold text-green-600 dark:text-green-400">No Smoking</span>
+                                                            </span>
+                                                        )}
+                                                        {(poolProposal.matchedRider.gender?.toLowerCase() === 'female' || poolProposal.matchedRider.safetyTags?.includes('womenOnly')) && (
+                                                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-pink-50 dark:bg-pink-900/30 border border-pink-200 dark:border-pink-700 rounded-full">
+                                                                <span className="material-icons-outlined text-pink-500 dark:text-pink-400" style={{ fontSize: '10px' }}>female</span>
+                                                                <span className="text-[9px] font-bold text-pink-500 dark:text-pink-400">Women</span>
+                                                            </span>
+                                                        )}
                                                     </div>
                                                 </div>
                                             </div>
@@ -2263,7 +2319,27 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                 </div>
                                                 <div className="flex-1 text-left">
                                                     <div className="text-sm font-black text-gray-900 dark:text-white">{poolMatchInfo.matchedRider.name}</div>
-                                                    <div className="text-[10px] font-black text-leaf-600 dark:text-leaf-400 uppercase tracking-widest">Pool Partner</div>
+                                                    <div className="text-[10px] font-black text-leaf-600 dark:text-leaf-400 uppercase tracking-widest mb-1">Pool Partner</div>
+                                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                                        {poolMatchInfo.matchedRider.isVerified && (
+                                                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 rounded-full">
+                                                                <span className="material-icons-outlined text-blue-600 dark:text-blue-400" style={{ fontSize: '10px' }}>verified_user</span>
+                                                                <span className="text-[9px] font-bold text-blue-600 dark:text-blue-400">Verified</span>
+                                                            </span>
+                                                        )}
+                                                        {poolMatchInfo.matchedRider.safetyTags?.includes('noSmoking') && (
+                                                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 rounded-full">
+                                                                <span className="material-icons-outlined text-green-600 dark:text-green-400" style={{ fontSize: '10px' }}>smoke_free</span>
+                                                                <span className="text-[9px] font-bold text-green-600 dark:text-green-400">No Smoking</span>
+                                                            </span>
+                                                        )}
+                                                        {poolMatchInfo.matchedRider.safetyTags?.includes('womenOnly') && (
+                                                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-pink-50 dark:bg-pink-900/30 border border-pink-200 dark:border-pink-700 rounded-full">
+                                                                <span className="material-icons-outlined text-pink-500 dark:text-pink-400" style={{ fontSize: '10px' }}>female</span>
+                                                                <span className="text-[9px] font-bold text-pink-500 dark:text-pink-400">Women Only</span>
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             </div>
                                             <div className="flex items-center gap-2.5 ml-1">
