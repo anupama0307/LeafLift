@@ -95,7 +95,7 @@ jobs:
           import sys, json
           projects = json.load(sys.stdin).get('projects', [])
           for p in projects:
-              if 'ridego' in p['name'].lower() or 'leaflift' in p['name'].lower():
+              if 'ridego' in p['name'].lower() or 'leaflift' in p['name'].lower() or 'leaf_lift' in p['name'].lower():
                   print(p['id']); break
           else:
               print(projects[0]['id']) if projects else exit(1)
