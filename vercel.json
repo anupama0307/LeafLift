@@ -1,4 +1,7 @@
 {
+  "buildCommand": "cd ridego---your-modern-ride-share && npm install && npm run build",
+  "outputDirectory": "ridego---your-modern-ride-share/dist",
+  "framework": "vite",
   "rewrites": [
     {
       "source": "/((?!api).*)",

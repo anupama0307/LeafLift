@@ -1,0 +1,7 @@
+{
+  "name": "leaflift-root",
+  "private": true,
+  "scripts": {
+    "build": "cd ridego---your-modern-ride-share && npm install && npm run build"
+  }
+}
