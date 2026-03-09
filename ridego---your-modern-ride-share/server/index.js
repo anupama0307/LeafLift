@@ -4108,6 +4108,79 @@ app.get('/api/rides/:rideId/carbon', async (req, res) => {
     }
 });
 
+// ── US 3.3.2 / 3.3.3 — CO₂ history & monthly aggregation ──
+app.get('/api/users/:userId/co2-history', async (req, res) => {
+    try {
+        const rides = await Ride.find({ userId: req.params.userId, status: 'COMPLETED' }).sort({ createdAt: 1 }).lean();
+
+        // Group rides by YYYY-MM
+        const byMonth = {};
+        for (const ride of rides) {
+            const d = new Date(ride.createdAt || ride.bookingTime || Date.now());
+            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            const label = d.toLocaleString('en-IN', { month: 'short', year: 'numeric' });
+
+            // Derive CO2 on-the-fly if stored values are 0 (legacy rides)
+            let co2E = ride.co2Emissions || 0;
+            let co2S = ride.co2Saved || 0;
+            if (!co2E && ride.pickup?.lat && ride.dropoff?.lat) {
+                const dk = getDistanceKm(ride.pickup.lat, ride.pickup.lng, ride.dropoff.lat, ride.dropoff.lng) || 0;
+                const c = calculateCO2(dk, ride.vehicleCategory, !!ride.isPooled);
+                co2E = c.co2Emissions;
+                co2S = c.co2Saved;
+            }
+
+            if (!byMonth[key]) byMonth[key] = { month: label, key, co2EmittedG: 0, co2SavedG: 0, rides: 0, pooledRides: 0 };
+            byMonth[key].co2EmittedG += co2E;
+            byMonth[key].co2SavedG  += co2S;
+            byMonth[key].rides      += 1;
+            if (ride.isPooled) byMonth[key].pooledRides += 1;
+        }
+
+        const monthly = Object.values(byMonth).sort((a, b) => a.key.localeCompare(b.key));
+
+        // Cumulative CO2 saved per month (running total)
+        let cumulative = 0;
+        for (const m of monthly) {
+            cumulative += m.co2SavedG;
+            m.cumulativeSavedG = cumulative;
+            m.co2SavedKg  = parseFloat((m.co2SavedG  / 1000).toFixed(3));
+            m.co2EmittedKg = parseFloat((m.co2EmittedG / 1000).toFixed(3));
+            m.treeEquivalent = parseFloat((m.co2SavedG / 21000).toFixed(4));
+        }
+
+        // Summary stats
+        const totalCO2SavedG   = monthly.reduce((s, m) => s + m.co2SavedG, 0);
+        const totalCO2EmittedG = monthly.reduce((s, m) => s + m.co2EmittedG, 0);
+        const bestMonth        = monthly.reduce((best, m) => (!best || m.co2SavedG > best.co2SavedG ? m : best), null);
+        const maxSaved         = Math.max(...monthly.map(m => m.co2SavedG), 1);
+        const maxEmitted       = Math.max(...monthly.map(m => m.co2EmittedG), 1);
+
+        // Add bar-chart percentage for visualisation (US 3.3.3)
+        for (const m of monthly) {
+            m.savedBarPct   = Math.round((m.co2SavedG   / maxSaved)   * 100);
+            m.emittedBarPct = Math.round((m.co2EmittedG / maxEmitted) * 100);
+        }
+
+        res.json({
+            summary: {
+                totalCO2SavedG,
+                totalCO2SavedKg:   parseFloat((totalCO2SavedG   / 1000).toFixed(3)),
+                totalCO2EmittedG,
+                totalCO2EmittedKg: parseFloat((totalCO2EmittedG / 1000).toFixed(3)),
+                totalTreeEquivalent: parseFloat((totalCO2SavedG / 21000).toFixed(4)),
+                totalRides:  rides.length,
+                totalMonths: monthly.length,
+                bestMonth:   bestMonth ? bestMonth.month : null
+            },
+            monthly
+        });
+    } catch (error) {
+        console.error('CO2 history error:', error);
+        res.status(500).json({ message: 'Error fetching CO2 history' });
+    }
+});
+
 // ── Scheduled rides ──
 /**
  * @swagger

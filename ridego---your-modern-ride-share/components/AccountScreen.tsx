@@ -7,7 +7,7 @@ interface AccountScreenProps {
   onUserUpdate?: (updatedUser: any) => void;
 }
 
-type AccountSubScreen = 'MAIN' | 'SETTINGS' | 'SAFETY_PRIVACY' | 'HELP' | 'WALLET' | 'TRIPS';
+type AccountSubScreen = 'MAIN' | 'SETTINGS' | 'SAFETY_PRIVACY' | 'HELP' | 'WALLET' | 'TRIPS' | 'CO2_HISTORY';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
@@ -54,6 +54,10 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
   // Wallet transactions state
   const [transactions, setTransactions] = useState<any[]>([]);
 
+  // CO2 history state
+  const [co2History, setCo2History] = useState<any>(null);
+  const [co2HistoryLoading, setCo2HistoryLoading] = useState(false);
+
   useEffect(() => {
     if (!user?._id) return;
     fetch(`${API_BASE_URL}/api/users/${user._id}/stats`)
@@ -75,6 +79,18 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
         .then(d => setTrips(d || []))
         .catch(() => setTrips([]))
         .finally(() => setTripsLoading(false));
+    }
+  }, [subScreen, user]);
+
+  // Fetch CO2 history when CO2_HISTORY screen is opened
+  useEffect(() => {
+    if (subScreen === 'CO2_HISTORY' && user?._id && !co2History) {
+      setCo2HistoryLoading(true);
+      fetch(`${API_BASE_URL}/api/users/${user._id}/co2-history`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d) setCo2History(d); })
+        .catch(() => {})
+        .finally(() => setCo2HistoryLoading(false));
     }
   }, [subScreen, user]);
 
@@ -969,12 +985,134 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
     );
   };
 
+  // --- US 3.3 — CO2 History Screen ---
+  const renderCO2History = () => {
+    const summary = co2History?.summary;
+    const monthly: any[] = co2History?.monthly || [];
+
+    return (
+      <div className="px-5 pb-24 animate-in fade-in duration-300 bg-white dark:bg-black min-h-full">
+        <SubScreenHeader title="Green Impact" onBack={() => setSubScreen('MAIN')} />
+
+        {co2HistoryLoading ? (
+          <div className="flex items-center justify-center py-20">
+            <span className="material-icons-outlined text-4xl text-green-400 animate-spin">sync</span>
+          </div>
+        ) : (
+          <>
+            {/* Hero Summary Card */}
+            <div className="bg-gradient-to-br from-green-500 to-emerald-700 rounded-3xl p-5 mb-6 text-white shadow-xl relative overflow-hidden">
+              <div className="absolute right-2 bottom-2 opacity-10">
+                <span className="material-icons text-[90px]">park</span>
+              </div>
+              <p className="text-[10px] font-black uppercase tracking-widest opacity-70 mb-1">Cumulative CO₂ Saved</p>
+              <h2 className="text-4xl font-black">{summary ? summary.totalCO2SavedKg.toFixed(2) : '0.00'} <span className="text-xl font-bold">kg</span></h2>
+              <p className="text-sm opacity-80 mt-1">≈ {summary ? summary.totalTreeEquivalent.toFixed(3) : '0'} trees worth of absorption 🌳</p>
+              <div className="mt-4 grid grid-cols-3 gap-2">
+                <div className="bg-white/10 rounded-2xl p-3 text-center">
+                  <p className="text-lg font-black">{summary?.totalRides || 0}</p>
+                  <p className="text-[9px] font-bold uppercase opacity-70">Rides</p>
+                </div>
+                <div className="bg-white/10 rounded-2xl p-3 text-center">
+                  <p className="text-lg font-black">{summary ? summary.totalCO2EmittedKg.toFixed(2) : '0'}</p>
+                  <p className="text-[9px] font-bold uppercase opacity-70">kg Emitted</p>
+                </div>
+                <div className="bg-white/10 rounded-2xl p-3 text-center">
+                  <p className="text-lg font-black">{summary?.bestMonth || '—'}</p>
+                  <p className="text-[9px] font-bold uppercase opacity-70">Best Month</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Monthly Bar Chart (3.3.3) */}
+            {monthly.length > 0 ? (
+              <div className="bg-gray-50 dark:bg-zinc-900/50 rounded-2xl border border-gray-100 dark:border-zinc-800 p-4 mb-6">
+                <p className="text-xs font-black uppercase tracking-wider text-gray-500 dark:text-zinc-500 mb-4">Monthly CO₂ Saved (g)</p>
+                <div className="space-y-3">
+                  {monthly.map((m: any) => (
+                    <div key={m.key}>
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-xs font-bold text-black dark:text-white">{m.month}</span>
+                        <span className="text-[10px] font-black text-green-600 dark:text-green-400">
+                          {m.co2SavedG >= 1000 ? `${(m.co2SavedG/1000).toFixed(2)}kg` : `${m.co2SavedG}g`} saved
+                        </span>
+                      </div>
+                      {/* Saved bar (green) */}
+                      <div className="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-2.5 mb-1 overflow-hidden">
+                        <div
+                          className="bg-green-500 h-2.5 rounded-full transition-all duration-500"
+                          style={{ width: `${m.savedBarPct}%` }}
+                        />
+                      </div>
+                      {/* Emitted bar (orange, narrower) */}
+                      <div className="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-1.5 overflow-hidden">
+                        <div
+                          className="bg-orange-400 h-1.5 rounded-full transition-all duration-500"
+                          style={{ width: `${m.emittedBarPct}%` }}
+                        />
+                      </div>
+                      <div className="flex gap-4 mt-0.5">
+                        <span className="text-[9px] text-gray-400">🟢 saved</span>
+                        <span className="text-[9px] text-gray-400">🟠 emitted</span>
+                        <span className="text-[9px] text-gray-400 ml-auto">{m.rides} ride{m.rides !== 1 ? 's' : ''} · {m.pooledRides} pooled</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {/* Legend: cumulative line note */}
+                <div className="mt-4 pt-3 border-t border-gray-200 dark:border-zinc-700 flex items-center gap-2">
+                  <span className="material-icons-outlined text-green-500 text-sm">trending_up</span>
+                  <p className="text-[10px] text-gray-500 dark:text-zinc-500">
+                    Cumulative savings: <span className="font-black text-green-600">+{(monthly[monthly.length - 1]?.cumulativeSavedG / 1000 || 0).toFixed(2)} kg</span>
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-gray-50 dark:bg-zinc-900/50 rounded-2xl border border-gray-100 dark:border-zinc-800 p-10 text-center mb-6">
+                <span className="material-icons-outlined text-5xl text-gray-300 dark:text-zinc-600 mb-3">eco</span>
+                <p className="text-lg font-bold text-gray-500 dark:text-zinc-500">No history yet</p>
+                <p className="text-sm text-gray-400 dark:text-zinc-600 mt-1">Complete rides to build your green timeline</p>
+              </div>
+            )}
+
+            {/* Monthly breakdown list (3.3.1) */}
+            {monthly.length > 0 && (
+              <div>
+                <p className="text-xs font-black uppercase tracking-wider text-gray-500 dark:text-zinc-500 mb-3">Month-by-Month Breakdown</p>
+                <div className="space-y-3">
+                  {[...monthly].reverse().map((m: any) => (
+                    <div key={m.key} className="bg-gray-50 dark:bg-zinc-900/50 rounded-2xl border border-gray-100 dark:border-zinc-800 p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-sm font-black text-black dark:text-white">{m.month}</p>
+                          <p className="text-[10px] text-gray-500 dark:text-zinc-500">{m.rides} ride{m.rides !== 1 ? 's' : ''} · {m.pooledRides} pooled</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-black text-green-600 dark:text-green-400">−{m.co2SavedKg} kg saved</p>
+                          <p className="text-[10px] text-orange-500">{m.co2EmittedKg} kg emitted</p>
+                        </div>
+                      </div>
+                      <div className="mt-2 text-[10px] text-gray-400 dark:text-zinc-500">
+                        🌳 {m.treeEquivalent} tree equivalent · cumulative {(m.cumulativeSavedG/1000).toFixed(2)} kg
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    );
+  };
+
   // --- Route to sub-screens ---
   if (subScreen === 'SETTINGS') return renderSettings();
   if (subScreen === 'SAFETY_PRIVACY') return renderSafetyPrivacy();
   if (subScreen === 'HELP') return renderHelp();
   if (subScreen === 'WALLET') return renderWallet();
   if (subScreen === 'TRIPS') return renderTrips();
+  if (subScreen === 'CO2_HISTORY') return renderCO2History();
 
   if (isDriver) {
     return (
@@ -1166,7 +1304,7 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3 mb-8">
+      <div className="grid grid-cols-2 gap-3 mb-8">
         <button onClick={() => setSubScreen('HELP')} className="bg-[#f3f3f3] dark:bg-zinc-900 p-4 rounded-2xl text-center hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors active:scale-95">
           <span className="material-icons-outlined text-blue-500 mb-1">help_outline</span>
           <p className="text-xs font-bold text-black dark:text-white">Help</p>
@@ -1178,6 +1316,10 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
         <button onClick={() => setSubScreen('TRIPS')} className="bg-[#f3f3f3] dark:bg-zinc-900 p-4 rounded-2xl text-center hover:bg-purple-50 dark:hover:bg-purple-900/20 transition-colors active:scale-95">
           <span className="material-icons-outlined text-purple-500 mb-1">receipt_long</span>
           <p className="text-xs font-bold text-black dark:text-white">Trips</p>
+        </button>
+        <button onClick={() => { setCo2History(null); setSubScreen('CO2_HISTORY'); }} className="bg-[#f3f3f3] dark:bg-zinc-900 p-4 rounded-2xl text-center hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors active:scale-95">
+          <span className="material-icons-outlined text-emerald-500 mb-1">park</span>
+          <p className="text-xs font-bold text-black dark:text-white">Green Impact</p>
         </button>
       </div>
 
