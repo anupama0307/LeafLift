@@ -174,8 +174,6 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
       addOrUpdateRequestMarker(request);
       setRequests((prev) => {
         const rideIdStr = String(payload.rideId);
-        // Dedupe by rideId (use string comparison to handle ObjectId vs string)
-        if (prev.some((r) => String(r.rideId) === rideIdStr)) return prev;
 
         if (request.isPooled && request.poolGroupRiders && request.poolGroupRiders.length > 0) {
           // This is a consolidated pool request — remove any existing individual requests
@@ -185,10 +183,16 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
           const filtered = prev.filter((r) => {
             if (request.poolGroupId && r.poolGroupId && String(r.poolGroupId) === String(request.poolGroupId)) return false;
             if (poolRiderIds.has(String(r.rideId))) return false;
+            // Filter out the old solo ride that shared this rideId
+            if (String(r.rideId) === rideIdStr) return false;
             return true;
           });
           return [request, ...filtered];
         }
+
+        // Dedupe by rideId for normal/solo rides
+        if (prev.some((r) => String(r.rideId) === rideIdStr)) return prev;
+
         return [request, ...prev];
       });
     };
@@ -559,8 +563,10 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
           rideId: ride._id,
           pickup: ride.pickup,
           dropoff: ride.dropoff,
-          fare: ride.fare,
-          isPooled: ride.isPooled
+          fare: ride.currentFare || ride.fare,
+          isPooled: ride.isPooled,
+          poolGroupId: ride.poolGroupId || null,
+          poolGroupRiders: ride.poolGroupRiders || null
         }));
         // Clear ALL old markers before setting new state
         requestMarkersRef.current.forEach(m => m.remove());
@@ -1156,10 +1162,10 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
                     >
                       <div className="flex justify-between items-center mb-3">
                         <div className="flex items-center gap-2">
-                          <span className={`px-2 py-1 ${req.isPooled ? 'bg-leaf-600 dark:bg-leaf-500' : 'bg-black dark:bg-white'} text-white dark:text-${req.isPooled ? 'white' : 'black'} rounded-lg text-[10px] font-black uppercase tracking-widest`}>
-                            {req.isPooled ? (req.poolGroupRiders ? `Pool (${req.poolGroupRiders.length} riders)` : 'Pool') : 'Solo'}
+                          <span className={`px-2 py-1 ${req.isPooled ? 'bg-leaf-600 dark:bg-leaf-500' : 'bg-black dark:bg-white'} text-white dark:text-${req.isPooled ? 'white' : 'black'} rounded-md text-[10px] font-bold uppercase tracking-wider`}>
+                            {req.isPooled ? (req.poolGroupRiders ? `POOL (${req.poolGroupRiders.length} RIDERS)` : 'POOL') : 'SOLO'}
                           </span>
-                          <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{req.routeIndex ? `Route #${req.routeIndex}` : 'Direct'}</span>
+                          <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{req.routeIndex ? `Route #${req.routeIndex}` : 'Direct'}</span>
                         </div>
                         <span className="font-black text-2xl text-leaf-600 dark:text-leaf-400">₹{req.fare}</span>
                       </div>
@@ -1170,34 +1176,34 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
                           <div className="size-2 bg-red-500 rounded-full"></div>
                         </div>
                         <div className="flex-1 min-w-0 pr-4">
-                          <p className="text-sm font-bold dark:text-white truncate mb-1">{req.pickup?.address || 'Pickup'}</p>
-                          <p className="text-sm font-bold dark:text-white truncate">{req.dropoff?.address || 'Drop'}</p>
+                          <p className="text-sm font-bold dark:text-gray-900 dark:text-white truncate mb-1">{req.pickup?.address || 'Pickup'}</p>
+                          <p className="text-sm font-bold dark:text-gray-900 dark:text-white truncate">{req.dropoff?.address || 'Drop'}</p>
                         </div>
                       </div>
 
                       {/* Pool Group Riders — Detailed view */}
                       {req.isPooled && req.poolGroupRiders && req.poolGroupRiders.length > 0 && (
-                        <div className="mb-4">
+                        <div className="mb-4 mt-2">
                           <div className="flex items-center gap-2 mb-3">
-                            <div className="size-6 bg-leaf-100 dark:bg-leaf-900/30 rounded-lg flex items-center justify-center">
-                              <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400" style={{ fontSize: '13px' }}>group</span>
+                            <div className="size-6 bg-green-100/50 dark:bg-green-900/30 rounded-lg flex items-center justify-center">
+                              <span className="material-icons-outlined text-green-600 dark:text-green-400" style={{ fontSize: '14px' }}>group</span>
                             </div>
-                            <span className="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-widest">
+                            <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest">
                               {req.poolGroupRiders.length} Riders in this pool
                             </span>
                           </div>
-                          <div className="space-y-2.5">
+                          <div className="space-y-2">
                             {req.poolGroupRiders.map((rider: any, idx: number) => (
-                              <div key={idx} className="p-3 bg-white dark:bg-zinc-800/80 rounded-2xl border border-gray-100 dark:border-zinc-700/60">
+                              <div key={idx} className="p-4 bg-white dark:bg-zinc-800/80 rounded-[20px] border border-gray-100 dark:border-zinc-700/60 shadow-[0_2px_8px_rgba(0,0,0,0.02)]">
                                 {/* Rider name + avatar */}
-                                <div className="flex items-center gap-2.5 mb-2.5">
-                                  <div className="size-8 bg-leaf-100 dark:bg-leaf-900/30 rounded-xl flex items-center justify-center shrink-0">
-                                    <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400" style={{ fontSize: '16px' }}>person</span>
+                                <div className="flex items-center gap-3 mb-3">
+                                  <div className="size-8 bg-green-100/50 dark:bg-green-900/30 rounded-full flex items-center justify-center shrink-0">
+                                    <span className="material-icons-outlined text-green-600 dark:text-green-400" style={{ fontSize: '15px' }}>person</span>
                                   </div>
-                                  <span className="text-sm font-black text-gray-900 dark:text-white">{rider.name}</span>
+                                  <span className="text-[13px] font-bold text-gray-900 dark:text-white uppercase tracking-wide">{rider.name}</span>
                                 </div>
                                 {/* Route: pickup → dropoff */}
-                                <div className="flex items-center gap-2.5 ml-1">
+                                <div className="flex items-center gap-3 ml-1.5">
                                   <div className="flex flex-col items-center gap-0.5 shrink-0">
                                     <div className="size-1.5 bg-leaf-500 rounded-full"></div>
                                     <div className="w-0.5 h-3 bg-gray-200 dark:bg-zinc-700"></div>
@@ -1218,7 +1224,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
                         onClick={(e) => { e.stopPropagation(); handleAcceptRide(req.rideId); }}
                         className="w-full bg-leaf-600 dark:bg-leaf-500 text-white py-3.5 rounded-2xl font-black text-sm shadow-lg shadow-leaf-500/20 group-hover:scale-[1.02] transition-all"
                       >
-                        {req.isPooled && req.poolGroupRiders ? `Accept Pool Ride (${req.poolGroupRiders.length} riders)` : 'Accept Ride'}
+                        Accept Ride
                       </button>
                     </div>
                   ))}
