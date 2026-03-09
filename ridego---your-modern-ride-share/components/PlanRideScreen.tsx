@@ -94,6 +94,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [safetyPrefs, setSafetyPrefs] = useState({ womenOnly: false, verifiedOnly: false, noSmoking: false, genderPreference: 'any' as 'any' | 'male' | 'female' });
     const [accessibilityOptions, setAccessibilityOptions] = useState<string[]>([]);
     const [confirmCompleteData, setConfirmCompleteData] = useState<any>(null);
+    const [rideSummary, setRideSummary] = useState<any>(null);
 
     const [isNoDriversFound, setIsNoDriversFound] = useState(false);
     const [poolProposal, setPoolProposal] = useState<{
@@ -1319,6 +1320,18 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         }).catch(() => { });
         if (confirmed) {
             setCurrentFare(confirmCompleteData?.completedFare || currentFare);
+            // Client-side CO2 fallback: if server sent 0 (legacy ride), derive from distance
+            const summaryData = { ...confirmCompleteData };
+            if (!summaryData.co2EmittedG && summaryData.actualDistanceKm) {
+                const distKm = parseFloat(summaryData.actualDistanceKm) || 0;
+                const co2G = Math.round(distKm * 120); // CAR baseline 120 g/km
+                summaryData.co2EmittedG = co2G;
+                summaryData.co2EmittedKg = parseFloat((co2G / 1000).toFixed(3));
+                summaryData.treeEquivalent = parseFloat((co2G / 21000).toFixed(3));
+                summaryData.co2SavedG = summaryData.co2SavedG || 0;
+                summaryData.co2SavedKg = summaryData.co2SavedKg || 0;
+            }
+            setRideSummary(summaryData);
         }
         setConfirmCompleteData(null);
     };
@@ -1350,6 +1363,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         setPickupWindowEnd(toDateTimeInputValue(resetEnd));
         setAvailableRoutes([]);
         setConfirmCompleteData(null);
+        setRideSummary(null);
         if (driverMarkerRef.current) { driverMarkerRef.current.remove(); driverMarkerRef.current = null; }
         if (riderMarkerRef.current) { riderMarkerRef.current.remove(); riderMarkerRef.current = null; }
         nearbyDriverMarkersRef.current.forEach(m => m.remove());
@@ -2610,10 +2624,33 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 Distance traveled: {confirmCompleteData.actualDistanceKm} km
                             </p>
                         )}
-                        <p className="text-lg font-bold text-green-600 dark:text-green-400 mt-2">
+                        <p className="text-lg font-bold text-green-600 dark:text-green-400 mt-2 mb-3">
                             Fare: ₹{confirmCompleteData.completedFare}
                         </p>
-                        <div className="flex gap-3 mt-4">
+                        {/* CO2 preview */}
+                        {(confirmCompleteData.co2EmittedG > 0) && (
+                            <div className="bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-xl px-3 py-2 mb-2 flex items-center justify-between">
+                                <div className="flex items-center gap-1.5">
+                                    <span className="material-icons-outlined text-gray-400 text-sm">cloud</span>
+                                    <span className="text-xs text-gray-600 dark:text-gray-300">CO₂ emitted</span>
+                                </div>
+                                <span className="text-xs font-bold dark:text-white">
+                                    {confirmCompleteData.co2EmittedKg >= 0.1 ? `${confirmCompleteData.co2EmittedKg} kg` : `${confirmCompleteData.co2EmittedG} g`}
+                                </span>
+                            </div>
+                        )}
+                        {confirmCompleteData.co2SavedG > 0 && (
+                            <div className="bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-xl px-3 py-2 mb-3 flex items-center justify-between">
+                                <div className="flex items-center gap-1.5">
+                                    <span className="material-icons-outlined text-green-500 text-sm">eco</span>
+                                    <span className="text-xs text-gray-600 dark:text-gray-300">CO₂ saved (pool)</span>
+                                </div>
+                                <span className="text-xs font-bold text-green-600 dark:text-green-400">
+                                    -{confirmCompleteData.co2SavedKg >= 0.01 ? `${confirmCompleteData.co2SavedKg} kg` : `${confirmCompleteData.co2SavedG} g`}
+                                </span>
+                            </div>
+                        )}
+                        <div className="flex gap-3 mt-1">
                             <button
                                 onClick={() => handleConfirmComplete(true)}
                                 className="flex-1 bg-green-500 text-white py-3 rounded-xl font-bold"
@@ -2627,6 +2664,94 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 Dispute
                             </button>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Ride Summary Modal (shown after rider confirms completion) ── */}
+            {rideSummary && (
+                <div className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4">
+                    <div className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-3xl p-6 shadow-2xl overflow-y-auto max-h-[90vh]">
+                        {/* Header */}
+                        <div className="text-center mb-5">
+                            <div className="text-5xl mb-2">🌿</div>
+                            <h3 className="text-xl font-bold dark:text-white">Ride Complete!</h3>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Here's your ride summary</p>
+                        </div>
+                        {/* Fare + Distance */}
+                        <div className="grid grid-cols-2 gap-3 mb-4">
+                            <div className="bg-gray-50 dark:bg-zinc-800 rounded-2xl p-3 text-center">
+                                <p className="text-xs text-gray-500 dark:text-gray-400 mb-0.5">Fare Paid</p>
+                                <p className="text-2xl font-black dark:text-white">₹{rideSummary.completedFare}</p>
+                            </div>
+                            <div className="bg-gray-50 dark:bg-zinc-800 rounded-2xl p-3 text-center">
+                                <p className="text-xs text-gray-500 dark:text-gray-400 mb-0.5">Distance</p>
+                                <p className="text-2xl font-black dark:text-white">{rideSummary.actualDistanceKm}<span className="text-sm font-normal"> km</span></p>
+                            </div>
+                        </div>
+                        {/* Carbon Footprint card */}
+                        <div className="bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-2xl p-4 mb-4">
+                            <p className="text-xs font-semibold text-green-700 dark:text-green-400 uppercase tracking-wide mb-3">Carbon Footprint</p>
+                            {/* CO2 Emitted */}
+                            <div className="flex items-center justify-between mb-2.5">
+                                <div className="flex items-center gap-2">
+                                    <span className="material-icons-outlined text-gray-400 text-[18px]">cloud</span>
+                                    <span className="text-sm text-gray-600 dark:text-gray-300">CO₂ emitted</span>
+                                </div>
+                                <span className="text-sm font-bold dark:text-white">
+                                    {rideSummary.co2EmittedG > 0
+                                        ? rideSummary.co2EmittedKg >= 0.1
+                                            ? `${rideSummary.co2EmittedKg} kg`
+                                            : `${rideSummary.co2EmittedG} g`
+                                        : '—'}
+                                </span>
+                            </div>
+                            {/* CO2 Saved (pooled only) */}
+                            {rideSummary.co2SavedG > 0 && (
+                                <div className="flex items-center justify-between mb-2.5">
+                                    <div className="flex items-center gap-2">
+                                        <span className="material-icons-outlined text-green-500 text-[18px]">eco</span>
+                                        <span className="text-sm text-gray-600 dark:text-gray-300">CO₂ saved (pool)</span>
+                                    </div>
+                                    <span className="text-sm font-bold text-green-600 dark:text-green-400">
+                                        -{rideSummary.co2SavedKg >= 0.01 ? `${rideSummary.co2SavedKg} kg` : `${rideSummary.co2SavedG} g`}
+                                    </span>
+                                </div>
+                            )}
+                            {/* Tree Equivalent */}
+                            <div className="flex items-center justify-between mb-2.5">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-[18px]">🌳</span>
+                                    <span className="text-sm text-gray-600 dark:text-gray-300">Tree equivalent</span>
+                                </div>
+                                <span className="text-sm font-bold dark:text-white">
+                                    {rideSummary.treeEquivalent > 0
+                                        ? rideSummary.treeEquivalent < 0.001 ? '<0.001' : rideSummary.treeEquivalent
+                                        : '—'} trees/yr
+                                </span>
+                            </div>
+                            {/* Net impact (pooled) */}
+                            {rideSummary.co2SavedG > 0 && rideSummary.co2EmittedG > 0 && (
+                                <div className="mt-2 pt-2.5 border-t border-green-200 dark:border-green-800 flex items-center justify-between">
+                                    <span className="text-xs font-semibold text-green-700 dark:text-green-400">Net CO₂ impact</span>
+                                    <span className="text-xs font-bold text-green-600 dark:text-green-400">
+                                        {((rideSummary.co2EmittedG - rideSummary.co2SavedG) / 1000).toFixed(3)} kg net
+                                    </span>
+                                </div>
+                            )}
+                        </div>
+                        {/* Pool badge */}
+                        {rideSummary.isPooled && (
+                            <div className="bg-green-500 text-white rounded-xl py-2 px-3 text-xs font-semibold text-center mb-4">
+                                🌍 You pooled this ride — great for the planet!
+                            </div>
+                        )}
+                        <button
+                            onClick={() => { setRideSummary(null); handleResetRide(); }}
+                            className="w-full bg-black dark:bg-white text-white dark:text-black font-bold py-3 rounded-xl"
+                        >
+                            Done
+                        </button>
                     </div>
                 </div>
             )}

@@ -87,6 +87,28 @@ const ActivityScreen: React.FC = () => {
             <button className="bg-leaf-600 text-white dark:bg-leaf-500 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest shadow-md shadow-leaf-500/10">Rebook</button>
           )}
         </div>
+
+        {/* ── US 3.1.3 — Carbon Footprint on Ride Summary ── */}
+        {ride.status === 'COMPLETED' && (ride.co2Emissions > 0 || ride.co2Saved > 0) && (
+          <div className="mt-3 flex gap-2 flex-wrap">
+            {ride.co2Emissions > 0 && (
+              <div className="flex items-center gap-1.5 bg-gray-50 dark:bg-zinc-800 rounded-full px-3 py-1">
+                <span className="material-icons-outlined text-gray-400 dark:text-zinc-500" style={{ fontSize: '13px' }}>co2</span>
+                <span className="text-[10px] font-black text-gray-500 dark:text-zinc-400">
+                  {(ride.co2Emissions / 1000).toFixed(2)} kg CO₂
+                </span>
+              </div>
+            )}
+            {ride.co2Saved > 0 && (
+              <div className="flex items-center gap-1.5 bg-leaf-50 dark:bg-leaf-900/20 rounded-full px-3 py-1">
+                <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400" style={{ fontSize: '13px' }}>eco</span>
+                <span className="text-[10px] font-black text-leaf-600 dark:text-leaf-400">
+                  {(ride.co2Saved / 1000).toFixed(2)} kg saved
+                </span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

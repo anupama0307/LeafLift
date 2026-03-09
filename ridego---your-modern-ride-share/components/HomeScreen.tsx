@@ -20,7 +20,10 @@ interface ScheduledRide {
 
 const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenPlan }) => {
   const [walletBalance, setWalletBalance] = useState<number>(0);
-  const [carbonSaved, setCarbonSaved] = useState<number>(0);
+  const [carbonSaved, setCarbonSaved] = useState<number>(0);        // kg
+  const [carbonEmitted, setCarbonEmitted] = useState<number>(0);    // kg
+  const [treeEquivalent, setTreeEquivalent] = useState<number>(0);  // trees
+  const [totalTrips, setTotalTrips] = useState<number>(0);
   const [scheduledRides, setScheduledRides] = useState<ScheduledRide[]>([]);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [scheduleDate, setScheduleDate] = useState('');
@@ -40,7 +43,12 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenPlan }) => {
 
     fetch(`${API_BASE_URL}/api/users/${user._id}/stats`)
       .then(r => r.ok ? r.json() : { totalCO2Saved: 0 })
-      .then(d => setCarbonSaved(d.totalCO2Saved || 0))
+      .then(d => {
+        setCarbonSaved((d.totalCO2SavedKg ?? d.totalCO2Saved / 1000) || 0);
+        setCarbonEmitted((d.totalCO2EmittedKg ?? d.totalCO2Emitted / 1000) || 0);
+        setTreeEquivalent(d.treeEquivalent || 0);
+        setTotalTrips(d.totalTrips || 0);
+      })
       .catch(() => { });
 
     fetch(`${API_BASE_URL}/api/rides/scheduled/${user._id}`)
@@ -110,10 +118,61 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenPlan }) => {
           <div className="bg-zinc-900 rounded-[32px] p-6 flex flex-col justify-between h-40 shadow-xl shadow-black/10">
             <span className="material-icons-outlined text-leaf-500 text-3xl">leaf</span>
             <div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-white/40 mb-1">Carbon Saved</p>
-              <h3 className="text-3xl font-black text-white">{carbonSaved.toFixed(1)}<span className="text-xs ml-1 opacity-50">kg</span></h3>
+              <p className="text-[10px] font-black uppercase tracking-widest text-white/40 mb-1">CO₂ Saved</p>
+              <h3 className="text-3xl font-black text-white">{carbonSaved.toFixed(2)}<span className="text-xs ml-1 opacity-50">kg</span></h3>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* ── US 3.1.1 — Carbon Footprint Dashboard Widget ── */}
+      <div className="px-5 mb-10">
+        <h2 className="text-sm font-black uppercase tracking-widest text-gray-400 mb-4">Your Carbon Impact</h2>
+        <div className="bg-zinc-900 dark:bg-zinc-950 rounded-[32px] overflow-hidden shadow-xl shadow-black/10">
+          {/* Header row */}
+          <div className="flex items-center gap-3 px-6 pt-6 pb-4 border-b border-white/5">
+            <div className="size-10 bg-leaf-500/10 rounded-2xl flex items-center justify-center">
+              <span className="material-icons-outlined text-leaf-400" style={{ fontSize: '20px' }}>eco</span>
+            </div>
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-white/30">Lifetime footprint</p>
+              <p className="text-sm font-black text-white">{totalTrips} trip{totalTrips !== 1 ? 's' : ''} tracked</p>
+            </div>
+          </div>
+          {/* Stats grid */}
+          <div className="grid grid-cols-3 divide-x divide-white/5">
+            <div className="px-4 py-5 text-center">
+              <p className="text-[9px] font-black uppercase tracking-widest text-white/30 mb-1">Emitted</p>
+              <p className="text-xl font-black text-white">{carbonEmitted.toFixed(2)}</p>
+              <p className="text-[9px] text-white/30 mt-0.5">kg CO₂</p>
+            </div>
+            <div className="px-4 py-5 text-center">
+              <p className="text-[9px] font-black uppercase tracking-widest text-leaf-400 mb-1">Saved</p>
+              <p className="text-xl font-black text-leaf-400">{carbonSaved.toFixed(2)}</p>
+              <p className="text-[9px] text-leaf-400/50 mt-0.5">kg CO₂</p>
+            </div>
+            <div className="px-4 py-5 text-center">
+              <p className="text-[9px] font-black uppercase tracking-widest text-white/30 mb-1">Trees</p>
+              <p className="text-xl font-black text-white">{treeEquivalent.toFixed(2)}</p>
+              <p className="text-[9px] text-white/30 mt-0.5">equiv./yr</p>
+            </div>
+          </div>
+          {/* Progress bar: saved / (emitted + saved) */}
+          {(carbonEmitted + carbonSaved) > 0 && (
+            <div className="px-6 pb-5">
+              <div className="flex justify-between text-[9px] font-black mb-1.5">
+                <span className="text-white/30 uppercase tracking-widest">Offset ratio</span>
+                <span className="text-leaf-400">{Math.round((carbonSaved / (carbonEmitted + carbonSaved)) * 100)}%</span>
+              </div>
+              <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-leaf-500 rounded-full transition-all"
+                  style={{ width: `${Math.min(100, Math.round((carbonSaved / (carbonEmitted + carbonSaved)) * 100))}%` }}
+                />
+              </div>
+              <p className="text-[9px] text-white/20 mt-2">Pool rides save 1 extra car trip worth of emissions</p>
+            </div>
+          )}
         </div>
       </div>
 

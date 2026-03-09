@@ -125,6 +125,21 @@ const estimateEtaMinutes = (distanceKm, speedKmh = 28) => {
     return `${minutes} min`;
 };
 
+// ── US 3.1.2 — CO2 calculation algorithm ──
+// Emission factors in grams of CO2 per km (IPCC + industry averages)
+const CO2_RATES_G_PER_KM = { BIKE: 21, AUTO: 65, CAR: 120, BIG_CAR: 170 };
+const AVG_CAR_G_PER_KM = 120; // baseline for comparison
+
+const calculateCO2 = (distKm, vehicleCategory, isPooled) => {
+    const rate = CO2_RATES_G_PER_KM[vehicleCategory] || CO2_RATES_G_PER_KM.CAR;
+    const co2Emissions = Math.round(distKm * rate);           // grams — actual trip emissions
+    // Pool saving: rider avoids an equivalent solo trip, so one whole ride's worth is saved
+    const co2Saved = isPooled ? Math.round(distKm * rate) : 0; // grams saved vs. two solo rides
+    const treeEquivalent = parseFloat((co2Emissions / 21000).toFixed(3)); // 1 tree absorbs ~21kg/year
+    const vsAvgCar = rate > 0 ? Math.round(((AVG_CAR_G_PER_KM - rate) / AVG_CAR_G_PER_KM) * 100) : 0;
+    return { co2Emissions, co2Saved, treeEquivalent, vsAvgCar };
+};
+
 const DEFAULT_POOL_WINDOW_MINUTES = 20;
 
 const toValidDate = (value) => {
@@ -1735,9 +1750,17 @@ app.post('/api/rides', async (req, res) => {
             }
         }
 
+        // ── US 3.1.2 — Compute CO2 footprint at ride creation ──
+        if (payload.pickup?.lat && payload.dropoff?.lat) {
+            const distKm = getDistanceKm(payload.pickup.lat, payload.pickup.lng, payload.dropoff.lat, payload.dropoff.lng) || 0;
+            const { co2Emissions, co2Saved } = calculateCO2(distKm, payload.vehicleCategory, !!payload.isPooled);
+            payload.co2Emissions = co2Emissions;
+            payload.co2Saved = co2Saved;
+        }
+
         const ride = new Ride(payload);
         await ride.save();
-        console.log(`📝 Ride created: ${ride._id} | isPooled=${ride.isPooled} | status=${ride.status} | category=${ride.vehicleCategory} | pickup=${ride.pickup?.lat?.toFixed(4)},${ride.pickup?.lng?.toFixed(4)} | dropoff=${ride.dropoff?.lat?.toFixed(4)},${ride.dropoff?.lng?.toFixed(4)}`);
+        console.log(`📝 Ride created: ${ride._id} | isPooled=${ride.isPooled} | status=${ride.status} | category=${ride.vehicleCategory} | co2=${ride.co2Emissions}g | pickup=${ride.pickup?.lat?.toFixed(4)},${ride.pickup?.lng?.toFixed(4)} | dropoff=${ride.dropoff?.lat?.toFixed(4)},${ride.dropoff?.lng?.toFixed(4)}`);
 
         // ─── Pool Matching: find other SEARCHING pooled rides with nearby pickup/dropoff ───
         let poolMatch = null;
@@ -3427,17 +3450,33 @@ app.post('/api/rides/:rideId/complete', async (req, res) => {
 
         // Emit confirmation request to rider
         const distStr = ride.distance || '0';
-        const distKm = parseFloat(distStr) || 0;
-        io.to(`ride:${ride._id}`).emit('ride:confirm-complete', {
+        let distKm = parseFloat(distStr) || 0;
+        // Haversine fallback if distance field is missing
+        if (!distKm && ride.pickup?.lat && ride.dropoff?.lat) {
+            distKm = getDistanceKm(ride.pickup.lat, ride.pickup.lng, ride.dropoff.lat, ride.dropoff.lng) || 0;
+        }
+        // Recalculate CO2 if not stored at creation (legacy rides with co2Emissions=0)
+        if (!ride.co2Emissions && distKm > 0) {
+            const _reCalc = calculateCO2(distKm, ride.vehicleCategory || 'CAR', !!ride.isPooled);
+            ride.co2Emissions = _reCalc.co2Emissions;
+            ride.co2Saved = _reCalc.co2Saved;
+            await ride.save();
+        }
+        const _co2G = ride.co2Emissions || 0;
+        const _co2SavedG = ride.co2Saved || 0;
+        const _completeCo2Payload = {
             rideId: ride._id,
             completedFare: ride.currentFare || ride.fare,
-            actualDistanceKm: distKm.toFixed(1)
-        });
-        io.to(`user:${ride.userId}`).emit('ride:confirm-complete', {
-            rideId: ride._id,
-            completedFare: ride.currentFare || ride.fare,
-            actualDistanceKm: distKm.toFixed(1)
-        });
+            actualDistanceKm: distKm.toFixed(1),
+            co2EmittedG: _co2G,
+            co2EmittedKg: parseFloat((_co2G / 1000).toFixed(3)),
+            co2SavedG: _co2SavedG,
+            co2SavedKg: parseFloat((_co2SavedG / 1000).toFixed(3)),
+            treeEquivalent: parseFloat((_co2G / 21000).toFixed(3)),
+            isPooled: !!ride.isPooled
+        };
+        io.to(`ride:${ride._id}`).emit('ride:confirm-complete', _completeCo2Payload);
+        io.to(`user:${ride.userId}`).emit('ride:confirm-complete', _completeCo2Payload);
 
         // Also emit status update 
         io.to(`ride:${ride._id}`).emit('ride:status', { rideId: ride._id, status: ride.status });
@@ -3798,6 +3837,12 @@ app.post('/api/rides/:rideId/request-complete', async (req, res) => {
             completedFare = Math.round(baseFare + ((actualDistanceMeters / 1000) * perKmRate));
         }
 
+        // Recalculate CO2 based on actual distance traveled
+        const _actualDistKm = actualDistanceMeters / 1000;
+        const _actualCo2 = calculateCO2(_actualDistKm, ride.vehicleCategory || 'CAR', !!ride.isPooled);
+        ride.co2Emissions = _actualCo2.co2Emissions;
+        ride.co2Saved = _actualCo2.co2Saved;
+
         ride.actualDropoff = { address: actualAddress || 'Early drop', lat: actualLat, lng: actualLng };
         ride.actualDistanceMeters = actualDistanceMeters;
         ride.completedFare = completedFare;
@@ -3805,18 +3850,20 @@ app.post('/api/rides/:rideId/request-complete', async (req, res) => {
         await ride.save();
 
         // Ask rider to confirm
-        io.to(`ride:${ride._id}`).emit('ride:confirm-complete', {
+        const _earlyCompleteCo2Payload = {
             rideId: ride._id,
             actualDropoff: ride.actualDropoff,
             actualDistanceKm: (actualDistanceMeters / 1000).toFixed(1),
-            completedFare
-        });
-        io.to(`user:${ride.userId}`).emit('ride:confirm-complete', {
-            rideId: ride._id,
-            actualDropoff: ride.actualDropoff,
-            actualDistanceKm: (actualDistanceMeters / 1000).toFixed(1),
-            completedFare
-        });
+            completedFare,
+            co2EmittedG: _actualCo2.co2Emissions,
+            co2EmittedKg: parseFloat((_actualCo2.co2Emissions / 1000).toFixed(3)),
+            co2SavedG: _actualCo2.co2Saved,
+            co2SavedKg: parseFloat((_actualCo2.co2Saved / 1000).toFixed(3)),
+            treeEquivalent: parseFloat((_actualCo2.co2Emissions / 21000).toFixed(3)),
+            isPooled: !!ride.isPooled
+        };
+        io.to(`ride:${ride._id}`).emit('ride:confirm-complete', _earlyCompleteCo2Payload);
+        io.to(`user:${ride.userId}`).emit('ride:confirm-complete', _earlyCompleteCo2Payload);
 
         res.json({ ok: true, completedFare, actualDistanceMeters });
     } catch (error) {
@@ -3947,15 +3994,65 @@ app.get('/api/users/:userId/stats', async (req, res) => {
     try {
         const user = await User.findById(req.params.userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
+        const totalCO2Saved = user.totalCO2Saved || 0;
+        const totalCO2Emitted = user.totalCO2Emitted || 0;
         res.json({
             totalTrips: user.totalTrips || 0,
             totalKmTraveled: Math.round((user.totalKmTraveled || 0) * 10) / 10,
-            totalCO2Saved: user.totalCO2Saved || 0,
-            totalCO2Emitted: user.totalCO2Emitted || 0,
+            totalCO2Saved,
+            totalCO2Emitted,
+            totalCO2SavedKg: parseFloat((totalCO2Saved / 1000).toFixed(2)),
+            totalCO2EmittedKg: parseFloat((totalCO2Emitted / 1000).toFixed(2)),
+            treeEquivalent: parseFloat((totalCO2Saved / 21000).toFixed(3)),
             walletBalance: user.walletBalance || 0
         });
     } catch (error) {
         res.status(500).json({ message: 'Error fetching stats' });
+    }
+});
+
+// ── US 3.1.3 — Per-ride carbon footprint endpoint ──
+app.get('/api/rides/:rideId/carbon', async (req, res) => {
+    try {
+        const ride = await Ride.findById(req.params.rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        // Compute stored or derived values
+        let co2Emissions = ride.co2Emissions || 0;
+        let co2Saved = ride.co2Saved || 0;
+
+        // Re-derive if fields are missing (e.g. legacy rides)
+        if (!co2Emissions && ride.pickup?.lat && ride.dropoff?.lat) {
+            const distKm = getDistanceKm(ride.pickup.lat, ride.pickup.lng, ride.dropoff.lat, ride.dropoff.lng) || 0;
+            const calc = calculateCO2(distKm, ride.vehicleCategory, !!ride.isPooled);
+            co2Emissions = calc.co2Emissions;
+            co2Saved = calc.co2Saved;
+        }
+
+        const distKm = getDistanceKm(
+            ride.pickup?.lat, ride.pickup?.lng,
+            ride.dropoff?.lat, ride.dropoff?.lng
+        ) || parseFloat(ride.distance) || 0;
+
+        const rate = CO2_RATES_G_PER_KM[ride.vehicleCategory] || CO2_RATES_G_PER_KM.CAR;
+        const treeEquivalent = parseFloat((co2Emissions / 21000).toFixed(3));
+        const vsAvgCar = Math.round(((AVG_CAR_G_PER_KM - rate) / AVG_CAR_G_PER_KM) * 100);
+
+        res.json({
+            rideId: ride._id,
+            vehicleCategory: ride.vehicleCategory || 'CAR',
+            isPooled: !!ride.isPooled,
+            distanceKm: parseFloat(distKm.toFixed(2)),
+            co2EmittedG: co2Emissions,
+            co2EmittedKg: parseFloat((co2Emissions / 1000).toFixed(3)),
+            co2SavedG: co2Saved,
+            co2SavedKg: parseFloat((co2Saved / 1000).toFixed(3)),
+            treeEquivalent,
+            vsAvgCarPercent: vsAvgCar,
+            emissionRateGPerKm: rate
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching carbon data' });
     }
 });
 
