@@ -4189,6 +4189,52 @@ app.get('/api/users/:userId/co2-history', async (req, res) => {
     }
 });
 
+// ── US 3.6 — Rider CO₂ savings banner & green tier badge ──────────────────────
+
+// Tier thresholds (grams). totalCO2Saved is stored in grams in User model.
+const ECO_TIER_THRESHOLDS_G = { TREE: 5000, SAPLING: 500 };
+
+function getEcoTierBadge(totalCO2SavedG) {
+    const saved = totalCO2SavedG || 0;
+    if (saved >= ECO_TIER_THRESHOLDS_G.TREE)
+        return { tier: 'tree',     emoji: '\uD83C\uDF33', label: 'Tree',     description: "You've saved 5+ kg CO\u2082 \u2014 you're a climate champion!",  nextTier: null,       progressPct: 100 };
+    if (saved >= ECO_TIER_THRESHOLDS_G.SAPLING)
+        return { tier: 'sapling',  emoji: '\uD83C\uDF3F', label: 'Sapling',  description: 'Great progress! Keep pooling to reach Tree status.',   nextTier: 'tree',     progressPct: Math.round(((saved - ECO_TIER_THRESHOLDS_G.SAPLING) / (ECO_TIER_THRESHOLDS_G.TREE - ECO_TIER_THRESHOLDS_G.SAPLING)) * 100) };
+    return             { tier: 'seedling', emoji: '\uD83C\uDF31', label: 'Seedling', description: 'Every ride counts! Save 0.5 kg CO\u2082 to unlock Sapling.', nextTier: 'sapling',  progressPct: Math.round((saved / ECO_TIER_THRESHOLDS_G.SAPLING) * 100) };
+}
+
+// GET /api/users/:userId/eco-tier — 3.6.2 & 3.6.3 cumulative CO₂ saved + tier badge
+app.get('/api/users/:userId/eco-tier', async (req, res) => {
+    try {
+        const user = await mongoose.model('User').findById(req.params.userId)
+            .select('totalCO2Saved totalCO2Emitted totalTrips');
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        const savedG   = user.totalCO2Saved   || 0;
+        const emittedG = user.totalCO2Emitted || 0;
+        const badge    = getEcoTierBadge(savedG);
+
+        res.json({
+            totalCO2SavedG:    savedG,
+            totalCO2SavedKg:   parseFloat((savedG   / 1000).toFixed(3)),
+            totalCO2EmittedG:  emittedG,
+            totalCO2EmittedKg: parseFloat((emittedG / 1000).toFixed(3)),
+            totalTrips:        user.totalTrips || 0,
+            treeEquivalent:    parseFloat((savedG   / 21000).toFixed(4)),
+            tier:              badge.tier,
+            tierEmoji:         badge.emoji,
+            tierLabel:         badge.label,
+            tierDescription:   badge.description,
+            nextTier:          badge.nextTier,
+            progressPct:       badge.progressPct,
+            thresholds:        ECO_TIER_THRESHOLDS_G
+        });
+    } catch (error) {
+        console.error('Eco tier error:', error);
+        res.status(500).json({ message: 'Error fetching eco tier' });
+    }
+});
+
 // ── US 3.5 — Eco-friendly ride flagging ────────────────────────────
 const ECO_THRESHOLDS = { ECO_STAR: 25, ECO_FRIENDLY: 80 };
 function getEcoTier(rateGPerKm) {

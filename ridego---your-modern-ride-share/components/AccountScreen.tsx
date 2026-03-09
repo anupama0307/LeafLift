@@ -1274,12 +1274,33 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
 
       {/* CO2 & Trips Stats */}
       <div className="grid grid-cols-2 gap-3 mb-6">
-        <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-2xl">
-          <span className="material-icons-outlined text-green-500 mb-1">eco</span>
-          <p className="text-2xl font-black text-green-600 dark:text-green-400">
-            {stats ? `${(stats.totalCO2Saved / 1000).toFixed(1)}kg` : '0kg'}
-          </p>
-          <p className="text-xs font-bold text-gray-500 dark:text-gray-400">CO₂ Saved</p>
+        <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-2xl col-span-2">
+          {/* 3.6.2 — cumulative CO₂ saved; 3.6.3 — tier badge */}
+          {(() => {
+            const savedG  = stats?.totalCO2Saved || 0;
+            const savedKg = (savedG / 1000).toFixed(1);
+            const tier    = savedG >= 5000 ? { emoji: '🌳', label: 'Tree',     desc: 'Climate champion — 5+ kg saved!',    bar: 100 }
+                          : savedG >= 500  ? { emoji: '🌿', label: 'Sapling',  desc: `${(savedG / 1000).toFixed(2)} / 5.00 kg to Tree`,      bar: Math.round(((savedG - 500) / 4500) * 100) }
+                          :                  { emoji: '🌱', label: 'Seedling', desc: `${(savedG / 1000).toFixed(2)} / 0.50 kg to Sapling`,    bar: Math.round((savedG / 500) * 100) };
+            return (
+              <>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="material-icons-outlined text-green-500">eco</span>
+                    <p className="text-xs font-bold text-gray-500 dark:text-gray-400">CO₂ Saved (Cumulative)</p>
+                  </div>
+                  <span className="text-[11px] font-black px-2 py-0.5 rounded-full bg-green-200 dark:bg-green-800 text-green-800 dark:text-green-200">
+                    {tier.emoji} {tier.label}
+                  </span>
+                </div>
+                <p className="text-3xl font-black text-green-600 dark:text-green-400 mb-1">{savedKg}<span className="text-sm font-bold"> kg</span></p>
+                <p className="text-[10px] text-gray-500 dark:text-gray-400 mb-2">{tier.desc}</p>
+                <div className="h-2 bg-green-100 dark:bg-green-900 rounded-full overflow-hidden">
+                  <div className="h-2 bg-green-500 rounded-full transition-all duration-700" style={{ width: `${Math.min(tier.bar, 100)}%` }} />
+                </div>
+              </>
+            );
+          })()}
         </div>
         <div className="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-2xl">
           <span className="material-icons-outlined text-orange-500 mb-1">cloud</span>
@@ -1295,12 +1316,12 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
           </p>
           <p className="text-xs font-bold text-gray-500 dark:text-gray-400">Total Trips</p>
         </div>
-        <div className="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-2xl">
+        <div className="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-2xl col-span-2">
           <span className="material-icons-outlined text-purple-500 mb-1">straighten</span>
           <p className="text-2xl font-black text-purple-600 dark:text-purple-400">
             {stats ? `${(stats.totalKmTraveled).toFixed(0)}km` : '0km'}
           </p>
-          <p className="text-xs font-bold text-gray-500 dark:text-gray-400">Traveled</p>
+          <p className="text-xs font-bold text-gray-500 dark:text-gray-400">Total Distance Traveled</p>
         </div>
       </div>
 

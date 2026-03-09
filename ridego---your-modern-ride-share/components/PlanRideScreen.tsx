@@ -2774,6 +2774,27 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             <h3 className="text-xl font-bold dark:text-white">Ride Complete!</h3>
                             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Here's your ride summary</p>
                         </div>
+
+                        {/* 3.6.1 — CO₂ Saved Hero Banner (shown when rider pooled and saved CO₂) */}
+                        {(rideSummary.co2SavedG ?? 0) > 0 && (
+                            <div className="bg-gradient-to-r from-emerald-500 to-green-500 text-white rounded-2xl px-4 py-4 mb-4 flex items-center gap-3 shadow-lg">
+                                <div className="text-4xl shrink-0">🌱</div>
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-[10px] font-black uppercase tracking-widest opacity-80">You saved</p>
+                                    <p className="text-2xl font-black leading-tight">
+                                        {(rideSummary.co2SavedKg ?? 0) >= 0.01
+                                            ? `${rideSummary.co2SavedKg} kg CO\u2082`
+                                            : `${rideSummary.co2SavedG} g CO\u2082`}
+                                    </p>
+                                    <p className="text-[10px] opacity-80 mt-0.5">by choosing a pooled ride 🌍</p>
+                                </div>
+                                <div className="text-right shrink-0">
+                                    <p className="text-[11px] font-bold opacity-90">≈{((rideSummary.co2SavedG ?? 0) / 21000).toFixed(4)}</p>
+                                    <p className="text-[10px] opacity-70">trees/yr</p>
+                                </div>
+                            </div>
+                        )}
+
                         {/* Fare + Distance */}
                         <div className="grid grid-cols-2 gap-3 mb-4">
                             <div className="bg-gray-50 dark:bg-zinc-800 rounded-2xl p-3 text-center">
