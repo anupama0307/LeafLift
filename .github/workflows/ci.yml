@@ -71,7 +71,11 @@ jobs:
         working-directory: ./ridego---your-modern-ride-share
         run: npm install
 
-      - name: Build and deploy to Vercel
+      - name: Build frontend
+        working-directory: ./ridego---your-modern-ride-share
+        run: npm run build
+
+      - name: Deploy to Vercel
         working-directory: ./ridego---your-modern-ride-share
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -81,6 +85,4 @@ jobs:
           rm -rf .vercel
           mkdir -p .vercel
           echo "{\"orgId\":\"$VERCEL_ORG_ID\",\"projectId\":\"$VERCEL_PROJECT_ID\"}" > .vercel/project.json
-          vercel pull --yes --environment=production --token=$VERCEL_TOKEN
-          vercel build --prod --token=$VERCEL_TOKEN
-          vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN
+          vercel deploy --prod --token=$VERCEL_TOKEN
