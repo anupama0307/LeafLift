@@ -75,41 +75,9 @@ jobs:
         working-directory: ./ridego---your-modern-ride-share
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
-          # Resolve org ID (personal account: use user ID; team: use defaultTeamId)
-          USER_JSON=$(curl -sf -H "Authorization: Bearer $VERCEL_TOKEN" https://api.vercel.com/v2/user)
-          ORG_ID=$(echo "$USER_JSON" | python3 -c "import sys,json; u=json.load(sys.stdin)['user']; print(u.get('defaultTeamId') or u['id'])")
-
-          # For team accounts include teamId so team projects are returned
-          TEAM_PARAM=""
-          if echo "$ORG_ID" | grep -q "^team_"; then
-            TEAM_PARAM="&teamId=$ORG_ID"
-          fi
-
-          # Find matching project
-          PROJECTS_JSON=$(curl -sf -H "Authorization: Bearer $VERCEL_TOKEN" "https://api.vercel.com/v9/projects?limit=100${TEAM_PARAM}")
-          echo "Vercel projects found:"
-          echo "$PROJECTS_JSON" | python3 -c "import sys,json; [print(' -', p['name'], p['id']) for p in json.load(sys.stdin).get('projects',[])]"
-
-          PROJECT_ID=$(echo "$PROJECTS_JSON" | python3 -c "
-          import sys, json
-          projects = json.load(sys.stdin).get('projects', [])
-          for p in projects:
-              if 'ridego' in p['name'].lower() or 'leaflift' in p['name'].lower() or 'leaf_lift' in p['name'].lower():
-                  print(p['id']); break
-          else:
-              print(projects[0]['id']) if projects else exit(1)
-          ")
-
-          echo "ORG_ID=$ORG_ID  PROJECT_ID=$PROJECT_ID"
-
-          # Export so all subsequent vercel CLI calls pick them up
-          export VERCEL_ORG_ID="$ORG_ID"
-          export VERCEL_PROJECT_ID="$PROJECT_ID"
-
-          # Pull project settings (env vars, framework detection, etc.)
           vercel pull --yes --environment=production --token=$VERCEL_TOKEN
-
-          # Build and deploy
           vercel build --prod --token=$VERCEL_TOKEN
           vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN
