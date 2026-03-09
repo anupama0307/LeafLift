@@ -1631,50 +1631,114 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             )}
                         </div>
 
-                        {/* Mode Toggle with Savings */}
+                        {/* Mode Toggle with Savings — US 1.4 */}
                         {(() => {
                             const route = availableRoutes[selectedRouteIndex];
                             const cat = VEHICLE_CATEGORIES.find(c => c.id === selectedCategory);
                             const soloPrice = route && cat ? Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate) : 0;
                             const poolPrice = route && cat ? Math.round(soloPrice * 0.67) : 0;
                             const fareSaved = soloPrice - poolPrice;
+                            const savingsPct = soloPrice > 0 ? Math.round((fareSaved / soloPrice) * 100) : 0;
                             const co2Solo = route ? calculateCO2(route.distance, selectedCategory) : 0;
                             const co2Pool = route ? calculateCO2(route.distance, 'pool') : 0;
                             const co2Saved = co2Solo - co2Pool;
                             const canPool = selectedCategory === 'CAR' || selectedCategory === 'BIG_CAR';
                             return (
                                 <>
+                                    {/* Mode toggle buttons */}
                                     <div className="flex gap-2 mt-3">
                                         <button
                                             onClick={() => setRideMode('Solo')}
-                                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Solo'
-                                                ? 'bg-black dark:bg-white text-white dark:text-black'
-                                                : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
+                                            className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all border-2 ${rideMode === 'Solo'
+                                                ? 'bg-black dark:bg-white text-white dark:text-black border-black dark:border-white'
+                                                : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300 border-transparent'
                                                 }`}
                                         >
-                                            Solo {rideMode === 'Solo' && route ? `• ₹${soloPrice}` : ''}
+                                            Private
                                         </button>
                                         {canPool && (
                                             <button
                                                 onClick={() => setRideMode('Pooled')}
-                                                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${rideMode === 'Pooled'
-                                                    ? 'bg-green-500 text-white'
-                                                    : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300'
+                                                className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all border-2 ${rideMode === 'Pooled'
+                                                    ? 'bg-green-500 text-white border-green-500'
+                                                    : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300 border-transparent'
                                                     }`}
                                             >
-                                                🌱 Pool {rideMode === 'Pooled' && route ? `• ₹${poolPrice}` : ''}
+                                                🌱 Pool
                                             </button>
                                         )}
                                     </div>
-                                    {route && fareSaved > 0 && canPool && (
-                                        <div className={`mt-2 p-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all ${rideMode === 'Pooled'
-                                            ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
-                                            : 'bg-gray-50 dark:bg-zinc-800 text-gray-500 dark:text-gray-400'
-                                            }`}>
-                                            <span>🌱</span>
-                                            <span>
-                                                Pool & save ₹{fareSaved} per person • {co2Saved > 0 ? `${co2Saved}g less CO₂` : ''}
-                                            </span>
+
+                                    {/* 1.4.1 + 1.4.2 + 1.4.3 — Price comparison card */}
+                                    {route && canPool && soloPrice > 0 && (
+                                        <div className="mt-3 rounded-2xl border border-gray-200 dark:border-zinc-700 overflow-hidden">
+                                            {/* Header row */}
+                                            <div className="grid grid-cols-2 divide-x divide-gray-200 dark:divide-zinc-700">
+                                                {/* Private column — 1.4.1 */}
+                                                <div className={`p-3 transition-colors ${rideMode === 'Solo' ? 'bg-zinc-900 dark:bg-zinc-100' : 'bg-gray-50 dark:bg-zinc-800'}`}>
+                                                    <p className={`text-[10px] font-black uppercase tracking-widest mb-0.5 ${rideMode === 'Solo' ? 'text-gray-400' : 'text-gray-400 dark:text-gray-500'}`}>
+                                                        Private Ride
+                                                    </p>
+                                                    <p className={`text-xl font-black ${rideMode === 'Solo' ? 'text-white dark:text-zinc-900' : 'text-gray-700 dark:text-gray-300'}`}>
+                                                        ₹{soloPrice}
+                                                    </p>
+                                                    <p className={`text-[10px] mt-0.5 ${rideMode === 'Solo' ? 'text-gray-400' : 'text-gray-400 dark:text-gray-500'}`}>
+                                                        Just you
+                                                    </p>
+                                                </div>
+
+                                                {/* Pool column — 1.4.1 */}
+                                                <div className={`p-3 transition-colors ${rideMode === 'Pooled' ? 'bg-green-500' : 'bg-gray-50 dark:bg-zinc-800'}`}>
+                                                    <p className={`text-[10px] font-black uppercase tracking-widest mb-0.5 ${rideMode === 'Pooled' ? 'text-green-100' : 'text-gray-400 dark:text-gray-500'}`}>
+                                                        Pool Ride
+                                                    </p>
+                                                    <p className={`text-xl font-black ${rideMode === 'Pooled' ? 'text-white' : 'text-green-600 dark:text-green-400'}`}>
+                                                        ₹{poolPrice}
+                                                    </p>
+                                                    <p className={`text-[10px] mt-0.5 ${rideMode === 'Pooled' ? 'text-green-100' : 'text-gray-400 dark:text-gray-500'}`}>
+                                                        Shared ride
+                                                    </p>
+                                                </div>
+                                            </div>
+
+                                            {/* 1.4.2 — Cost difference row */}
+                                            <div className="border-t border-gray-200 dark:border-zinc-700 px-3 py-2 flex items-center justify-between bg-white dark:bg-zinc-900">
+                                                <div className="flex items-center gap-1.5">
+                                                    <span className="material-icons text-gray-400 dark:text-gray-500" style={{ fontSize: '14px' }}>compare_arrows</span>
+                                                    <span className="text-[11px] text-gray-500 dark:text-gray-400 font-semibold">Difference</span>
+                                                </div>
+                                                <span className="text-[13px] font-black text-green-600 dark:text-green-400">
+                                                    ₹{fareSaved} cheaper with Pool
+                                                </span>
+                                            </div>
+
+                                            {/* 1.4.3 — Highlighted savings banner */}
+                                            <div className={`px-3 py-2.5 flex items-center justify-between transition-colors ${rideMode === 'Pooled'
+                                                ? 'bg-green-500'
+                                                : 'bg-green-50 dark:bg-green-900/20'
+                                                }`}>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-base">🎉</span>
+                                                    <div>
+                                                        <p className={`text-[10px] font-black uppercase tracking-wider ${rideMode === 'Pooled' ? 'text-green-100' : 'text-green-700 dark:text-green-300'}`}>
+                                                            Total Savings
+                                                        </p>
+                                                        {co2Saved > 0 && (
+                                                            <p className={`text-[9px] ${rideMode === 'Pooled' ? 'text-green-100' : 'text-green-600 dark:text-green-400'}`}>
+                                                                🌱 {co2Saved}g less CO₂
+                                                            </p>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                <div className="text-right">
+                                                    <span className={`text-xl font-black ${rideMode === 'Pooled' ? 'text-white' : 'text-green-600 dark:text-green-400'}`}>
+                                                        ₹{fareSaved}
+                                                    </span>
+                                                    <span className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full font-black ${rideMode === 'Pooled' ? 'bg-white/20 text-white' : 'bg-green-200 dark:bg-green-800 text-green-800 dark:text-green-200'}`}>
+                                                        {savingsPct}% off
+                                                    </span>
+                                                </div>
+                                            </div>
                                         </div>
                                     )}
                                 </>
