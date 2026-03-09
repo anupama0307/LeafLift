@@ -4189,6 +4189,45 @@ app.get('/api/users/:userId/co2-history', async (req, res) => {
     }
 });
 
+// ── US 3.5 — Eco-friendly ride flagging ────────────────────────────
+const ECO_THRESHOLDS = { ECO_STAR: 25, ECO_FRIENDLY: 80 };
+function getEcoTier(rateGPerKm) {
+    if (rateGPerKm <= ECO_THRESHOLDS.ECO_STAR)     return 'eco_star';
+    if (rateGPerKm <= ECO_THRESHOLDS.ECO_FRIENDLY) return 'eco_friendly';
+    return null;
+}
+
+// 3.5.2 — GET /api/vehicles/eco-ratings: returns all vehicle categories with emission rates and eco flags
+app.get('/api/vehicles/eco-ratings', (req, res) => {
+    const VEHICLE_RATES = [
+        { id: 'BIKE',    label: 'Bike',  icon: 'two_wheeler',    emissionRateGPerKm: 21,  poolEmissionRateGPerKm: null },
+        { id: 'AUTO',    label: 'Auto',  icon: 'electric_rickshaw', emissionRateGPerKm: 65, poolEmissionRateGPerKm: null },
+        { id: 'CAR',     label: 'Car',   icon: 'directions_car', emissionRateGPerKm: 120, poolEmissionRateGPerKm: 40   },
+        { id: 'BIG_CAR', label: 'SUV',   icon: 'airport_shuttle',emissionRateGPerKm: 170, poolEmissionRateGPerKm: 40   },
+    ];
+    const vehicles = VEHICLE_RATES.map(v => {
+        const soloTier = getEcoTier(v.emissionRateGPerKm);
+        const poolTier = v.poolEmissionRateGPerKm !== null ? getEcoTier(v.poolEmissionRateGPerKm) : null;
+        return {
+            id:                      v.id,
+            label:                   v.label,
+            icon:                    v.icon,
+            emissionRateGPerKm:      v.emissionRateGPerKm,
+            poolEmissionRateGPerKm:  v.poolEmissionRateGPerKm,
+            ecoTier:                 soloTier,             // solo eco flag
+            poolEcoTier:             poolTier,             // pool eco flag
+            isEco:                   soloTier !== null,
+            isPoolEco:               poolTier !== null,
+            badgeLabel:              soloTier === 'eco_star'     ? 'Eco Star'
+                                   : soloTier === 'eco_friendly' ? 'Eco Friendly'
+                                   : null,
+            poolBadgeLabel:          poolTier !== null ? 'Pool Eco' : null,
+            emissionThresholds:      ECO_THRESHOLDS
+        };
+    });
+    res.json({ vehicles, thresholds: ECO_THRESHOLDS });
+});
+
 // ── US 3.4 — Telemetry-based emission calculation ──────────────────────────
 
 // POST /api/rides/:rideId/telemetry — record a GPS ping; accumulate distance; recalculate CO₂ (3.4.1 + 3.4.2 + 3.4.3)

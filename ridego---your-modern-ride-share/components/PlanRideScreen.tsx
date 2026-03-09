@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { OLA_CONFIG, VEHICLE_CATEGORIES } from '../constants';
+import { OLA_CONFIG, VEHICLE_CATEGORIES, getEcoTier } from '../constants';
 import { searchPlaces, getRoute, formatRouteInfo, reverseGeocode, decodePolyline } from '../src/utils/olaApi';
 import { joinRideRoom, leaveRideRoom, registerSocket } from '../src/services/realtime';
 import { OlaPlace, RouteInfo } from '../types';
@@ -1961,7 +1961,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
 
 
 
-                        {/* Vehicle Categories */}
+                        {/* Vehicle Categories — US 3.5 eco highlights */}
                         <div className="px-4 py-2">
                             {VEHICLE_CATEGORIES.map(cat => {
                                 const price = categoryPrices.get(cat.id) || 0;
@@ -1971,40 +1971,106 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 const co2Pool = route ? calculateCO2(route.distance, 'pool') : 0;
                                 const etaMin = route ? Math.round(route.duration / 60) : 0;
 
+                                // 3.5.2 — determine eco tier for this vehicle + mode
+                                const isPoolMode = rideMode === 'Pooled';
+                                const effectiveRate = isPoolMode && (cat.id === 'CAR' || cat.id === 'BIG_CAR')
+                                    ? 40   // POOL_CO2_RATE_G_PER_KM (matches server)
+                                    : cat.emissionRateGPerKm;
+                                const ecoTier = getEcoTier(effectiveRate);
+                                const isEcoStar     = ecoTier === 'eco_star';
+                                const isEcoFriendly = ecoTier === 'eco_friendly';
+                                const isAnyEco      = isEcoStar || isEcoFriendly;
+
+                                // 3.5.1 — badge config
+                                const badgeLabel = isEcoStar     ? '🌟 Eco Star'
+                                                 : isEcoFriendly ? '🌱 Eco Friendly'
+                                                 : isPoolMode && (cat.id === 'CAR' || cat.id === 'BIG_CAR') ? '🤝 Pool Eco'
+                                                 : null;
+                                const poolEco = isPoolMode && (cat.id === 'CAR' || cat.id === 'BIG_CAR');
+
+                                const isSelected = selectedCategory === cat.id;
+
                                 return (
                                     <button
                                         key={cat.id}
                                         onClick={() => setSelectedCategory(cat.id)}
-                                        className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 mb-3 transition-all ${selectedCategory === cat.id
-                                            ? 'border-black dark:border-white bg-gray-50 dark:bg-zinc-800'
-                                            : 'border-transparent hover:bg-gray-50 dark:hover:bg-zinc-800'
-                                            }`}
+                                        className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 mb-3 transition-all relative overflow-hidden ${
+                                            isSelected
+                                                ? isAnyEco || poolEco
+                                                    ? 'border-green-500 dark:border-green-400 bg-green-50 dark:bg-green-900/20'
+                                                    : 'border-black dark:border-white bg-gray-50 dark:bg-zinc-800'
+                                                : isAnyEco || poolEco
+                                                    ? 'border-green-200 dark:border-green-800 hover:bg-green-50 dark:hover:bg-green-900/10'
+                                                    : 'border-transparent hover:bg-gray-50 dark:hover:bg-zinc-800'
+                                        }`}
                                     >
-                                        <div className="w-14 h-14 rounded-2xl bg-gray-100 dark:bg-zinc-700 flex items-center justify-center">
-                                            <span className="material-icons-outlined text-2xl text-gray-700 dark:text-white">
+                                        {/* 3.5.3 — green left-edge accent for eco vehicles */}
+                                        {(isAnyEco || poolEco) && (
+                                            <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-xl ${
+                                                isEcoStar ? 'bg-emerald-500' : 'bg-green-400'
+                                            }`} />
+                                        )}
+
+                                        {/* Vehicle icon — green tint for eco */}
+                                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${
+                                            isEcoStar     ? 'bg-emerald-100 dark:bg-emerald-900/40'
+                                            : isEcoFriendly? 'bg-green-100 dark:bg-green-900/30'
+                                            : poolEco     ? 'bg-teal-100 dark:bg-teal-900/30'
+                                            : 'bg-gray-100 dark:bg-zinc-700'
+                                        }`}>
+                                            <span className={`material-icons-outlined text-2xl ${
+                                                isEcoStar      ? 'text-emerald-600 dark:text-emerald-300'
+                                                : isEcoFriendly ? 'text-green-600 dark:text-green-300'
+                                                : poolEco      ? 'text-teal-600 dark:text-teal-300'
+                                                : 'text-gray-700 dark:text-white'
+                                            }`}>
                                                 {cat.icon}
                                             </span>
                                         </div>
+
                                         <div className="flex-1 text-left">
-                                            <div className="font-bold text-base dark:text-white">{cat.label}</div>
-                                            <div className="text-xs text-gray-500 dark:text-gray-400">
-                                                {etaMin} min • {cat.capacity} seats
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-bold text-base dark:text-white">{cat.label}</span>
+                                                {/* 3.5.1 — green badge (3.5.3 — clearly shown on ride list) */}
+                                                {badgeLabel && (
+                                                    <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full ${
+                                                        isEcoStar      ? 'bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-200'
+                                                        : isEcoFriendly ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-200'
+                                                        : 'bg-teal-100 dark:bg-teal-900 text-teal-700 dark:text-teal-200'
+                                                    }`}>
+                                                        {badgeLabel}
+                                                    </span>
+                                                )}
                                             </div>
-                                            {rideMode === 'Pooled' ? (
-                                                <div className="mt-1 inline-flex items-center gap-1 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-200 text-xs font-semibold px-2 py-0.5 rounded-full">
-                                                    🌱 Save {co2 - co2Pool}g CO₂
+                                            <div className="text-xs text-gray-500 dark:text-gray-400">
+                                                {etaMin} min • {cat.capacity} seats • {effectiveRate}g/km
+                                            </div>
+                                            {isPoolMode ? (
+                                                <div className={`mt-1 inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                                                    poolEco || isAnyEco
+                                                        ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-200'
+                                                        : 'bg-gray-100 dark:bg-zinc-700 text-gray-500'
+                                                }`}>
+                                                    🌱 Save {co2 - co2Pool}g CO₂ vs solo
                                                 </div>
                                             ) : (
-                                                <div className="mt-1 text-xs text-gray-400">~{co2}g CO₂</div>
+                                                <div className={`mt-1 text-xs font-medium ${
+                                                    isEcoStar ? 'text-emerald-600 dark:text-emerald-400'
+                                                    : isEcoFriendly ? 'text-green-600 dark:text-green-400'
+                                                    : 'text-gray-400'
+                                                }`}>~{co2}g CO₂</div>
                                             )}
                                         </div>
+
                                         <div className="text-right">
                                             <div className="font-bold text-lg dark:text-white">₹{price}</div>
-                                            {rideMode === 'Pooled' && soloPrice > price && (
+                                            {isPoolMode && soloPrice > price && (
                                                 <div className="text-xs text-gray-400 line-through">₹{soloPrice}</div>
                                             )}
-                                            {selectedCategory === cat.id && (
-                                                <div className="text-green-500 text-xs mt-1">✓</div>
+                                            {isSelected && (
+                                                <div className={`text-xs mt-1 font-bold ${
+                                                    isAnyEco || poolEco ? 'text-green-500' : 'text-green-500'
+                                                }`}>✓</div>
                                             )}
                                         </div>
                                     </button>

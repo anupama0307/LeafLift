@@ -16,6 +16,23 @@ export const DEFAULT_CENTER = {
   zoom: 13
 };
 
+// CO₂ emission thresholds for eco-friendly flagging (US 3.5.2)
+// Source: CO2_RATES_G_PER_KM constants in server/index.js
+export const ECO_THRESHOLDS = {
+  ECO_STAR:     25,   // ≤ 25 g/km  → "Eco Star"  (e.g. BIKE)
+  ECO_FRIENDLY: 80,   // ≤ 80 g/km  → "Eco Friendly" (e.g. AUTO)
+  // > 80 g/km        → no eco badge  (CAR, BIG_CAR)
+} as const;
+
+export type EcoTier = 'eco_star' | 'eco_friendly' | null;
+
+/** 3.5.2 — flag a vehicle category as eco-friendly based on its emission rate */
+export function getEcoTier(emissionRateGPerKm: number): EcoTier {
+  if (emissionRateGPerKm <= ECO_THRESHOLDS.ECO_STAR)     return 'eco_star';
+  if (emissionRateGPerKm <= ECO_THRESHOLDS.ECO_FRIENDLY) return 'eco_friendly';
+  return null;
+}
+
 // Vehicle categories for ride booking
 export const VEHICLE_CATEGORIES = [
   {
@@ -26,6 +43,8 @@ export const VEHICLE_CATEGORIES = [
     baseRate: 15,
     perKmRate: 7,
     capacity: 1,
+    emissionRateGPerKm: 21,
+    ecoTier: 'eco_star' as EcoTier,
   },
   {
     id: 'AUTO',
@@ -35,6 +54,8 @@ export const VEHICLE_CATEGORIES = [
     baseRate: 25,
     perKmRate: 10,
     capacity: 3,
+    emissionRateGPerKm: 65,
+    ecoTier: 'eco_friendly' as EcoTier,
   },
   {
     id: 'CAR',
@@ -44,6 +65,8 @@ export const VEHICLE_CATEGORIES = [
     baseRate: 30,
     perKmRate: 12,
     capacity: 4,
+    emissionRateGPerKm: 120,
+    ecoTier: null as EcoTier,
   },
   {
     id: 'BIG_CAR',
@@ -53,6 +76,8 @@ export const VEHICLE_CATEGORIES = [
     baseRate: 50,
     perKmRate: 18,
     capacity: 6,
+    emissionRateGPerKm: 170,
+    ecoTier: null as EcoTier,
   }
 ];
 
