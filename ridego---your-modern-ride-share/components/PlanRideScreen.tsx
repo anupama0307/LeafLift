@@ -1688,7 +1688,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                         <div className="mt-3 rounded-2xl border border-gray-200 dark:border-zinc-700 overflow-hidden">
                                             {/* Header row */}
                                             <div className="grid grid-cols-2 divide-x divide-gray-200 dark:divide-zinc-700">
-                                                {/* Private column — 1.4.1 */}
+                                                {/* Private column — 1.4.1 + 3.2.1 */}
                                                 <div className={`p-3 transition-colors ${rideMode === 'Solo' ? 'bg-zinc-900 dark:bg-zinc-100' : 'bg-gray-50 dark:bg-zinc-800'}`}>
                                                     <p className={`text-[10px] font-black uppercase tracking-widest mb-0.5 ${rideMode === 'Solo' ? 'text-gray-400' : 'text-gray-400 dark:text-gray-500'}`}>
                                                         Private Ride
@@ -1699,9 +1699,14 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                     <p className={`text-[10px] mt-0.5 ${rideMode === 'Solo' ? 'text-gray-400' : 'text-gray-400 dark:text-gray-500'}`}>
                                                         Just you
                                                     </p>
+                                                    {co2Solo > 0 && (
+                                                        <p className={`text-[9px] mt-1 font-semibold ${rideMode === 'Solo' ? 'text-gray-500' : 'text-gray-400 dark:text-gray-500'}`}>
+                                                            ☁️ {co2Solo}g CO₂
+                                                        </p>
+                                                    )}
                                                 </div>
 
-                                                {/* Pool column — 1.4.1 */}
+                                                {/* Pool column — 1.4.1 + 3.2.1 */}
                                                 <div className={`p-3 transition-colors ${rideMode === 'Pooled' ? 'bg-green-500' : 'bg-gray-50 dark:bg-zinc-800'}`}>
                                                     <p className={`text-[10px] font-black uppercase tracking-widest mb-0.5 ${rideMode === 'Pooled' ? 'text-green-100' : 'text-gray-400 dark:text-gray-500'}`}>
                                                         Pool Ride
@@ -1712,6 +1717,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                     <p className={`text-[10px] mt-0.5 ${rideMode === 'Pooled' ? 'text-green-100' : 'text-gray-400 dark:text-gray-500'}`}>
                                                         Shared ride
                                                     </p>
+                                                    {co2Pool > 0 && (
+                                                        <p className={`text-[9px] mt-1 font-semibold ${rideMode === 'Pooled' ? 'text-green-100' : 'text-green-600 dark:text-green-400'}`}>
+                                                            🌱 {co2Pool}g CO₂
+                                                        </p>
+                                                    )}
                                                 </div>
                                             </div>
 
@@ -1726,32 +1736,52 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                 </span>
                                             </div>
 
-                                            {/* 1.4.3 — Highlighted savings banner */}
-                                            <div className={`px-3 py-2.5 flex items-center justify-between transition-colors ${rideMode === 'Pooled'
-                                                ? 'bg-green-500'
-                                                : 'bg-green-50 dark:bg-green-900/20'
-                                                }`}>
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-base">🎉</span>
-                                                    <div>
-                                                        <p className={`text-[10px] font-black uppercase tracking-wider ${rideMode === 'Pooled' ? 'text-green-100' : 'text-green-700 dark:text-green-300'}`}>
-                                                            Total Savings
-                                                        </p>
-                                                        {co2Saved > 0 && (
-                                                            <p className={`text-[9px] ${rideMode === 'Pooled' ? 'text-green-100' : 'text-green-600 dark:text-green-400'}`}>
-                                                                🌱 {co2Saved}g less CO₂
+                                            {/* 1.4.3 + 3.2.2 + 3.2.3 — Savings banner with CO₂ bar */}
+                                            <div className={`px-3 pt-2.5 pb-2 transition-colors ${rideMode === 'Pooled' ? 'bg-green-500' : 'bg-green-50 dark:bg-green-900/20'}`}>
+                                                {/* Fare + badge row */}
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-base">🎉</span>
+                                                        <div>
+                                                            <p className={`text-[10px] font-black uppercase tracking-wider ${rideMode === 'Pooled' ? 'text-green-100' : 'text-green-700 dark:text-green-300'}`}>
+                                                                Total Savings
                                                             </p>
-                                                        )}
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <span className={`text-xl font-black ${rideMode === 'Pooled' ? 'text-white' : 'text-green-600 dark:text-green-400'}`}>
+                                                            ₹{fareSaved}
+                                                        </span>
+                                                        <span className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full font-black ${rideMode === 'Pooled' ? 'bg-white/20 text-white' : 'bg-green-200 dark:bg-green-800 text-green-800 dark:text-green-200'}`}>
+                                                            {savingsPct}% off
+                                                        </span>
                                                     </div>
                                                 </div>
-                                                <div className="text-right">
-                                                    <span className={`text-xl font-black ${rideMode === 'Pooled' ? 'text-white' : 'text-green-600 dark:text-green-400'}`}>
-                                                        ₹{fareSaved}
-                                                    </span>
-                                                    <span className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full font-black ${rideMode === 'Pooled' ? 'bg-white/20 text-white' : 'bg-green-200 dark:bg-green-800 text-green-800 dark:text-green-200'}`}>
-                                                        {savingsPct}% off
-                                                    </span>
-                                                </div>
+                                                {/* 3.2.3 — CO₂ comparison bar */}
+                                                {co2Solo > 0 && (
+                                                    <div className="space-y-1">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className={`text-[9px] w-8 shrink-0 font-bold ${rideMode === 'Pooled' ? 'text-green-100' : 'text-gray-500'}`}>Solo</span>
+                                                            <div className={`flex-1 h-1.5 rounded-full ${rideMode === 'Pooled' ? 'bg-green-300/40' : 'bg-gray-300 dark:bg-zinc-600'}`} />
+                                                            <span className={`text-[9px] font-bold w-14 text-right shrink-0 ${rideMode === 'Pooled' ? 'text-green-100' : 'text-gray-500'}`}>{co2Solo}g</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-2">
+                                                            <span className={`text-[9px] w-8 shrink-0 font-bold ${rideMode === 'Pooled' ? 'text-white' : 'text-green-600 dark:text-green-400'}`}>Pool</span>
+                                                            <div className="flex-1 relative h-1.5">
+                                                                <div className={`absolute inset-y-0 left-0 w-full rounded-full ${rideMode === 'Pooled' ? 'bg-green-300/40' : 'bg-gray-100 dark:bg-zinc-700'}`} />
+                                                                <div
+                                                                    className={`absolute inset-y-0 left-0 rounded-full transition-all duration-500 ${rideMode === 'Pooled' ? 'bg-white/70' : 'bg-green-400'}`}
+                                                                    style={{ width: `${co2Solo > 0 ? Math.round((co2Pool / co2Solo) * 100) : 0}%` }}
+                                                                />
+                                                            </div>
+                                                            <span className={`text-[9px] font-bold w-14 text-right shrink-0 ${rideMode === 'Pooled' ? 'text-white' : 'text-green-600 dark:text-green-400'}`}>{co2Pool}g</span>
+                                                        </div>
+                                                        {/* 3.2.2 — CO₂ difference */}
+                                                        <p className={`text-[9px] mt-0.5 text-right font-semibold ${rideMode === 'Pooled' ? 'text-green-100' : 'text-green-600 dark:text-green-400'}`}>
+                                                            🌿 Pool saves {co2Saved}g CO₂ ({co2Solo > 0 ? Math.round((co2Saved / co2Solo) * 100) : 0}% less)
+                                                        </p>
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                     )}

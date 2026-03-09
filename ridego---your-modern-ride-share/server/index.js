@@ -4011,6 +4011,58 @@ app.get('/api/users/:userId/stats', async (req, res) => {
     }
 });
 
+// ── US 3.2 — Side-by-side solo vs pool emission comparison ──
+const POOL_CO2_RATE_G_PER_KM = 40;
+app.get('/api/emission-compare', (req, res) => {
+    const distKm = parseFloat(req.query.distKm);
+    const vehicleCategory = (req.query.vehicleCategory || 'CAR').toUpperCase();
+    if (isNaN(distKm) || distKm <= 0) {
+        return res.status(400).json({ message: 'distKm must be a positive number' });
+    }
+    const validCategories = Object.keys(CO2_RATES_G_PER_KM);
+    if (!validCategories.includes(vehicleCategory)) {
+        return res.status(400).json({ message: `vehicleCategory must be one of: ${validCategories.join(', ')}` });
+    }
+
+    // 3.2.2 — Calculate CO₂ for solo and pool
+    const soloRateGPerKm = CO2_RATES_G_PER_KM[vehicleCategory];
+    const soloG = Math.round(distKm * soloRateGPerKm);
+    const soloKg = parseFloat((soloG / 1000).toFixed(3));
+
+    const poolG = Math.round(distKm * POOL_CO2_RATE_G_PER_KM);
+    const poolKg = parseFloat((poolG / 1000).toFixed(3));
+
+    const co2SavedG = soloG - poolG;
+    const co2SavedKg = parseFloat((co2SavedG / 1000).toFixed(3));
+    const reductionPct = soloG > 0 ? Math.round((co2SavedG / soloG) * 100) : 0;
+
+    // 3.2.3 — Environmental savings visualization data
+    const treeEquivalent = parseFloat((co2SavedG / 21000).toFixed(4));
+    const poolBarPct = soloG > 0 ? Math.round((poolG / soloG) * 100) : 0; // for progress bar rendering
+
+    res.json({
+        distKm,
+        vehicleCategory,
+        solo: {
+            co2EmittedG: soloG,
+            co2EmittedKg: soloKg,
+            emissionRateGPerKm: soloRateGPerKm
+        },
+        pool: {
+            co2EmittedG: poolG,
+            co2EmittedKg: poolKg,
+            emissionRateGPerKm: POOL_CO2_RATE_G_PER_KM
+        },
+        comparison: {
+            co2SavedG,
+            co2SavedKg,
+            reductionPct,
+            treeEquivalent,
+            poolBarPct
+        }
+    });
+});
+
 // ── US 3.1.3 — Per-ride carbon footprint endpoint ──
 app.get('/api/rides/:rideId/carbon', async (req, res) => {
     try {
