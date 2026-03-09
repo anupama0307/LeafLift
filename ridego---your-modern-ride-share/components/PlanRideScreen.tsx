@@ -146,6 +146,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [reSearchDriversNotified, setReSearchDriversNotified] = useState(0);
     const reSearchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+    // ─── US 1.5 — Pool opt-out State ───
+    const [optedOutToSolo, setOptedOutToSolo] = useState(false);
+    const [soloOptOutFare, setSoloOptOutFare] = useState<number | null>(null);
+    const [isOptingOut, setIsOptingOut] = useState(false);
+
     const mapRef = useRef<any>(null);
     const mapContainerRef = useRef<HTMLDivElement>(null);
     const [mapLoaded, setMapLoaded] = useState(false);
@@ -1362,8 +1367,37 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         setIsAutoReSearching(false);
         setReSearchDriversNotified(0);
         if (reSearchTimeoutRef.current) clearTimeout(reSearchTimeoutRef.current);
+        // Clear pool opt-out state
+        setOptedOutToSolo(false);
+        setSoloOptOutFare(null);
         // Navigate back to home screen
         onBack();
+    };
+
+    // ─── US 1.5 — Handle opt-out of pooling ───
+    const handleOptOutPool = async () => {
+        if (!activeRideId) return;
+        setIsOptingOut(true);
+        try {
+            // compute solo fare from current pool fare
+            const soloFare = currentFare ? Math.round(currentFare / 0.67) : undefined;
+            const res = await fetch(`${API_BASE_URL}/api/rides/${activeRideId}/opt-out-pool`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ soloFare }),
+            });
+            if (!res.ok) throw new Error('Failed to opt out');
+            const data = await res.json();
+            setOptedOutToSolo(true);
+            setSoloOptOutFare(data.soloFare);
+            setCurrentFare(data.soloFare);
+            setRideMode('Solo');
+            setIsNoDriversFound(false);
+        } catch {
+            alert('Could not switch to solo ride. Please try again.');
+        } finally {
+            setIsOptingOut(false);
+        }
     };
 
     // ─── RENDER ───
@@ -2111,20 +2145,58 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 ) : (
                                     /* Normal Searching State */
                                     <>
-                                        <div className="relative mb-8">
-                                            <div className="size-24 bg-green-50 dark:bg-green-900/10 rounded-full flex items-center justify-center">
-                                                <span className="material-icons-outlined text-4xl text-green-500">radar</span>
-                                            </div>
-                                            <div className="absolute inset-0 border-4 border-green-500/20 rounded-full animate-ping"></div>
-                                        </div>
-                                        <h3 className="text-2xl font-black mb-2 dark:text-white">Finding your ride</h3>
-                                        <p className="text-sm text-gray-500 dark:text-gray-400 font-medium max-w-[240px]">
-                                            We're connecting you with active drivers in your area.
-                                        </p>
-                                        {currentFare !== null && (
-                                            <div className="mt-6 bg-leaf-600 text-white px-6 py-2 rounded-2xl text-xs font-black uppercase tracking-widest shadow-lg shadow-leaf-500/20">
-                                                Estimate ₹{currentFare}
-                                            </div>
+                                        {optedOutToSolo ? (
+                                            /* US 1.5.3 — Solo confirmation after opt-out */
+                                            <>
+                                                <div className="relative mb-6">
+                                                    <div className="size-24 bg-green-50 dark:bg-green-900/10 rounded-full flex items-center justify-center">
+                                                        <span className="material-icons-outlined text-4xl text-green-500">check_circle</span>
+                                                    </div>
+                                                    <div className="absolute inset-0 border-4 border-green-500/20 rounded-full animate-ping"></div>
+                                                </div>
+                                                <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded-2xl px-5 py-3 mb-2 text-center">
+                                                    <p className="text-xs font-bold text-green-600 dark:text-green-400 uppercase tracking-widest mb-0.5">Switched to Solo Ride</p>
+                                                    <p className="text-2xl font-black text-green-700 dark:text-green-300">₹{soloOptOutFare ?? currentFare}</p>
+                                                    <p className="text-[11px] text-green-500 dark:text-green-500 mt-0.5">Updated fare — searching drivers now</p>
+                                                </div>
+                                                <h3 className="text-lg font-black mt-2 dark:text-white">Finding your private ride</h3>
+                                                <div className="flex items-center gap-2 mt-3 text-green-600 dark:text-green-400">
+                                                    <div className="flex gap-1">
+                                                        <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                                                        <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                                                        <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                                                    </div>
+                                                    <span className="text-xs font-bold">Connecting to drivers</span>
+                                                </div>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <div className="relative mb-8">
+                                                    <div className="size-24 bg-green-50 dark:bg-green-900/10 rounded-full flex items-center justify-center">
+                                                        <span className="material-icons-outlined text-4xl text-green-500">radar</span>
+                                                    </div>
+                                                    <div className="absolute inset-0 border-4 border-green-500/20 rounded-full animate-ping"></div>
+                                                </div>
+                                                <h3 className="text-2xl font-black mb-2 dark:text-white">Finding your ride</h3>
+                                                <p className="text-sm text-gray-500 dark:text-gray-400 font-medium max-w-[240px]">
+                                                    We're connecting you with active drivers in your area.
+                                                </p>
+                                                {currentFare !== null && (
+                                                    <div className="mt-6 bg-leaf-600 text-white px-6 py-2 rounded-2xl text-xs font-black uppercase tracking-widest shadow-lg shadow-leaf-500/20">
+                                                        Estimate ₹{currentFare}
+                                                    </div>
+                                                )}
+                                                {/* US 1.5.1 — Opt-out button during pool search */}
+                                                {rideMode === 'Pooled' && (
+                                                    <button
+                                                        onClick={handleOptOutPool}
+                                                        disabled={isOptingOut}
+                                                        className="mt-4 py-2.5 px-6 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 rounded-2xl font-bold text-xs hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors disabled:opacity-50"
+                                                    >
+                                                        {isOptingOut ? 'Switching…' : '⚡ Proceed as Solo Ride'}
+                                                    </button>
+                                                )}
+                                            </>
                                         )}
                                     </>
                                 )}
@@ -2144,25 +2216,35 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 <p className="text-sm text-gray-500 dark:text-gray-400 font-medium max-w-[280px]">
                                     Sorry, there aren't any drivers travelling in this location at the moment.
                                 </p>
-                                <div className="flex gap-3 w-full mt-10">
-                                    <button
-                                        onClick={() => setRideStatus('IDLE')}
-                                        className="flex-1 py-4 bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-400 rounded-2xl font-black text-sm uppercase tracking-widest"
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button
-                                        onClick={() => {
-                                            setIsNoDriversFound(false);
-                                            // Re-trigger search or just wait more
-                                            // For now we'll just reset the timer by toggling state
-                                            setRideStatus('IDLE');
-                                            setTimeout(() => setRideStatus('SEARCHING'), 100);
-                                        }}
-                                        className="flex-[2] py-4 bg-black dark:bg-white text-white dark:text-black rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl"
-                                    >
-                                        Try Again
-                                    </button>
+                                <div className="flex flex-col gap-3 w-full mt-10">
+                                    {/* US 1.5.1 — Opt-out button in no-drivers-found state */}
+                                    {rideMode === 'Pooled' && (
+                                        <button
+                                            onClick={handleOptOutPool}
+                                            disabled={isOptingOut}
+                                            className="w-full py-4 bg-amber-500 text-white rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl shadow-amber-500/30 hover:bg-amber-600 transition-colors disabled:opacity-50"
+                                        >
+                                            {isOptingOut ? 'Switching…' : '⚡ Switch to Solo Ride'}
+                                        </button>
+                                    )}
+                                    <div className="flex gap-3 w-full">
+                                        <button
+                                            onClick={() => setRideStatus('IDLE')}
+                                            className="flex-1 py-4 bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-400 rounded-2xl font-black text-sm uppercase tracking-widest"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setIsNoDriversFound(false);
+                                                setRideStatus('IDLE');
+                                                setTimeout(() => setRideStatus('SEARCHING'), 100);
+                                            }}
+                                            className="flex-[2] py-4 bg-black dark:bg-white text-white dark:text-black rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl"
+                                        >
+                                            Try Again
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         )}

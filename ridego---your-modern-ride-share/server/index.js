@@ -517,6 +517,41 @@ async function broadcastIndividualRide(rideId, io) {
 const OLA_API_KEY = process.env.OLA_MAPS_API_KEY;
 
 
+// ✅ US 1.5 — Opt out of pooling: convert pooled ride to solo and re-broadcast
+app.patch('/api/rides/:rideId/opt-out-pool', async (req, res) => {
+    try {
+        const ride = await Ride.findById(req.params.rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+        if (ride.status !== 'SEARCHING') {
+            return res.status(400).json({ message: 'Ride is not in SEARCHING state' });
+        }
+        if (!ride.isPooled) {
+            return res.status(400).json({ message: 'Ride is already a solo ride' });
+        }
+
+        // Reverse the pool discount (0.67) to restore full solo fare
+        // If the client sends an explicit soloFare, use that instead
+        const soloFare = (req.body && req.body.soloFare)
+            ? req.body.soloFare
+            : Math.round((ride.currentFare || ride.fare || 0) / 0.67);
+
+        ride.isPooled = false;
+        ride.fare = soloFare;
+        ride.currentFare = soloFare;
+        await ride.save();
+
+        // Broadcast this ride to nearby drivers as a solo ride
+        await broadcastIndividualRide(ride._id.toString(), io);
+
+        console.log(`✅ Rider ${ride.userId} opted out of pooling. New solo fare: ₹${soloFare}`);
+        res.json({ success: true, ride, soloFare });
+    } catch (err) {
+        console.error('❌ opt-out-pool error:', err);
+        res.status(500).json({ message: 'Failed to opt out of pool' });
+    }
+});
+
+
 // ✅ OLA Maps Autocomplete Proxy
 /**
  * @swagger
