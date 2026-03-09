@@ -176,6 +176,20 @@ const RideSchema = new mongoose.Schema({
         enum: ['BIKE', 'AUTO', 'CAR', 'BIG_CAR'],
         default: 'CAR'
     },
+    // US 3.4 — Ride telemetry for accurate emission calculation
+    telemetryPoints: [{
+        lat:              { type: Number, required: true },
+        lng:              { type: Number, required: true },
+        speed:            { type: Number, default: 0 },     // km/h (optional)
+        timestamp:        { type: Date, default: Date.now },
+        distanceFromPrev: { type: Number, default: 0 }      // metres from previous point
+    }],
+    telemetryDistanceMeters: { type: Number, default: 0 },
+    emissionSource: {
+        type: String,
+        enum: ['ESTIMATED', 'TELEMETRY', 'HAVERSINE'],
+        default: 'ESTIMATED'
+    },
     bookingTime: {
         type: Date,
         default: Date.now

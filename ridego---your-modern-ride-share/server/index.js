@@ -3828,16 +3828,24 @@ app.post('/api/rides/:rideId/request-complete', async (req, res) => {
         let actualDistanceMeters = 0;
         let completedFare = ride.currentFare || ride.fare || 0;
 
-        if (typeof pickupLat === 'number' && typeof actualLat === 'number') {
+        // 3.4 — Prefer telemetry-accumulated distance; fall back to Haversine straight-line
+        if ((ride.telemetryDistanceMeters || 0) > 0) {
+            actualDistanceMeters = ride.telemetryDistanceMeters;
+            // emissionSource already TELEMETRY from last ping — keep it
+        } else if (typeof pickupLat === 'number' && typeof actualLat === 'number') {
             const distKm = getDistanceKm(pickupLat, pickupLng, actualLat, actualLng);
             actualDistanceMeters = Math.round((distKm || 0) * 1000);
-            // Recalculate fare based on actual distance
+            ride.emissionSource = 'HAVERSINE';
+        }
+
+        // Recalculate fare based on actual distance
+        if (actualDistanceMeters > 0) {
             const baseFare = 30;
             const perKmRate = 12;
             completedFare = Math.round(baseFare + ((actualDistanceMeters / 1000) * perKmRate));
         }
 
-        // Recalculate CO2 based on actual distance traveled
+        // 3.4.2 — Apply emission formula using best available distance
         const _actualDistKm = actualDistanceMeters / 1000;
         const _actualCo2 = calculateCO2(_actualDistKm, ride.vehicleCategory || 'CAR', !!ride.isPooled);
         ride.co2Emissions = _actualCo2.co2Emissions;
@@ -4178,6 +4186,95 @@ app.get('/api/users/:userId/co2-history', async (req, res) => {
     } catch (error) {
         console.error('CO2 history error:', error);
         res.status(500).json({ message: 'Error fetching CO2 history' });
+    }
+});
+
+// ── US 3.4 — Telemetry-based emission calculation ──────────────────────────
+
+// POST /api/rides/:rideId/telemetry — record a GPS ping; accumulate distance; recalculate CO₂ (3.4.1 + 3.4.2 + 3.4.3)
+app.post('/api/rides/:rideId/telemetry', async (req, res) => {
+    try {
+        const { lat, lng, speed = 0, timestamp } = req.body;
+        if (typeof lat !== 'number' || typeof lng !== 'number') {
+            return res.status(400).json({ message: 'lat and lng are required numbers' });
+        }
+        const ride = await Ride.findById(req.params.rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+        if (!['IN_PROGRESS', 'ACCEPTED', 'ARRIVED'].includes(ride.status)) {
+            return res.status(409).json({ message: 'Ride not active' });
+        }
+
+        // 3.4.1 — Collect incremental distance from previous telemetry point
+        let distanceFromPrev = 0;
+        if (ride.telemetryPoints && ride.telemetryPoints.length > 0) {
+            const prev = ride.telemetryPoints[ride.telemetryPoints.length - 1];
+            distanceFromPrev = Math.round(getDistanceKm(prev.lat, prev.lng, lat, lng) * 1000);
+        }
+
+        ride.telemetryPoints.push({
+            lat,
+            lng,
+            speed: speed || 0,
+            timestamp: timestamp ? new Date(timestamp) : new Date(),
+            distanceFromPrev
+        });
+
+        ride.telemetryDistanceMeters = (ride.telemetryDistanceMeters || 0) + distanceFromPrev;
+
+        // 3.4.2 — Apply emission formula using accumulated telemetry distance
+        const telemetryDistKm = ride.telemetryDistanceMeters / 1000;
+        const _tCo2 = calculateCO2(telemetryDistKm, ride.vehicleCategory || 'CAR', !!ride.isPooled);
+        ride.co2Emissions = _tCo2.co2Emissions;
+        ride.co2Saved     = _tCo2.co2Saved;
+        ride.emissionSource = 'TELEMETRY';
+
+        await ride.save(); // 3.4.3 — persist to DB
+
+        res.json({
+            ok: true,
+            telemetryPointsCount:      ride.telemetryPoints.length,
+            telemetryDistanceMeters:   ride.telemetryDistanceMeters,
+            distanceFromPrevMeters:    distanceFromPrev,
+            co2EmittedG:               ride.co2Emissions,
+            co2SavedG:                 ride.co2Saved,
+            emissionSource:            ride.emissionSource,
+            vehicleCategory:           ride.vehicleCategory,
+            emissionRateGPerKm:        CO2_RATES_G_PER_KM[ride.vehicleCategory] || CO2_RATES_G_PER_KM.CAR
+        });
+    } catch (error) {
+        console.error('Telemetry POST error:', error);
+        res.status(500).json({ message: 'Error recording telemetry' });
+    }
+});
+
+// GET /api/rides/:rideId/telemetry — retrieve telemetry summary for a ride (3.4.1)
+app.get('/api/rides/:rideId/telemetry', async (req, res) => {
+    try {
+        const ride = await Ride.findById(req.params.rideId)
+            .select('status vehicleCategory isPooled co2Emissions co2Saved emissionSource telemetryDistanceMeters telemetryPoints');
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        const telemetryDistKm = (ride.telemetryDistanceMeters || 0) / 1000;
+        const co2Rate = CO2_RATES_G_PER_KM[ride.vehicleCategory] || CO2_RATES_G_PER_KM.CAR;
+
+        res.json({
+            rideId:                   ride._id,
+            status:                   ride.status,
+            vehicleCategory:          ride.vehicleCategory,
+            isPooled:                 ride.isPooled,
+            emissionSource:           ride.emissionSource || 'ESTIMATED',
+            telemetryPointsCount:     (ride.telemetryPoints || []).length,
+            telemetryDistanceMeters:  ride.telemetryDistanceMeters || 0,
+            telemetryDistanceKm:      parseFloat(telemetryDistKm.toFixed(3)),
+            emissionRateGPerKm:       co2Rate,
+            co2EmittedG:              ride.co2Emissions || 0,
+            co2EmittedKg:             parseFloat(((ride.co2Emissions || 0) / 1000).toFixed(3)),
+            co2SavedG:                ride.co2Saved || 0,
+            treeEquivalent:           parseFloat(((ride.co2Emissions || 0) / 21000).toFixed(4))
+        });
+    } catch (error) {
+        console.error('Telemetry GET error:', error);
+        res.status(500).json({ message: 'Error fetching telemetry' });
     }
 });
 
