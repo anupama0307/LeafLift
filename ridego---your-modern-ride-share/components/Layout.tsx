@@ -36,20 +36,25 @@ const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScre
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-white dark:bg-zinc-950">
       {/* Top Bar / Status Bar (Simulated) */}
-      {!isSpecialScreen && (
-        <div className="flex justify-between items-center px-8 pt-4 pb-2">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-black dark:text-white">9:41</span>
-            {user?.privacySettings?.locationSharing && (
-              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-leaf-50 dark:bg-leaf-900/30 border border-leaf-100 dark:border-leaf-800/30">
-                <span className="flex h-1.5 w-1.5 relative">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-leaf-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-leaf-500"></span>
-                </span>
-                <span className="text-[10px] font-black uppercase tracking-tighter text-leaf-700 dark:text-leaf-400">Live</span>
-              </div>
-            )}
-          </div>
+      <div className="flex justify-between items-center px-8 pt-4 pb-2">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-black dark:text-white">9:41</span>
+          {user?.privacySettings?.locationSharing ? (
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-leaf-50 dark:bg-leaf-900/30 border border-leaf-100 dark:border-leaf-800/30 shadow-sm">
+              <span className="flex h-1.5 w-1.5 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-leaf-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-leaf-500"></span>
+              </span>
+              <span className="text-[10px] font-black uppercase tracking-tighter text-leaf-700 dark:text-leaf-400">Live</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-gray-50 dark:bg-zinc-800/50 border border-gray-100 dark:border-zinc-700/30 opacity-60">
+              <span className="size-1.5 rounded-full bg-gray-400" />
+              <span className="text-[10px] font-black uppercase tracking-tighter text-gray-400">Sharing Off</span>
+            </div>
+          )}
+        </div>
+        {!isSpecialScreen && (
           <button onClick={toggleDarkMode} className="flex items-center gap-1.5 bg-gray-100 dark:bg-zinc-800 px-3 py-1.5 rounded-full hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors">
             <span className="material-icons-outlined text-base text-leaf-600 dark:text-leaf-400">
               {document.documentElement.classList.contains('dark') ? 'light_mode' : 'dark_mode'}
@@ -58,8 +63,8 @@ const Layout: React.FC<LayoutProps> = ({ children, currentScreen, setCurrentScre
               {document.documentElement.classList.contains('dark') ? 'Light' : 'Dark'}
             </span>
           </button>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto hide-scrollbar relative">

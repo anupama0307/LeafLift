@@ -446,6 +446,13 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
         const { latitude, longitude } = position.coords;
         const coords = { lat: latitude, lng: longitude };
         setDriverLocation(coords);
+
+        // ─── Privacy Check (5.2.2) ───
+        if (user?.privacySettings?.locationSharing === false) {
+          console.log('🔇 Location sharing disabled — suppressing transmission');
+          return;
+        }
+
         socketRef.current?.emit('driver:location', { driverId: user?._id || user?.id, lat: latitude, lng: longitude });
 
         const userId = user?._id || user?.id;
@@ -468,7 +475,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
       { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
     );
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [isOnline, activeRide, user?._id, user?.id]);
+  }, [isOnline, activeRide, user?._id, user?.id, user?.privacySettings?.locationSharing]);
 
   useEffect(() => {
     if (isOnline || activeRide) {

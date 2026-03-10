@@ -59,7 +59,7 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
   };
 
   // Safety state
-  const [locationSharing, setLocationSharing] = useState(true);
+  const [locationSharing, setLocationSharing] = useState(user?.privacySettings?.locationSharing ?? true);
   const [shareTripStatus, setShareTripStatus] = useState(true);
   const [twoFactorAuth, setTwoFactorAuth] = useState(false);
   const [rideRecording, setRideRecording] = useState(false);
@@ -599,6 +599,12 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
     <div className="px-5 pb-24 animate-in fade-in duration-300 bg-white dark:bg-black min-h-full">
       <SubScreenHeader title="Safety & Privacy" onBack={() => setSubScreen('MAIN')} />
 
+      {profileSaveMsg && (
+        <div className={`mb-4 p-3 rounded-lg text-sm font-bold ${profileSaveMsg.includes('success') ? 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400' : 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400'}`}>
+          {profileSaveMsg}
+        </div>
+      )}
+
       {/* Emergency */}
       <SectionTitle>Emergency</SectionTitle>
       <div className="bg-red-50 dark:bg-red-900/10 rounded-2xl p-5 border border-red-100 dark:border-red-900/30 mb-2">
@@ -660,7 +666,32 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
           icon="location_on"
           title="Live Location Sharing"
           subtitle="Share real-time location during rides"
-          trailing={<Toggle enabled={locationSharing} onChange={setLocationSharing} />}
+          trailing={<Toggle enabled={locationSharing} onChange={async (val) => {
+            setLocationSharing(val);
+            if (!user?._id) return;
+            try {
+              const resp = await fetch(`${API_BASE_URL}/api/users/${user._id}/privacy`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                  privacySettings: { 
+                    ...user.privacySettings,
+                    locationSharing: val 
+                  } 
+                }),
+              });
+              if (resp.ok) {
+                const updated = await resp.json();
+                localStorage.setItem('leaflift_user', JSON.stringify(updated));
+                if (onUserUpdate) onUserUpdate(updated);
+                setProfileSaveMsg('Privacy settings updated!');
+                setTimeout(() => setProfileSaveMsg(null), 2000);
+              }
+            } catch (err) {
+              console.error('Failed to update privacy:', err);
+              setLocationSharing(!val); // Revert on failure
+            }
+          }} />}
         />
         <SettingRow
           icon="share"

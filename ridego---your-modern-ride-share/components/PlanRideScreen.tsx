@@ -621,16 +621,23 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         drawRideRoute();
     }, [mapLoaded, activeRideId, rideStatus, pickupCoords, dropoffCoords, driverLocationRef.current]);
 
-    // ─── Send rider live location ───
+    // ─── Send rider live location (User Story 5.2.2) ───
     useEffect(() => {
         if (!activeRideId || !navigator.geolocation) return;
         const watchId = navigator.geolocation.watchPosition(
             pos => {
                 const { latitude, longitude } = pos.coords;
+
+                // ─── Privacy Check ───
+                if (user?.privacySettings?.locationSharing === false) {
+                    return;
+                }
+
                 fetch(`${API_BASE_URL}/api/rides/${activeRideId}/location`, {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ role: 'RIDER', lat: latitude, lng: longitude })
                 }).catch(() => null);
+                
                 if (mapRef.current) {
                     if (!riderMarkerRef.current) {
                         const el = document.createElement('div');
@@ -645,7 +652,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             () => null, { enableHighAccuracy: true, maximumAge: 5001 }
         );
         return () => navigator.geolocation.clearWatch(watchId);
-    }, [activeRideId]);
+    }, [activeRideId, user?.privacySettings?.locationSharing]);
 
     // ─── Helpers ───
     const getMapStyle = (dark: boolean) =>
