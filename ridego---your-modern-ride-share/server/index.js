@@ -254,6 +254,25 @@ io.on('connection', (socket) => {
         entry.lastUpdate = now;
         onlineDrivers.set(driverId, entry);
         io.to('riders:online').emit('nearby:driver:update', { driverId, lat, lng });
+
+        // ── US 2.6 — Driver Nearby Detection ──
+        // Emit driver:nearby when driver is within 300m of rider's pickup (ACCEPTED rides only)
+        if (!entry.nearbyNotifiedRides) entry.nearbyNotifiedRides = new Set();
+        (async () => {
+            try {
+                const activeRide = await Ride.findOne({ driverId, status: 'ACCEPTED' })
+                    .select('_id userId pickup').lean();
+                if (!activeRide?.pickup?.lat) return;
+                const distKm = getDistanceKm(lat, lng, activeRide.pickup.lat, activeRide.pickup.lng);
+                const rideIdStr = activeRide._id.toString();
+                if (distKm !== null && distKm <= 0.3 && !entry.nearbyNotifiedRides.has(rideIdStr)) {
+                    entry.nearbyNotifiedRides.add(rideIdStr);
+                    io.to(`ride:${activeRide._id}`).emit('driver:nearby', { rideId: rideIdStr });
+                    io.to(`user:${activeRide.userId}`).emit('driver:nearby', { rideId: rideIdStr });
+                    console.log(`🚗 Driver ${driverId} nearby pickup: ride ${rideIdStr} (${(distKm * 1000).toFixed(0)}m)`);
+                }
+            } catch { /* silent */ }
+        })();
     });
 
     socket.on('driver:offline', ({ driverId }) => {

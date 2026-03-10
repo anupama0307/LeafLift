@@ -129,9 +129,16 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     // ─── US 2.3 — Trip Progress Bar State ───
     const [tripProgressPct, setTripProgressPct] = useState<number | null>(null);
 
+    // ─── US 2.7 — Share ETA State ───
+    const [etaCopied, setEtaCopied] = useState(false);
+
     // ─── Delay Alert State ───
     const [delayAlert, setDelayAlert] = useState<{ delayMinutes: number; message: string; etaText: string; etaLabel: string } | null>(null);
     const delayAlertTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+    // ─── US 2.6 — Driver Nearby State ───
+    const [driverNearby, setDriverNearby] = useState(false);
+    const driverNearbyTimerRef = useRef<NodeJS.Timeout | null>(null);
 
     // ─── Multi-Stop State ───
     const [stops, setStops] = useState<Array<{ address: string; lat: number; lng: number }>>([]);
@@ -292,7 +299,14 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             }
         });
 
-        // ─── Delay Alert Handler (User Story 2.6) ───
+        // ─── US 2.6 — Driver Nearby Handler ───
+        socket.on('driver:nearby', () => {
+            setDriverNearby(true);
+            if (driverNearbyTimerRef.current) clearTimeout(driverNearbyTimerRef.current);
+            driverNearbyTimerRef.current = setTimeout(() => setDriverNearby(false), 30000);
+        });
+
+        // ─── Delay Alert Handler (User Story 2.5) ───
         socket.on('ride:delay-alert', (payload: any) => {
             if (!payload?.delayMinutes) return;
             setDelayAlert({
@@ -597,6 +611,14 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             nearbyDriverMarkersRef.current.forEach(m => m.remove());
             nearbyDriverMarkersRef.current.clear();
             nearbyDriverPositionsRef.current.clear();
+        }
+    }, [rideStatus]);
+
+    // ─── US 2.6 — Clear driver-nearby banner when ride leaves ACCEPTED ───
+    useEffect(() => {
+        if (rideStatus !== 'ACCEPTED') {
+            setDriverNearby(false);
+            if (driverNearbyTimerRef.current) clearTimeout(driverNearbyTimerRef.current);
         }
     }, [rideStatus]);
 
@@ -1200,8 +1222,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         }
 
         const selectedRoute = availableRoutes[selectedRouteIndex];
-        const price = categoryPrices.get(selectedCategory) || 0;
         const cat = VEHICLE_CATEGORIES.find(c => c.id === selectedCategory);
+        // US 2.5 — always recompute fare from the currently selected route
+        const price = selectedRoute && cat
+            ? Math.round(cat.baseRate + (selectedRoute.distance / 1000) * cat.perKmRate)
+            : (categoryPrices.get(selectedCategory) || 0);
         let parsedWindowStart: Date | null = null;
         let parsedWindowEnd: Date | null = null;
 
@@ -1462,10 +1487,49 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         }
     };
 
+    // ─── US 2.7 — Share ETA handler ───
+    const handleShareEta = () => {
+        const parts: string[] = [];
+        if (driverDetails?.name) parts.push(`My LeafLift driver ${driverDetails.name} is on the way.`);
+        if (etaToPickup) parts.push(`Estimated pickup: ${etaToPickup}.`);
+        if (arrivalEstimatedTime) {
+            const t = new Date(arrivalEstimatedTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            parts.push(`Drop-off around ${t}.`);
+        }
+        const text = parts.length ? parts.join(' ') : 'Tracking my LeafLift ride.';
+        navigator.clipboard.writeText(text).then(() => {
+            setEtaCopied(true);
+            setTimeout(() => setEtaCopied(false), 3000);
+        }).catch(() => { /* fallback: no-op */ });
+    };
+
     // ─── RENDER ───
     return (
         <div className="relative w-full h-screen overflow-hidden bg-white dark:bg-zinc-950">
-            {/* ── Congestion Delay Alert Toast (User Story 2.6) ── */}
+            {/* ── US 2.6 — Driver Nearby Banner ── */}
+            {driverNearby && (
+                <div className="absolute top-4 left-4 right-4 z-[91] animate-in slide-in-from-top duration-500">
+                    <div className="bg-blue-600 dark:bg-blue-700 rounded-2xl p-4 shadow-2xl">
+                        <div className="flex items-center gap-3">
+                            <div className="size-10 bg-white/20 rounded-xl flex items-center justify-center shrink-0">
+                                <span className="material-icons-outlined text-white">directions_car</span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <h4 className="text-sm font-black text-white">Your driver is nearby!</h4>
+                                <p className="text-xs text-blue-200">Please be ready at the pickup point.</p>
+                            </div>
+                            <button
+                                onClick={() => setDriverNearby(false)}
+                                className="p-1 rounded-lg hover:bg-white/20 transition-colors shrink-0"
+                            >
+                                <span className="material-icons-outlined text-white text-sm">close</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Congestion Delay Alert Toast (User Story 2.5) ── */}
             {delayAlert && (
                 <div className="absolute top-16 left-4 right-4 z-[90] animate-in slide-in-from-top duration-500">
                     <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded-2xl p-4 shadow-xl backdrop-blur-sm">
@@ -2207,6 +2271,44 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 </span>
                             </div>
                         )}
+                        {/* ── US 2.5 — Route Alternatives Switcher ── */}
+                        {availableRoutes.length > 1 && (() => {
+                            const PREVIEW_SPEED_ALT: Record<string, number> = { BIKE: 20, AUTO: 25, CAR: 28, BIG_CAR: 26 };
+                            const spd = PREVIEW_SPEED_ALT[selectedCategory] || 28;
+                            const labels = ['Fastest', 'Balanced', 'Scenic'];
+                            return (
+                                <div className="mb-3">
+                                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 dark:text-zinc-500 mb-2">Route Options</p>
+                                    <div className="flex gap-2 flex-wrap">
+                                        {availableRoutes.map((r: any, i: number) => {
+                                            const km = parseFloat((r.distance / 1000).toFixed(1));
+                                            const mins = Math.max(1, Math.round((km / spd) * 60));
+                                            const isActive = selectedRouteIndex === i;
+                                            return (
+                                                <button
+                                                    key={i}
+                                                    onClick={() => setSelectedRouteIndex(i)}
+                                                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border-2 text-xs font-bold transition-all ${
+                                                        isActive
+                                                            ? 'border-black dark:border-white bg-black dark:bg-white text-white dark:text-black'
+                                                            : 'border-gray-200 dark:border-zinc-700 text-gray-600 dark:text-gray-400 hover:border-gray-400 dark:hover:border-zinc-500'
+                                                    }`}
+                                                >
+                                                    <span className="material-icons-outlined" style={{ fontSize: '13px' }}>
+                                                        {i === 0 ? 'bolt' : i === 1 ? 'route' : 'park'}
+                                                    </span>
+                                                    <span>{labels[i] ?? `Route ${i + 1}`}</span>
+                                                    <span className={`${isActive ? 'text-white/70 dark:text-black/60' : 'text-gray-400 dark:text-zinc-500'}`}>
+                                                        {mins} min · {km} km
+                                                    </span>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            );
+                        })()}
+
                         {/* ── US 2.1 — Trip preview: distance, duration, map-pin address preview ── */}
                         {(() => {
                             const route = availableRoutes[selectedRouteIndex];
@@ -2263,6 +2365,37 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             );
                         })()}
 
+                        {/* ── US 2.4 — Fare Estimate Breakdown ── */}
+                        {(() => {
+                            const route = availableRoutes[selectedRouteIndex];
+                            const cat = VEHICLE_CATEGORIES.find(c => c.id === selectedCategory);
+                            if (!cat || !route) return null;
+                            const distKm = parseFloat((route.distance / 1000).toFixed(2));
+                            const kmCharge = Math.round(distKm * cat.perKmRate);
+                            const totalFare = cat.baseRate + kmCharge;
+                            return (
+                                <div className="mb-3 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 rounded-2xl overflow-hidden">
+                                    <div className="flex items-center gap-2 px-4 py-2 border-b border-indigo-100 dark:border-indigo-900">
+                                        <span className="material-icons-outlined text-indigo-500 dark:text-indigo-400" style={{ fontSize: '16px' }}>receipt_long</span>
+                                        <span className="text-[10px] font-black uppercase tracking-widest text-indigo-600 dark:text-indigo-400">Fare Estimate</span>
+                                    </div>
+                                    <div className="px-4 py-3 space-y-1.5">
+                                        <div className="flex justify-between text-xs text-gray-600 dark:text-gray-400">
+                                            <span>Base fare</span>
+                                            <span className="font-semibold dark:text-white">₹{cat.baseRate}</span>
+                                        </div>
+                                        <div className="flex justify-between text-xs text-gray-600 dark:text-gray-400">
+                                            <span>{distKm} km × ₹{cat.perKmRate}/km</span>
+                                            <span className="font-semibold dark:text-white">₹{kmCharge}</span>
+                                        </div>
+                                        <div className="flex justify-between text-sm font-black text-gray-900 dark:text-white border-t border-indigo-100 dark:border-indigo-900 pt-1.5 mt-1">
+                                            <span>Estimated Total</span>
+                                            <span className="text-indigo-600 dark:text-indigo-400">₹{totalFare}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })()}
                         <button
                             onClick={() => setShowPaymentModal(true)}
                             className="w-full flex items-center justify-between mb-3 p-3 bg-gray-50 dark:bg-zinc-800 rounded-xl hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors"
@@ -2281,9 +2414,9 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                     {scheduleInfo ? 'Scheduling...' : 'Booking...'}
                                 </span>
                             ) : scheduleInfo ? (
-                                `Schedule ${VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label} - ₹${categoryPrices.get(selectedCategory) || 0}`
+                                `Schedule ${VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label} - ₹${(() => { const r = availableRoutes[selectedRouteIndex]; const c = VEHICLE_CATEGORIES.find(x => x.id === selectedCategory); return r && c ? Math.round(c.baseRate + (r.distance / 1000) * c.perKmRate) : categoryPrices.get(selectedCategory) || 0; })()}`
                             ) : (
-                                `Book ${VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label} - ₹${categoryPrices.get(selectedCategory) || 0}`
+                                `Book ${VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label} - ₹${(() => { const r = availableRoutes[selectedRouteIndex]; const c = VEHICLE_CATEGORIES.find(x => x.id === selectedCategory); return r && c ? Math.round(c.baseRate + (r.distance / 1000) * c.perKmRate) : categoryPrices.get(selectedCategory) || 0; })()}`
                             )}
                         </button>
                     </div>
@@ -2797,6 +2930,19 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 title="Chat"
                             >
                                 <span className="material-icons-outlined">chat</span>
+                            </button>
+                            {/* US 2.7 — Share ETA button */}
+                            <button
+                                onClick={handleShareEta}
+                                className="relative p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
+                                title="Share ETA"
+                            >
+                                <span className="material-icons-outlined">
+                                    {etaCopied ? 'check_circle' : 'share'}
+                                </span>
+                                {etaCopied && (
+                                    <span className="absolute -top-7 left-1/2 -translate-x-1/2 bg-black dark:bg-white text-white dark:text-black text-[9px] font-black px-2 py-0.5 rounded-full whitespace-nowrap">Copied!</span>
+                                )}
                             </button>
                         </div>
                     )}
