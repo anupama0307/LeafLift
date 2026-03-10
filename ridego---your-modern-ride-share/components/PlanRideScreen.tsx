@@ -1645,6 +1645,27 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             </p>
                         )}
 
+                        {/* ── Map Pin Preview (US 2.1.3) ── */}
+                        {pickupCoords && dropoffCoords && (
+                            <div className="mt-3 flex items-center gap-3 p-3 bg-gray-50 dark:bg-zinc-800/50 rounded-2xl">
+                                <div className="flex items-center gap-1.5">
+                                    <span className="material-icons-outlined text-green-500" style={{ fontSize: '20px' }}>trip_origin</span>
+                                    <div className="min-w-0">
+                                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Pickup</p>
+                                        <p className="text-xs font-bold dark:text-white truncate max-w-[120px]">{pickup || 'Current location'}</p>
+                                    </div>
+                                </div>
+                                <div className="flex-1 border-t border-dashed border-gray-300 dark:border-zinc-600 mx-1" />
+                                <div className="flex items-center gap-1.5">
+                                    <span className="material-icons-outlined text-red-500" style={{ fontSize: '20px' }}>location_on</span>
+                                    <div className="min-w-0">
+                                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Drop-off</p>
+                                        <p className="text-xs font-bold dark:text-white truncate max-w-[120px]">{destination || ''}</p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {/* Alternative Routes */}
                         {availableRoutes.length > 1 && (
                             <div className="mt-3 mb-3">
