@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { AdminScreen } from './types';
 import Layout from './components/Layout';
 import DashboardHome from './components/DashboardHome';
@@ -10,17 +10,11 @@ import NotificationsScreen from './components/NotificationsScreen';
 
 const App: React.FC = () => {
   const [currentScreen, setCurrentScreen] = useState<AdminScreen>(AdminScreen.DASHBOARD);
-  const [isDarkMode, setIsDarkMode] = useState(false);
-
-  useEffect(() => {
-    if (isDarkMode) document.documentElement.classList.add('dark');
-    else document.documentElement.classList.remove('dark');
-  }, [isDarkMode]);
 
   const renderScreen = () => {
     switch (currentScreen) {
       case AdminScreen.DASHBOARD:
-        return <DashboardHome />;
+        return <DashboardHome onNavigate={setCurrentScreen} />;
       case AdminScreen.DEMAND:
         return <DemandScreen />;
       case AdminScreen.FLEET:
@@ -37,18 +31,10 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="flex min-h-screen bg-[#f3f3f3] dark:bg-black transition-colors duration-300">
-      {/* Responsive container: full-width on desktop, centered phone on small viewports */}
-      <div className="w-full min-h-screen bg-white dark:bg-black flex flex-col relative overflow-hidden">
-        <Layout
-          currentScreen={currentScreen}
-          setCurrentScreen={setCurrentScreen}
-          toggleDarkMode={() => setIsDarkMode(!isDarkMode)}
-          isDark={isDarkMode}
-        >
-          {renderScreen()}
-        </Layout>
-      </div>
+    <div className="min-h-screen bg-black text-white">
+      <Layout currentScreen={currentScreen} setCurrentScreen={setCurrentScreen}>
+        {renderScreen()}
+      </Layout>
     </div>
   );
 };
