@@ -899,11 +899,32 @@ app.post('/api/signup', async (req, res) => {
             photoUrl: photoUrl || `https://i.pravatar.cc/150?u=${email}`
         } : {};
 
-        user = new User({ role, email, phone, firstName, lastName, dob, gender, license, aadhar, ...driverDefaults });
+        // 5.4.2 Integrate background check API to validate user identity
+        const bgCheck = await performBackgroundCheck({ role, firstName, lastName, license, aadhar });
+        
+        user = new User({ 
+            role, 
+            email, 
+            phone, 
+            firstName, 
+            lastName, 
+            dob, 
+            gender, 
+            license, 
+            aadhar, 
+            isVerified: bgCheck.verified,
+            verificationStatus: bgCheck.status,
+            verificationDate: bgCheck.verified ? new Date() : null,
+            ...driverDefaults 
+        });
         await user.save();
         
         const token = generateToken(user);
-        res.status(201).json({ message: 'User created and verified', user, token });
+        res.status(201).json({ 
+            message: bgCheck.verified ? 'User created and verified' : 'User created, verification pending', 
+            user, 
+            token 
+        });
     } catch (error) {
         console.error('Signup error:', error);
         res.status(500).json({ message: 'Server error during signup' });

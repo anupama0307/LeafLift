@@ -295,23 +295,64 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     }
   };
 
-  /* 
-  // handleNext is currently unused and was causing lint errors due to missing state
+  const [step, setStep] = useState<AuthStep>('ROLE');
+
   const handleNext = () => {
-    if (step === 'NAME') setStep('DOB');
-    else if (step === 'DOB') setStep('GENDER');
-    else if (step === 'GENDER') {
-      if (role === 'DRIVER') setStep('LICENSE');
-      else handleSignup({ role, firstName, lastName, phone, dob, gender });
+    setError(null);
+    if (step === 'ROLE') {
+      if (!role) { setError('Please select a role'); return; }
+      setStep('NAME');
     }
-    else if (step === 'LICENSE') setStep('LICENSE_UPLOAD');
-    else if (step === 'LICENSE_UPLOAD') setStep('AADHAR');
-    else if (step === 'AADHAR') setStep('AADHAR_UPLOAD');
+    else if (step === 'NAME') {
+      if (!firstName.trim() || !lastName.trim()) { setError('First and last name are required'); return; }
+      if (!oauthUser) {
+        if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setError('Valid email is required'); return; }
+        if (!phone.trim() || phone.length < 10) { setError('Valid 10-digit phone number is required'); return; }
+        if (!password || password.length < 6) { setError('Password must be at least 6 characters'); return; }
+        if (password !== confirmPassword) { setError('Passwords do not match'); return; }
+      }
+      setStep('DOB');
+    }
+    else if (step === 'DOB') {
+      if (!dob) { setError('Date of birth is required'); return; }
+      setStep('GENDER');
+    }
+    else if (step === 'GENDER') {
+      if (!gender) { setError('Please select your gender'); return; }
+      if (role === 'DRIVER') setStep('LICENSE');
+      else setStep('AADHAR');
+    }
+    else if (step === 'LICENSE') {
+      if (!license.trim()) { setError('License number is required'); return; }
+      setStep('LICENSE_UPLOAD');
+    }
+    else if (step === 'LICENSE_UPLOAD') {
+      if (!licenseUrl) { setError('Please upload your license photo'); return; }
+      setStep('AADHAR');
+    }
+    else if (step === 'AADHAR') {
+      if (!aadhar.trim() || aadhar.length < 12) { setError('Valid 12-digit Aadhar number is required'); return; }
+      setStep('AADHAR_UPLOAD');
+    }
     else if (step === 'AADHAR_UPLOAD') {
-      handleSignup({ role, firstName, lastName, phone, dob, gender, license, licenseUrl, aadhar, aadharUrl });
+      if (!aadharUrl) { setError('Please upload your Aadhar photo'); return; }
+      handleSignupSubmit();
     }
   };
-  */
+
+  const handleBack = () => {
+    setError(null);
+    if (step === 'NAME') setStep('ROLE');
+    else if (step === 'DOB') setStep('NAME');
+    else if (step === 'GENDER') setStep('DOB');
+    else if (step === 'LICENSE') setStep('GENDER');
+    else if (step === 'LICENSE_UPLOAD') setStep('LICENSE');
+    else if (step === 'AADHAR') {
+      if (role === 'DRIVER') setStep('LICENSE_UPLOAD');
+      else setStep('GENDER');
+    }
+    else if (step === 'AADHAR_UPLOAD') setStep('AADHAR');
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, type: 'license' | 'aadhar') => {
     const file = e.target.files?.[0];
@@ -362,11 +403,13 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
         gender,
         authProvider: oauthUser?.authProvider || 'email',
         photoUrl: oauthUser?.photoURL || '',
+        aadhar,
+        aadharUrl,
       };
 
       if (role === 'DRIVER') {
         userData.license = license;
-        userData.aadhar = aadhar;
+        userData.licenseUrl = licenseUrl;
       }
 
       const response = await fetch(`${API_BASE_URL}/api/signup`, {
@@ -611,225 +654,205 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     </div>
   );
 
-  const renderSignupForm = () => (
-    <div className="flex-1 px-6 pt-4 pb-10 flex flex-col animate-in fade-in duration-300 overflow-y-auto">
-      <div className="flex justify-between items-center mb-2">
-        <button onClick={() => { setMode('WELCOME'); setError(null); setSuccessMessage(null); }} className="p-2 -ml-2 rounded-full hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors">
-          <span className="material-icons-outlined text-black dark:text-white">arrow_back</span>
-        </button>
-        <button onClick={toggleTheme} className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full">
-          <span className="material-icons-outlined text-sm">{isDark ? 'light_mode' : 'dark_mode'}</span>
-        </button>
-      </div>
-
-      {/* Sign In / Sign Up Toggle */}
-      <div className="flex bg-[#f3f3f3] dark:bg-zinc-800 rounded-xl p-1 mb-6">
-        <button
-          type="button"
-          onClick={() => { setMode('SIGNIN'); setError(null); setSuccessMessage(null); }}
-          className="flex-1 py-3 rounded-lg text-sm font-black transition-all text-gray-400 dark:text-zinc-500"
-        >
-          Sign In
-        </button>
-        <button
-          type="button"
-          className="flex-1 py-3 rounded-lg text-sm font-black transition-all bg-white dark:bg-zinc-700 text-black dark:text-white shadow-sm"
-        >
-          Sign Up
-        </button>
-      </div>
-
-      <StepHeader title="Create Account" subtitle="Join LeafLift today" />
-
-      <OAuthButtons forMode="signup" />
-      <Divider />
-
-      {error && <div className="mb-4 p-3 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg text-sm font-bold">{error}</div>}
-
-      {/* Role Toggle */}
-      <div className="mb-6">
-        <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-3">I am a</label>
-        <div className="flex gap-3">
-          <button
-            onClick={() => setRole('RIDER')}
-            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${role === 'RIDER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
-              }`}
-          >
-            <span className="material-icons-outlined">directions_car</span>
-            Rider
-          </button>
-          <button
-            onClick={() => setRole('DRIVER')}
-            className={`flex-1 h-14 rounded-xl flex items-center justify-center gap-2 font-bold border-2 transition-all ${role === 'DRIVER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-gray-200 dark:border-zinc-700 bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
-              }`}
-          >
-            <span className="material-icons-outlined">local_taxi</span>
-            Driver
-          </button>
-        </div>
-      </div>
-
-      <div className="space-y-4 mb-6">
-        {/* Name */}
-        <div className="flex gap-3">
-          <div className="flex-1">
-            <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">First Name</label>
-            <input
-              className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
-              placeholder="First name"
-              value={firstName}
-              onChange={(e) => setFirstName(e.target.value)}
+  const renderSignupForm = () => {
+    switch (step) {
+      case 'ROLE':
+        return (
+          <div className="flex-1 px-6 pt-8 animate-in fade-in slide-in-from-right duration-300">
+            <StepHeader
+              onBack={() => setMode('WELCOME')}
+              title="I am a..."
+              subtitle="Choose how you want to use LeafLift"
             />
-          </div>
-          <div className="flex-1">
-            <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">Last Name</label>
-            <input
-              className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
-              placeholder="Last name"
-              value={lastName}
-              onChange={(e) => setLastName(e.target.value)}
-            />
-          </div>
-        </div>
-
-        {/* Email */}
-        <div>
-          <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">Email</label>
-          <input
-            type="email"
-            className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
-            placeholder="your@email.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-        </div>
-
-        {/* Phone */}
-        <div>
-          <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">Phone Number</label>
-          <div className="flex items-center gap-2">
-            <div className="flex items-center px-4 h-14 bg-[#f3f3f3] dark:bg-zinc-800 rounded-xl border-2 border-transparent">
-              <span className="text-black dark:text-white font-bold">+91</span>
+            <div className="flex gap-4 mb-8">
+              <button
+                onClick={() => setRole('RIDER')}
+                className={`flex-1 aspect-square rounded-[32px] flex flex-col items-center justify-center gap-4 border-2 transition-all ${role === 'RIDER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/10' : 'border-gray-100 dark:border-zinc-800 bg-[#f3f3f3] dark:bg-zinc-900'}`}
+              >
+                <div className={`size-16 rounded-2xl flex items-center justify-center ${role === 'RIDER' ? 'bg-leaf-500 text-white' : 'bg-white dark:bg-zinc-800 text-gray-400'}`}>
+                  <span className="material-icons-outlined text-3xl">directions_car</span>
+                </div>
+                <span className={`font-bold ${role === 'RIDER' ? 'text-leaf-600 dark:text-leaf-400' : 'text-gray-500 dark:text-zinc-500'}`}>Rider</span>
+              </button>
+              <button
+                onClick={() => setRole('DRIVER')}
+                className={`flex-1 aspect-square rounded-[32px] flex flex-col items-center justify-center gap-4 border-2 transition-all ${role === 'DRIVER' ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/10' : 'border-gray-100 dark:border-zinc-800 bg-[#f3f3f3] dark:bg-zinc-900'}`}
+              >
+                <div className={`size-16 rounded-2xl flex items-center justify-center ${role === 'DRIVER' ? 'bg-leaf-500 text-white' : 'bg-white dark:bg-zinc-800 text-gray-400'}`}>
+                  <span className="material-icons-outlined text-3xl">local_taxi</span>
+                </div>
+                <span className={`font-bold ${role === 'DRIVER' ? 'text-leaf-600 dark:text-leaf-400' : 'text-gray-500 dark:text-zinc-500'}`}>Driver</span>
+              </button>
             </div>
-            <input
-              type="tel"
-              className="flex-1 h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
-              placeholder="10-digit phone number"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
-            />
-          </div>
-        </div>
-
-        {/* Password (only for email signup, not OAuth) */}
-        <div>
-          <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">Password</label>
-          <div className="relative">
-            <input
-              type={showPassword ? 'text' : 'password'}
-              className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 pr-12 text-black dark:text-white font-medium focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
-              placeholder="Min 6 characters"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-            <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500">
-              <span className="material-icons-outlined text-xl">{showPassword ? 'visibility_off' : 'visibility'}</span>
+            <button onClick={handleNext} className="w-full h-14 bg-black dark:bg-white text-white dark:text-black font-black rounded-xl text-lg shadow-lg active:scale-95 transition-all">
+              Continue
             </button>
           </div>
-        </div>
-        <div>
-          <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">Confirm Password</label>
-          <input
-            type="password"
-            className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
-            placeholder="Re-enter password"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-          />
-        </div>
+        );
 
-        {/* DOB */}
-        <div>
-          <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">Date of Birth</label>
-          <input
-            type="date"
-            className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
-            value={dob}
-            onChange={(e) => setDob(e.target.value)}
-          />
-        </div>
-
-        {/* Gender */}
-        <div>
-          <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-3">Gender</label>
-          <div className="grid grid-cols-2 gap-2">
-            {['Female', 'Male', 'Non-binary', 'Prefer not to say'].map((g) => (
-              <button
-                key={g}
-                onClick={() => setGender(g)}
-                className={`h-12 rounded-xl flex items-center justify-center font-bold text-sm border-2 transition-all ${gender === g ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-transparent bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'
-                  }`}
-              >
-                {g}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Driver-specific fields */}
-        {role === 'DRIVER' && (
-          <>
-            <div className="pt-2 border-t border-gray-200 dark:border-zinc-800">
-              <div className="flex items-center gap-2 mb-4">
-                <span className="material-icons-outlined text-leaf-600">verified_user</span>
-                <span className="text-sm font-bold text-gray-700 dark:text-zinc-300">Driver Verification</span>
+      case 'NAME':
+        return (
+          <div className="flex-1 px-6 pt-5 animate-in fade-in slide-in-from-right duration-300">
+            <StepHeader
+              onBack={handleBack}
+              title="What's your name?"
+              subtitle="Enter your name and contact details"
+            />
+            {error && <div className="mb-4 p-3 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg text-sm font-bold">{error}</div>}
+            <div className="space-y-4 mb-8">
+              <div className="flex gap-3">
+                <input
+                  className="flex-1 h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:border-leaf-500 transition-all shadow-sm"
+                  placeholder="First Name"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                />
+                <input
+                  className="flex-1 h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:border-leaf-500 transition-all shadow-sm"
+                  placeholder="Last Name"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                />
               </div>
+              {!oauthUser && (
+                <>
+                  <input
+                    className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:border-leaf-500 transition-all shadow-sm"
+                    placeholder="Email Address"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                  <div className="flex gap-2">
+                    <div className="h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 flex items-center text-black dark:text-white font-bold">+91</div>
+                    <input
+                      className="flex-1 h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:border-leaf-500 transition-all shadow-sm"
+                      placeholder="Phone Number"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                    />
+                  </div>
+                  <input
+                    type="password"
+                    className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:border-leaf-500 transition-all shadow-sm"
+                    placeholder="Create Password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                  <input
+                    type="password"
+                    className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:border-leaf-500 transition-all shadow-sm"
+                    placeholder="Confirm Password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                  />
+                </>
+              )}
             </div>
-            <div>
-              <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">Driving License Number</label>
-              <input
-                className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
-                placeholder="DL-XXXXXXXXXXXXX"
-                value={license}
-                maxLength={16}
-                onChange={(e) => setLicense(e.target.value.slice(0, 16).toUpperCase())}
-              />
-              <p className="text-xs text-gray-400 font-medium mt-1 px-1">Maximum 16 characters</p>
-            </div>
-            <div>
-              <label className="block text-sm font-semibold text-gray-600 dark:text-zinc-400 mb-2">Aadhar Number</label>
-              <input
-                type="text"
-                inputMode="numeric"
-                className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:ring-4 focus:ring-leaf-500/10 focus:border-leaf-500 transition-all"
-                placeholder="XXXX XXXX XXXX"
-                value={aadhar}
-                onChange={(e) => setAadhar(e.target.value.replace(/\D/g, '').slice(0, 12))}
-              />
-              <p className="text-xs text-gray-400 font-medium mt-1 px-1">Used strictly for identity verification</p>
-            </div>
-          </>
-        )}
-      </div>
+            <button onClick={handleNext} className="w-full h-14 bg-black dark:bg-white text-white dark:text-black font-black rounded-xl text-lg shadow-lg active:scale-95 transition-all">
+              Continue
+            </button>
+          </div>
+        );
 
-      <button
-        onClick={handleSignupSubmit}
-        disabled={isLoading}
-        className="w-full h-14 bg-leaf-600 dark:bg-leaf-500 text-white font-black rounded-xl text-lg shadow-lg shadow-leaf-500/20 transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2 mb-4"
-      >
-        {isLoading ? (
-          <><span className="material-icons-outlined animate-spin">sync</span> Processing...</>
-        ) : 'Continue'}
-      </button>
+      case 'DOB':
+        return (
+          <div className="flex-1 px-6 pt-8 animate-in fade-in slide-in-from-right duration-300">
+            <StepHeader
+              onBack={handleBack}
+              title="When were you born?"
+              subtitle="You must be at least 18 years old"
+            />
+            {error && <div className="mb-4 p-3 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg text-sm font-bold">{error}</div>}
+            <input
+              type="date"
+              className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:border-leaf-500 transition-all mb-8 shadow-sm"
+              value={dob}
+              onChange={(e) => setDob(e.target.value)}
+            />
+            <button onClick={handleNext} className="w-full h-14 bg-black dark:bg-white text-white dark:text-black font-black rounded-xl text-lg shadow-lg active:scale-95 transition-all">
+              Continue
+            </button>
+          </div>
+        );
 
-      <div className="text-center text-gray-500 dark:text-zinc-400 font-medium">
-        Already have an account?{' '}
-        <button onClick={() => { setMode('SIGNIN'); setError(null); setSuccessMessage(null); }} className="text-leaf-600 dark:text-leaf-400 font-bold underline cursor-pointer">
-          Sign In
-        </button>
-      </div>
-    </div>
-  );
+      case 'GENDER':
+        return (
+          <div className="flex-1 px-6 pt-8 animate-in fade-in slide-in-from-right duration-300">
+            <StepHeader
+              onBack={handleBack}
+              title="How do you identify?"
+              subtitle="This helps us improve your experience"
+            />
+            {error && <div className="mb-4 p-3 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg text-sm font-bold">{error}</div>}
+            <div className="grid grid-cols-1 gap-3 mb-8">
+              {['Female', 'Male', 'Non-binary', 'Prefer not to say'].map((g) => (
+                <button
+                  key={g}
+                  onClick={() => setGender(g)}
+                  className={`h-14 rounded-xl flex items-center px-6 font-bold text-sm border-2 transition-all ${gender === g ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20 text-leaf-700 dark:text-leaf-400' : 'border-transparent bg-[#f3f3f3] dark:bg-zinc-800 text-gray-600 dark:text-zinc-400'}`}
+                >
+                  {g}
+                </button>
+              ))}
+            </div>
+            <button onClick={handleNext} className="w-full h-14 bg-black dark:bg-white text-white dark:text-black font-black rounded-xl text-lg shadow-lg active:scale-95 transition-all">
+              Continue
+            </button>
+          </div>
+        );
+
+      case 'LICENSE':
+        return (
+          <div className="flex-1 px-6 pt-8 animate-in fade-in slide-in-from-right duration-300">
+            <StepHeader
+              onBack={handleBack}
+              title="Driving License"
+              subtitle="Enter your license number for verification"
+            />
+            {error && <div className="mb-4 p-3 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg text-sm font-bold">{error}</div>}
+            <input
+              className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:border-leaf-500 transition-all uppercase mb-8 shadow-sm"
+              placeholder="DL-XXXXXXXXXXXXX"
+              value={license}
+              maxLength={16}
+              onChange={(e) => setLicense(e.target.value.slice(0, 16).toUpperCase())}
+            />
+            <button onClick={handleNext} className="w-full h-14 bg-black dark:bg-white text-white dark:text-black font-black rounded-xl text-lg shadow-lg active:scale-95 transition-all">
+              Continue
+            </button>
+          </div>
+        );
+
+      case 'AADHAR':
+        return (
+          <div className="flex-1 px-6 pt-8 animate-in fade-in slide-in-from-right duration-300">
+            <StepHeader
+              onBack={handleBack}
+              title="Aadhar Verification"
+              subtitle="Enter your 12-digit Aadhar number"
+            />
+            {error && <div className="mb-4 p-3 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg text-sm font-bold">{error}</div>}
+            <input
+              className="w-full h-14 bg-[#f3f3f3] dark:bg-zinc-800 border-2 border-transparent rounded-xl px-4 text-black dark:text-white font-medium focus:border-leaf-500 transition-all mb-8 shadow-sm"
+              placeholder="XXXX XXXX XXXX"
+              value={aadhar}
+              maxLength={12}
+              onChange={(e) => setAadhar(e.target.value.replace(/\D/g, '').slice(0, 12))}
+            />
+            <button onClick={handleNext} className="w-full h-14 bg-black dark:bg-white text-white dark:text-black font-black rounded-xl text-lg shadow-lg active:scale-95 transition-all">
+              Continue
+            </button>
+          </div>
+        );
+
+      case 'LICENSE_UPLOAD':
+      case 'AADHAR_UPLOAD':
+        return renderDocumentUpload(step);
+
+      default:
+        return null;
+    }
+  };
 
   const renderDocumentUpload = (uploadStep: AuthStep) => {
     const isLicense = uploadStep === 'LICENSE_UPLOAD';
