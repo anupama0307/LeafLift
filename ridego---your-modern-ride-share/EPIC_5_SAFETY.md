@@ -25,9 +25,4 @@ This epic aims to build user trust and prioritize safety as a core platform valu
     - [x] 5.4.2 Integrate background check API to validate user identity. (Simulated background check service)
     - [x] 5.4.3 Display "Verified" badge on the user's public profile. (Dynamic badge in AccountScreen)
 
-## Technical Components
-- `User.js`: Schema includes `privacySettings`, `trustedContacts`, and encryption for location fields.
-- `SafetyAlert.js`: New schema for tracking emergency SOS triggers.
-- `AccountScreen.tsx`: Interface for managing privacy toggles and trusted contacts.
-- `ActiveRideScreen.tsx` / `PlanRideScreen.tsx`: SOS button and real-time alerts.
-- `server/index.js`: Background tasks for scrubbing data and SOS handling.
+
