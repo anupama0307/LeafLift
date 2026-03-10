@@ -1,0 +1,38 @@
+﻿
+[1m[46m RUN [49m[22m [36mv3.2.4 [39m[90mD:/Amrita/SEM_6/Software_Engineering/Final_LeafLift/LeafLift/ridego---your-modern-ride-share/tests/epic5-safety-trust[39m
+
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.1 ΓÇö Gender filter options on the ride request screen[2m > [22mschema accepts "any" as genderPreference (default)[32m 2[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.1 ΓÇö Gender filter options on the ride request screen[2m > [22mschema accepts "male" as genderPreference[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.1 ΓÇö Gender filter options on the ride request screen[2m > [22mschema accepts "female" as genderPreference[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.1 ΓÇö Gender filter options on the ride request screen[2m > [22mschema defaults to "any" when no preference is supplied[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.1 ΓÇö Gender filter options on the ride request screen[2m > [22mschema rejects invalid preference values[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.2 ΓÇö Matching algorithm respects gender constraints[2m > [22mmatches Male Γåö Female when both prefer "any"[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.2 ΓÇö Matching algorithm respects gender constraints[2m > [22mmatches Male Γåö Male when both prefer "any"[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.2 ΓÇö Matching algorithm respects gender constraints[2m > [22mmatches Female Γåö Female when both prefer "any"[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.2 ΓÇö Matching algorithm respects gender constraints[2m > [22mallows match: Rider A (Male, pref=male) with Rider B (Male, pref=any)[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.2 ΓÇö Matching algorithm respects gender constraints[2m > [22mblocks match: Rider A (pref=male) with Rider B who is Female[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.2 ΓÇö Matching algorithm respects gender constraints[2m > [22mblocks match: Rider A (pref=male) with Rider B whose gender is Unknown[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.2 ΓÇö Matching algorithm respects gender constraints[2m > [22mallows match: Rider A (Female, pref=female) with Rider B (Female, pref=any)[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.2 ΓÇö Matching algorithm respects gender constraints[2m > [22mblocks match: Rider A (pref=female) with Rider B who is Male[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.2 ΓÇö Matching algorithm respects gender constraints[2m > [22mblocks match: Rider B (pref=male) when Rider A is Female[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.2 ΓÇö Matching algorithm respects gender constraints[2m > [22mallows match: Rider B (pref=male) when Rider A is also Male[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.2 ΓÇö Matching algorithm respects gender constraints[2m > [22mblocks match: Rider B (pref=female) when Rider A is Male[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.2 ΓÇö Matching algorithm respects gender constraints[2m > [22mallows match: both riders are Female and both prefer female-only[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.2 ΓÇö Matching algorithm respects gender constraints[2m > [22mblocks match: Rider A is Male (pref=male), Rider B is Male but prefers female-only[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.2 ΓÇö Matching algorithm respects gender constraints[2m > [22mblocks match: Rider A prefers male-only but their own gender is Unknown[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.2 ΓÇö Matching algorithm respects gender constraints[2m > [22mallows match when both genders are Unknown and preferences are "any"[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.3 ΓÇö Pool proposal carries gender info (co-rider verification)[2m > [22mproposal includes matched rider gender[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.3 ΓÇö Pool proposal carries gender info (co-rider verification)[2m > [22mproposal marks compatible = true for Any/Any pair[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.3 ΓÇö Pool proposal carries gender info (co-rider verification)[2m > [22mproposal marks compatible = false when rider A prefers male-only and B is Female[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.3 ΓÇö Pool proposal carries gender info (co-rider verification)[2m > [22mproposal marks compatible = true for Female+Female mutual female-only[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.3 ΓÇö Pool proposal carries gender info (co-rider verification)[2m > [22mproposal shows "Not specified" when co-rider gender is not set[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5.3 ΓÇö Pool proposal carries gender info (co-rider verification)[2m > [22mproposal blocks: candidate prefers female-only but rider A is Male[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5 ΓÇö Edge cases & boundary conditions[2m > [22mnull genderPreference defaults to "any" and does not crash[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5 ΓÇö Edge cases & boundary conditions[2m > [22mempty string genderPreference defaults to "any" and does not crash[32m 0[2mms[22m[39m
+ [32mΓ£ô[39m tests/5.5-gender-pooling.test.js[2m > [22m5.5 ΓÇö Edge cases & boundary conditions[2m > [22mis case-sensitive ΓÇö "female" pref won't match "female" gender (must be "Female")[32m 0[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m29 passed[39m[22m[90m (29)[39m
+[2m   Start at [22m 23:13:21
+[2m   Duration [22m 798ms[2m (transform 64ms, setup 0ms, collect 62ms, tests 10ms, environment 0ms, prepare 248ms)[22m
+

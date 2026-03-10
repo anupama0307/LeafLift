@@ -1,6 +1,8 @@
 import { defineConfig } from 'vitest/config';
+import path from 'path';
 
 export default defineConfig({
+    cacheDir: 'd:/vitest-cache',
     test: {
         globals: true,
         testTimeout: 30000,
