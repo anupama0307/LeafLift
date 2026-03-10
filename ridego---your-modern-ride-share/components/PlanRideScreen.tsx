@@ -155,6 +155,9 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [tripProgressPct, setTripProgressPct] = useState(0);
     const tripStartTimeRef = useRef<number | null>(null);
 
+    // ─── Share ETA State (US 2.7) ───
+    const [shareEtaCopied, setShareEtaCopied] = useState(false);
+
     // ─── US 1.5 — Pool opt-out State ───
     const [optedOutToSolo, setOptedOutToSolo] = useState(false);
     const [soloOptOutFare, setSoloOptOutFare] = useState<number | null>(null);
@@ -2718,6 +2721,30 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 <span className="material-icons-outlined">chat</span>
                             </button>
                         </div>
+                    )}
+
+                    {/* ── Share ETA Button (US 2.7) ── */}
+                    {rideStatus !== 'COMPLETED' && (liveEtaText || etaToPickup) && (
+                        <button
+                            onClick={() => {
+                                const dName = driverDetails?.name || 'My driver';
+                                const eta = liveEtaText || etaToPickup || 'soon';
+                                const dest = destination || 'my destination';
+                                const msg = `🚗 ${dName} is ${rideStatus === 'IN_PROGRESS' ? 'driving me' : 'on the way'}! ETA: ${eta} to ${rideStatus === 'IN_PROGRESS' ? dest : 'pickup'}. Shared via LeafLift 🌿`;
+                                navigator.clipboard.writeText(msg).then(() => {
+                                    setShareEtaCopied(true);
+                                    setTimeout(() => setShareEtaCopied(false), 3000);
+                                });
+                            }}
+                            className="w-full mb-4 py-2.5 flex items-center justify-center gap-2 bg-gray-100 dark:bg-zinc-800 hover:bg-gray-200 dark:hover:bg-zinc-700 rounded-xl transition-colors"
+                        >
+                            <span className="material-icons-outlined text-gray-600 dark:text-gray-300" style={{ fontSize: '18px' }}>
+                                {shareEtaCopied ? 'check_circle' : 'share'}
+                            </span>
+                            <span className={`text-sm font-bold ${shareEtaCopied ? 'text-green-600 dark:text-green-400' : 'text-gray-700 dark:text-gray-300'}`}>
+                                {shareEtaCopied ? 'Copied!' : 'Share ETA'}
+                            </span>
+                        </button>
                     )}
 
                     {/* ── Pool Ride Progress Tracker ── */}
