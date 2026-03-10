@@ -30,8 +30,8 @@ afterAll(async () => {
         await mongoose.model('Ride').deleteMany({ 'pickup.address': new RegExp(TEST_TAG) });
         await mongoose.model('User').deleteMany({ email: new RegExp('vitest_us22') });
     } catch (_) {}
-    await mongoose.connection.close();
-});
+    try { await mongoose.connection.close(); } catch (_) {}
+}, 30000);
 
 // ─── helpers ───────────────────────────────────────────────────────────────
 async function makeUser(o = {}) {
