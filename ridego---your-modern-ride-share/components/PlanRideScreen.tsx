@@ -2141,6 +2141,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
 
                                         <div className="text-right">
                                             <div className="font-bold text-lg dark:text-white">₹{price}</div>
+                                            <div className="text-[10px] text-gray-400 dark:text-gray-500">₹{cat.baseRate} base + ₹{cat.perKmRate}/km</div>
                                             {isPoolMode && soloPrice > price && (
                                                 <div className="text-xs text-gray-400 line-through">₹{soloPrice}</div>
                                             )}
