@@ -151,6 +151,10 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [reSearchDriversNotified, setReSearchDriversNotified] = useState(0);
     const reSearchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+    // ─── Trip Progress State (US 2.3.3) ───
+    const [tripProgressPct, setTripProgressPct] = useState(0);
+    const tripStartTimeRef = useRef<number | null>(null);
+
     // ─── US 1.5 — Pool opt-out State ───
     const [optedOutToSolo, setOptedOutToSolo] = useState(false);
     const [soloOptOutFare, setSoloOptOutFare] = useState<number | null>(null);
@@ -528,6 +532,30 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         const interval = setInterval(fetchLiveEta, 60000);
         return () => clearInterval(interval);
     }, [activeRideId, rideStatus]);
+
+    // ─── Trip Progress Bar (US 2.3.3) — updates every 60s ───
+    useEffect(() => {
+        if (rideStatus !== 'IN_PROGRESS') {
+            setTripProgressPct(0);
+            tripStartTimeRef.current = null;
+            return;
+        }
+        // Parse estimated duration from routeInfo to compute total seconds
+        const totalSec = (() => {
+            if (!routeInfo?.duration) return 0;
+            const m = routeInfo.duration.match(/(\d+)/);
+            return m ? parseInt(m[1], 10) * 60 : 0;
+        })();
+        if (totalSec <= 0) return;
+        if (!tripStartTimeRef.current) tripStartTimeRef.current = Date.now();
+        const update = () => {
+            const elapsed = (Date.now() - (tripStartTimeRef.current || Date.now())) / 1000;
+            setTripProgressPct(Math.min(100, Math.round((elapsed / totalSec) * 100)));
+        };
+        update();
+        const iv = setInterval(update, 60000);
+        return () => clearInterval(iv);
+    }, [rideStatus, routeInfo]);
 
     // ─── Filter nearby drivers ───
     useEffect(() => {
@@ -2793,6 +2821,22 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         <div className="flex items-center justify-between mb-3">
                             <span className="text-sm text-gray-500 dark:text-gray-400">Current Fare</span>
                             <span className="font-bold text-lg dark:text-white">₹{currentFare}</span>
+                        </div>
+                    )}
+
+                    {/* ── Trip Progress Bar (US 2.3.3) ── */}
+                    {rideStatus === 'IN_PROGRESS' && tripProgressPct > 0 && (
+                        <div className="mb-4">
+                            <div className="flex items-center justify-between mb-1">
+                                <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Trip Progress</span>
+                                <span className="text-xs font-black dark:text-white">{tripProgressPct}%</span>
+                            </div>
+                            <div className="h-2 bg-gray-200 dark:bg-zinc-700 rounded-full overflow-hidden">
+                                <div
+                                    className="h-full bg-green-500 rounded-full transition-all duration-500"
+                                    style={{ width: `${tripProgressPct}%` }}
+                                />
+                            </div>
                         </div>
                     )}
 
