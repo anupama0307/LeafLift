@@ -3,7 +3,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 interface DriverOption { _id: string; name: string; email: string; region?: string; }
 interface NotifRecord { _id: string; recipientId: string; recipientName: string; type: string; title: string; body: string; isSuggestion: boolean; region?: string; createdAt: string; }
 
-const REGIONS = ['All Regions', 'RS Puram', 'Gandhipuram', 'Peelamedu', 'Saravanampatti', 'Singanallur', 'Ukkadam', 'Sulur', 'Mettupalayam', 'Kovaipudur'];
+const REGIONS = ['All Regions', 'Mumbai', 'Delhi', 'Bangalore', 'Hyderabad', 'Chennai', 'Kolkata', 'Pune', 'Jaipur'];
 
 const NotificationsScreen: React.FC = () => {
   const [tab, setTab] = useState<'send' | 'history'>('send');
@@ -22,12 +22,34 @@ const NotificationsScreen: React.FC = () => {
   const [searchQ, setSearchQ] = useState('');
 
   const fetchDrivers = useCallback(async () => {
-    try { const res = await fetch('/api/admin/notifications/drivers'); if (res.ok) setDrivers(await res.json()); } catch {}
+    try {
+      const res = await fetch('/api/admin/drivers');
+      if (res.ok) {
+        const raw = await res.json();
+        setDrivers(raw.map((d: any) => ({ _id: d._id, name: `${d.firstName || ''} ${d.lastName || ''}`.trim() || d.email, email: d.email, region: '' })));
+      }
+    } catch {}
   }, []);
 
   const fetchHistory = useCallback(async () => {
     setHistLoading(true);
-    try { const res = await fetch('/api/admin/notifications/history'); if (res.ok) setHistory(await res.json()); } catch {}
+    try {
+      const res = await fetch('/api/admin/notifications/sent');
+      if (res.ok) {
+        const raw = await res.json();
+        setHistory(raw.map((n: any) => ({
+          _id: n._id,
+          recipientId: n.userId?._id || n.userId || '',
+          recipientName: n.userId?.firstName ? `${n.userId.firstName} ${n.userId.lastName || ''}`.trim() : 'All Drivers',
+          type: n.type || 'admin',
+          title: n.title || '',
+          body: n.message || '',
+          isSuggestion: n.data?.isSuggestion || false,
+          region: n.data?.zone || n.title || '',
+          createdAt: n.createdAt || new Date().toISOString(),
+        })));
+      }
+    } catch {}
     finally { setHistLoading(false); }
   }, []);
 
@@ -39,7 +61,7 @@ const NotificationsScreen: React.FC = () => {
     setSending(true); setError(''); setSuccess('');
     try {
       const endpoint = mode === 'broadcast' ? '/api/admin/notifications/broadcast' : '/api/admin/notifications/send';
-      const payload: any = { title, body, type: isSuggestion ? 'suggestion' : 'admin' };
+      const payload: any = { title, message: body, type: isSuggestion ? 'suggestion' : 'SYSTEM' };
       if (mode === 'individual') payload.driverId = selectedDriver;
       const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       if (res.ok) { setSuccess(mode === 'broadcast' ? 'Broadcast sent successfully' : 'Notification sent'); setTitle(''); setBody(''); setSelectedDriver(''); fetchHistory(); }
@@ -63,33 +85,32 @@ const NotificationsScreen: React.FC = () => {
   ];
 
   return (
-    <div className="space-y-4">
-      {/* Header */}
+    <div className="max-w-[1400px] mx-auto space-y-6">
       <div>
-        <h1 className="text-lg font-bold text-gray-900 dark:text-white">Notifications</h1>
-        <p className="text-xs text-gray-500 dark:text-gray-400">Send alerts and suggestions to drivers</p>
+        <h1 className="text-lg font-bold text-white">Notifications</h1>
+        <p className="text-xs text-zinc-500">Send alerts and suggestions to drivers</p>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 bg-gray-100 dark:bg-black p-1 rounded-lg w-fit">
-        {[{ key: 'send', label: 'Compose', icon: 'edit' }, { key: 'history', label: 'History', icon: 'history' }].map(t => (
+      {/* Pill Tabs */}
+      <div className="flex gap-1 bg-zinc-900 p-1 rounded-full w-fit border border-zinc-800">
+        {[{ key: 'send', label: 'Compose' }, { key: 'history', label: 'History' }].map(t => (
           <button key={t.key} onClick={() => setTab(t.key as any)}
-            className={`flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${tab === t.key ? 'bg-white dark:bg-black text-blue-600 dark:text-blue-400 shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}>
-            <span className="material-icons" style={{ fontSize: '14px' }}>{t.icon}</span>{t.label}
+            className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${tab === t.key ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'}`}>
+            {t.label}
           </button>
         ))}
       </div>
 
       {/* Send Tab */}
       {tab === 'send' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Form */}
-          <div className="lg:col-span-2 bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-5">
+          <div className="lg:col-span-2 card">
             {/* Mode Toggle */}
-            <div className="flex items-center gap-2 mb-4">
+            <div className="flex items-center gap-2 mb-5">
               {['individual', 'broadcast'].map(m => (
                 <button key={m} onClick={() => setMode(m as any)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${mode === m ? 'border-blue-300 dark:border-blue-600 bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400' : 'border-gray-200 dark:border-zinc-900 text-gray-500 hover:border-gray-300'}`}>
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-semibold transition-all ${mode === m ? 'bg-accent-purple text-white' : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white'}`}>
                   <span className="material-icons" style={{ fontSize: '14px' }}>{m === 'individual' ? 'person' : 'campaign'}</span>
                   {m.charAt(0).toUpperCase() + m.slice(1)}
                 </button>
@@ -97,56 +118,54 @@ const NotificationsScreen: React.FC = () => {
             </div>
 
             {mode === 'individual' && (
-              <div className="mb-3">
-                <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Recipient</label>
+              <div className="mb-4">
+                <label className="text-[10px] font-bold text-zinc-500 uppercase mb-1.5 block">Recipient</label>
                 <select value={selectedDriver} onChange={e => setSelectedDriver(e.target.value)}
-                  className="w-full p-2 bg-gray-50 dark:bg-black border border-gray-200 dark:border-zinc-900 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-600 outline-none">
+                  className="w-full p-2.5 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-white focus:ring-2 focus:ring-accent-purple/50 outline-none">
                   <option value="">Select a driver...</option>
                   {drivers.map(d => <option key={d._id} value={d._id}>{d.name} ({d.email})</option>)}
                 </select>
               </div>
             )}
 
-            <div className="mb-3">
-              <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Title</label>
+            <div className="mb-4">
+              <label className="text-[10px] font-bold text-zinc-500 uppercase mb-1.5 block">Title</label>
               <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Notification title"
-                className="w-full p-2 bg-gray-50 dark:bg-black border border-gray-200 dark:border-zinc-900 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-600 outline-none" />
+                className="w-full p-2.5 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-white focus:ring-2 focus:ring-accent-purple/50 outline-none placeholder:text-zinc-600" />
             </div>
 
-            <div className="mb-3">
-              <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Message</label>
+            <div className="mb-4">
+              <label className="text-[10px] font-bold text-zinc-500 uppercase mb-1.5 block">Message</label>
               <textarea value={body} onChange={e => setBody(e.target.value)} placeholder="Notification body..." rows={4}
-                className="w-full p-2 bg-gray-50 dark:bg-black border border-gray-200 dark:border-zinc-900 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-600 outline-none resize-none" />
+                className="w-full p-2.5 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-white focus:ring-2 focus:ring-accent-purple/50 outline-none resize-none placeholder:text-zinc-600" />
             </div>
 
-            <div className="flex items-center gap-2 mb-4">
+            <div className="flex items-center gap-2 mb-5">
               <button onClick={() => setIsSuggestion(!isSuggestion)}
-                className={`size-4 rounded border transition-colors ${isSuggestion ? 'bg-blue-500 border-blue-500' : 'border-gray-300 dark:border-zinc-900'}`}>
+                className={`w-4 h-4 rounded border transition-colors flex items-center justify-center ${isSuggestion ? 'bg-accent-purple border-accent-purple' : 'border-zinc-700'}`}>
                 {isSuggestion && <span className="material-icons text-white" style={{ fontSize: '12px' }}>check</span>}
               </button>
-              <span className="text-[10px] font-semibold text-gray-600 dark:text-white">Mark as suggestion (non-critical)</span>
+              <span className="text-[10px] font-semibold text-zinc-400">Mark as suggestion (non-critical)</span>
             </div>
 
-            {error && <p className="text-xs text-red-500 font-semibold mb-3 flex items-center gap-1"><span className="material-icons text-sm">error</span>{error}</p>}
-            {success && <p className="text-xs text-green-500 font-semibold mb-3 flex items-center gap-1"><span className="material-icons text-sm">check_circle</span>{success}</p>}
+            {error && <p className="text-xs text-accent-rose font-semibold mb-3 flex items-center gap-1"><span className="material-icons text-sm">error</span>{error}</p>}
+            {success && <p className="text-xs text-accent-green font-semibold mb-3 flex items-center gap-1"><span className="material-icons text-sm">check_circle</span>{success}</p>}
 
             <button onClick={handleSend} disabled={sending}
-              className="w-full py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-xs font-bold transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5">
+              className="w-full py-2.5 bg-accent-purple hover:bg-accent-purple/80 text-white rounded-xl text-xs font-bold transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5">
               <span className="material-icons text-sm">{sending ? 'hourglass_empty' : 'send'}</span>{sending ? 'Sending...' : mode === 'broadcast' ? 'Send Broadcast' : 'Send Notification'}
             </button>
           </div>
 
           {/* Quick Templates */}
-          <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
-            <h3 className="text-xs font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
-              <span className="material-icons text-sm text-amber-500">bolt</span>Quick Templates
-            </h3>
+          <div className="card">
+            <h3 className="text-sm font-bold text-white mb-4">Quick Templates</h3>
             <div className="space-y-2">
               {quickTemplates.map((t, i) => (
                 <button key={i} onClick={() => { setTitle(t.title); setBody(t.body); }}
-                  className="w-full text-left p-2.5 rounded-lg bg-gray-50 dark:bg-black/50 hover:bg-gray-100 dark:hover:bg-zinc-900 border border-transparent hover:border-gray-200 dark:hover:border-zinc-700 transition-all">
-                  <p className="text-[10px] font-bold text-gray-900 dark:text-white">{t.title}</p>
-                  <p className="text-[9px] text-gray-400 mt-0.5 line-clamp-2">{t.body}</p>
+                  className="w-full text-left p-3 rounded-xl bg-zinc-900/50 hover:bg-zinc-900 border border-transparent hover:border-zinc-700 transition-all">
+                  <p className="text-[10px] font-bold text-white">{t.title}</p>
+                  <p className="text-[9px] text-zinc-500 mt-0.5 line-clamp-2">{t.body}</p>
                 </button>
               ))}
             </div>
@@ -156,46 +175,43 @@ const NotificationsScreen: React.FC = () => {
 
       {/* History Tab */}
       {tab === 'history' && (
-        <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900">
+        <div className="card !p-0 overflow-hidden">
           {/* Filters */}
-          <div className="p-3 border-b border-gray-200 dark:border-zinc-900 flex items-center gap-3 flex-wrap">
-            <div className="flex items-center gap-1.5">
-              <span className="material-icons text-sm text-gray-400">filter_list</span>
-              <select value={regionFilter} onChange={e => setRegionFilter(e.target.value)}
-                className="p-1.5 bg-gray-50 dark:bg-black border border-gray-200 dark:border-zinc-900 rounded-lg text-[10px] font-semibold text-gray-700 dark:text-white outline-none">
-                {REGIONS.map(r => <option key={r} value={r}>{r}</option>)}
-              </select>
-            </div>
+          <div className="p-4 border-b border-zinc-800 flex items-center gap-3 flex-wrap">
+            <select value={regionFilter} onChange={e => setRegionFilter(e.target.value)}
+              className="p-2 bg-zinc-900 border border-zinc-800 rounded-xl text-[10px] font-semibold text-white outline-none">
+              {REGIONS.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
             <div className="flex-1 relative">
-              <span className="material-icons absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" style={{ fontSize: '14px' }}>search</span>
+              <span className="material-icons absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-600" style={{ fontSize: '14px' }}>search</span>
               <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search notifications..."
-                className="w-full pl-7 pr-2 py-1.5 bg-gray-50 dark:bg-black border border-gray-200 dark:border-zinc-900 rounded-lg text-[10px] text-gray-700 dark:text-white outline-none" />
+                className="w-full pl-8 pr-3 py-2 bg-zinc-900 border border-zinc-800 rounded-xl text-[10px] text-white outline-none placeholder:text-zinc-600" />
             </div>
-            <span className="text-[10px] text-gray-400 font-semibold">{filteredHistory.length} notifications</span>
+            <span className="text-[10px] text-zinc-500 font-semibold">{filteredHistory.length} notifications</span>
           </div>
           {/* List */}
           <div className="max-h-[500px] overflow-y-auto">
             {histLoading ? (
-              <div className="flex items-center justify-center py-12"><div className="size-6 border-2 border-blue-500/20 border-t-blue-500 rounded-full animate-spin"></div></div>
+              <div className="flex items-center justify-center py-12"><div className="w-6 h-6 border-2 border-accent-purple/20 border-t-accent-purple rounded-full animate-spin"></div></div>
             ) : filteredHistory.length > 0 ? (
-              <div className="divide-y divide-gray-100 dark:divide-zinc-800/50">
+              <div className="divide-y divide-zinc-800/50">
                 {filteredHistory.map(n => (
-                  <div key={n._id} className="p-3 hover:bg-gray-50 dark:hover:bg-zinc-900/30 transition-colors">
-                    <div className="flex items-start justify-between gap-2">
+                  <div key={n._id} className="p-4 hover:bg-zinc-900/30 transition-colors">
+                    <div className="flex items-start justify-between gap-3">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className={`size-5 rounded-md flex items-center justify-center text-white ${n.isSuggestion ? 'bg-amber-500' : 'bg-blue-500'}`}>
+                          <span className={`w-5 h-5 rounded-lg flex items-center justify-center text-white ${n.isSuggestion ? 'bg-accent-yellow' : 'bg-accent-purple'}`}>
                             <span className="material-icons" style={{ fontSize: '11px' }}>{n.isSuggestion ? 'lightbulb' : 'notifications'}</span>
                           </span>
-                          <p className="text-[10px] font-bold text-gray-900 dark:text-white truncate">{n.title}</p>
-                          {n.region && <span className="text-[8px] font-semibold px-1.5 py-0.5 bg-gray-100 dark:bg-black text-gray-500 dark:text-gray-400 rounded">{n.region}</span>}
+                          <p className="text-[10px] font-bold text-white truncate">{n.title}</p>
+                          {n.region && <span className="text-[8px] font-semibold px-1.5 py-0.5 bg-zinc-900 text-zinc-400 rounded-full border border-zinc-800">{n.region}</span>}
                         </div>
-                        <p className="text-[9px] text-gray-500 dark:text-gray-400 mt-1 line-clamp-1">{n.body}</p>
+                        <p className="text-[9px] text-zinc-500 mt-1 line-clamp-1">{n.body}</p>
                       </div>
                       <div className="text-right flex-shrink-0">
-                        <p className="text-[9px] text-gray-400">{new Date(n.createdAt).toLocaleDateString()}</p>
-                        <p className="text-[8px] text-gray-400">{new Date(n.createdAt).toLocaleTimeString()}</p>
-                        <p className="text-[8px] text-gray-500 font-semibold mt-0.5">{n.recipientName || 'All Drivers'}</p>
+                        <p className="text-[9px] text-zinc-500">{new Date(n.createdAt).toLocaleDateString()}</p>
+                        <p className="text-[8px] text-zinc-600">{new Date(n.createdAt).toLocaleTimeString()}</p>
+                        <p className="text-[8px] text-zinc-500 font-semibold mt-0.5">{n.recipientName || 'All Drivers'}</p>
                       </div>
                     </div>
                   </div>
@@ -203,8 +219,8 @@ const NotificationsScreen: React.FC = () => {
               </div>
             ) : (
               <div className="py-12 text-center">
-                <span className="material-icons text-3xl text-gray-300 dark:text-gray-600">inbox</span>
-                <p className="text-xs text-gray-400 mt-2">{searchQ || regionFilter !== 'All Regions' ? 'No matching notifications' : 'No notifications sent yet'}</p>
+                <span className="material-icons text-3xl text-zinc-700">inbox</span>
+                <p className="text-xs text-zinc-500 mt-2">{searchQ || regionFilter !== 'All Regions' ? 'No matching notifications' : 'No notifications sent yet'}</p>
               </div>
             )}
           </div>
