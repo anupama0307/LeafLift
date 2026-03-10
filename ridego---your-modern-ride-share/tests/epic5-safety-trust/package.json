@@ -2,6 +2,7 @@
     "name": "epic5-safety-trust-tests",
     "version": "1.0.0",
     "private": true,
+    "type": "module",
     "description": "Independent test suite for EPIC 5 — Safety & Trust",
     "scripts": {
         "test": "vitest run",
