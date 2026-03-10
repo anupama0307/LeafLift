@@ -58,6 +58,10 @@ const emailTransporter = nodemailer.createTransport({
 });
 const Ride = require('./models/Ride');
 const Notification = require('./models/Notification');
+const Review = require('./models/Review');
+const Payment = require('./models/Payment');
+const Dispute = require('./models/Dispute');
+const Promo = require('./models/Promo');
 const { findMatchingRides, isRiderOnRoute } = require('./utils/poolMatcher');
 const crypto = require('crypto');
 
@@ -5101,6 +5105,1343 @@ mongoose.connection.once('open', () => {
     liveEtaTimer = setInterval(broadcastLiveEta, LIVE_ETA_INTERVAL_MS);
     console.log('⏱️  Live ETA broadcast started (every 60s)');
 });
+
+
+// ════════════════════════════════════════════════════════════════════════════════
+// ═══ REVIEW & RATING SYSTEM ═══
+// ════════════════════════════════════════════════════════════════════════════════
+
+// ── Submit a review after ride completion ──
+app.post('/api/reviews', async (req, res) => {
+    try {
+        const { rideId, reviewerId, reviewerRole, rating, comment, tags, subRatings } = req.body;
+
+        if (!rideId || !reviewerId || !rating) {
+            return res.status(400).json({ message: 'rideId, reviewerId, and rating are required' });
+        }
+        if (rating < 1 || rating > 5) {
+            return res.status(400).json({ message: 'Rating must be between 1 and 5' });
+        }
+
+        const ride = await Ride.findById(rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+        if (ride.status !== 'COMPLETED') {
+            return res.status(400).json({ message: 'Can only review completed rides' });
+        }
+
+        // Determine reviewee (if rider reviews => driver is reviewee, and vice versa)
+        const revieweeId = reviewerRole === 'RIDER' ? ride.driverId : ride.userId;
+        if (!revieweeId) {
+            return res.status(400).json({ message: 'No reviewee found for this ride' });
+        }
+
+        // Check for duplicate review
+        const existingReview = await Review.findOne({ rideId, reviewerId });
+        if (existingReview) {
+            return res.status(409).json({ message: 'You have already reviewed this ride' });
+        }
+
+        // Simple sentiment analysis based on rating and tags
+        let sentimentScore = 0;
+        let sentimentLabel = 'NEUTRAL';
+        const positiveTags = ['SAFE_DRIVER', 'CLEAN_CAR', 'ON_TIME', 'FRIENDLY', 'GREAT_CONVERSATION', 'SMOOTH_RIDE', 'KNOWS_ROUTES', 'POLITE_RIDER', 'READY_ON_TIME', 'RESPECTFUL', 'GOOD_DIRECTIONS'];
+        const negativeTags = ['EXCESSIVE_CANCELLATIONS', 'RUDE_BEHAVIOR', 'UNSAFE_DRIVING', 'DIRTY_VEHICLE', 'TOOK_LONGER_ROUTE', 'HARASSING'];
+
+        if (rating >= 4) sentimentScore = 0.5;
+        else if (rating <= 2) sentimentScore = -0.5;
+
+        if (tags && Array.isArray(tags)) {
+            const posCount = tags.filter(t => positiveTags.includes(t)).length;
+            const negCount = tags.filter(t => negativeTags.includes(t)).length;
+            sentimentScore += (posCount - negCount) * 0.1;
+            sentimentScore = Math.max(-1, Math.min(1, sentimentScore));
+        }
+
+        sentimentLabel = sentimentScore > 0.2 ? 'POSITIVE' : sentimentScore < -0.2 ? 'NEGATIVE' : 'NEUTRAL';
+
+        const review = new Review({
+            rideId,
+            reviewerId,
+            revieweeId,
+            reviewerRole: reviewerRole || 'RIDER',
+            rating,
+            comment: comment || '',
+            tags: tags || [],
+            subRatings: subRatings || {},
+            sentimentScore,
+            sentimentLabel
+        });
+
+        await review.save();
+
+        // Update reviewee's average rating
+        const allReviews = await Review.find({ revieweeId, moderationStatus: 'VISIBLE' });
+        const avgRating = allReviews.reduce((sum, r) => sum + r.rating, 0) / allReviews.length;
+        await User.findByIdAndUpdate(revieweeId, { rating: Math.round(avgRating * 10) / 10 });
+
+        res.status(201).json({ ok: true, review });
+    } catch (error) {
+        if (error.code === 11000) {
+            return res.status(409).json({ message: 'Duplicate review for this ride' });
+        }
+        console.error('Review creation error:', error);
+        res.status(500).json({ message: 'Error creating review' });
+    }
+});
+
+// ── Get reviews for a user ──
+app.get('/api/reviews/user/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { page = 1, limit = 20, role } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const query = { revieweeId: userId, moderationStatus: 'VISIBLE' };
+        if (role) query.reviewerRole = role;
+
+        const [reviews, total] = await Promise.all([
+            Review.find(query)
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .populate('reviewerId', 'firstName lastName photoUrl')
+                .lean(),
+            Review.countDocuments(query)
+        ]);
+
+        // Compute stats
+        const allRatings = await Review.find({ revieweeId: userId, moderationStatus: 'VISIBLE' }).select('rating tags sentimentLabel');
+        const totalReviews = allRatings.length;
+        const avgRating = totalReviews > 0
+            ? Math.round((allRatings.reduce((s, r) => s + r.rating, 0) / totalReviews) * 10) / 10
+            : 0;
+        const ratingDistribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+        allRatings.forEach(r => { ratingDistribution[r.rating] = (ratingDistribution[r.rating] || 0) + 1; });
+
+        // Top tags
+        const tagCounts = {};
+        allRatings.forEach(r => (r.tags || []).forEach(t => { tagCounts[t] = (tagCounts[t] || 0) + 1; }));
+        const topTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([tag, count]) => ({ tag, count }));
+
+        // Sentiment breakdown
+        const sentimentBreakdown = { POSITIVE: 0, NEUTRAL: 0, NEGATIVE: 0 };
+        allRatings.forEach(r => { sentimentBreakdown[r.sentimentLabel] = (sentimentBreakdown[r.sentimentLabel] || 0) + 1; });
+
+        res.json({
+            reviews,
+            stats: {
+                totalReviews,
+                avgRating,
+                ratingDistribution,
+                topTags,
+                sentimentBreakdown
+            },
+            pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / parseInt(limit)) }
+        });
+    } catch (error) {
+        console.error('Review fetch error:', error);
+        res.status(500).json({ message: 'Error fetching reviews' });
+    }
+});
+
+// ── Get review for a specific ride ──
+app.get('/api/reviews/ride/:rideId', async (req, res) => {
+    try {
+        const reviews = await Review.find({ rideId: req.params.rideId, moderationStatus: 'VISIBLE' })
+            .populate('reviewerId', 'firstName lastName photoUrl role')
+            .lean();
+        res.json(reviews);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching ride reviews' });
+    }
+});
+
+// ── Report a review ──
+app.post('/api/reviews/:reviewId/report', async (req, res) => {
+    try {
+        const { reportReason } = req.body;
+        const review = await Review.findById(req.params.reviewId);
+        if (!review) return res.status(404).json({ message: 'Review not found' });
+
+        review.isReported = true;
+        review.reportReason = reportReason || 'Inappropriate content';
+        review.moderationStatus = 'UNDER_REVIEW';
+        await review.save();
+
+        res.json({ ok: true, message: 'Review reported for moderation' });
+    } catch (error) {
+        res.status(500).json({ message: 'Error reporting review' });
+    }
+});
+
+
+// ════════════════════════════════════════════════════════════════════════════════
+// ═══ PAYMENT PROCESSING SYSTEM ═══
+// ════════════════════════════════════════════════════════════════════════════════
+
+// ── Create payment for a ride ──
+app.post('/api/payments', async (req, res) => {
+    try {
+        const { rideId, userId, driverId, amount, method, fareBreakdown } = req.body;
+
+        if (!rideId || !userId || !amount || !method) {
+            return res.status(400).json({ message: 'rideId, userId, amount, and method are required' });
+        }
+
+        const ride = await Ride.findById(rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        // Calculate platform fee and driver payout
+        const platformFee = Math.round(amount * 0.15 * 100) / 100;     // 15% platform fee
+        const taxes = Math.round(amount * 0.05 * 100) / 100;           // 5% GST
+        const driverPayout = Math.round((amount - platformFee - taxes) * 100) / 100;
+
+        const payment = new Payment({
+            rideId,
+            userId,
+            driverId: driverId || ride.driverId,
+            amount,
+            method: method.toUpperCase(),
+            fareBreakdown: {
+                ...(fareBreakdown || {}),
+                platformFee,
+                taxes,
+                driverPayout
+            },
+            payoutAmount: driverPayout,
+            status: 'PENDING'
+        });
+
+        await payment.save();
+
+        // If wallet payment, deduct immediately
+        if (method.toUpperCase() === 'WALLET') {
+            const user = await User.findById(userId);
+            if (!user || user.walletBalance < amount) {
+                payment.status = 'FAILED';
+                payment.failureReason = 'Insufficient wallet balance';
+                await payment.save();
+                return res.status(400).json({ message: 'Insufficient wallet balance', payment });
+            }
+
+            user.walletBalance -= amount;
+            await user.save();
+
+            payment.status = 'COMPLETED';
+            payment.completedAt = new Date();
+            await payment.save();
+
+            // Credit driver wallet
+            if (payment.driverId) {
+                await User.findByIdAndUpdate(payment.driverId, {
+                    $inc: { walletBalance: driverPayout }
+                });
+                payment.payoutStatus = 'PROCESSED';
+                payment.payoutProcessedAt = new Date();
+                await payment.save();
+            }
+        } else {
+            // For UPI/CARD/NET_BANKING: simulate processing
+            payment.status = 'PROCESSING';
+            await payment.save();
+
+            // Auto-complete after 2 seconds (simulating payment gateway callback)
+            setTimeout(async () => {
+                try {
+                    const p = await Payment.findById(payment._id);
+                    if (p && p.status === 'PROCESSING') {
+                        p.status = 'COMPLETED';
+                        p.completedAt = new Date();
+                        await p.save();
+
+                        // Update ride payment status
+                        await Ride.findByIdAndUpdate(rideId, { paymentStatus: 'PAID' });
+
+                        // Credit driver wallet
+                        if (p.driverId) {
+                            await User.findByIdAndUpdate(p.driverId, {
+                                $inc: { walletBalance: driverPayout }
+                            });
+                            p.payoutStatus = 'PROCESSED';
+                            p.payoutProcessedAt = new Date();
+                            await p.save();
+                        }
+
+                        // Notify rider
+                        io.to(`user:${userId}`).emit('payment:completed', {
+                            paymentId: p._id,
+                            rideId,
+                            amount: p.amount,
+                            method: p.method
+                        });
+                    }
+                } catch (e) {
+                    console.error('Payment auto-complete error:', e);
+                }
+            }, 2000);
+        }
+
+        // Update ride payment status
+        ride.paymentStatus = payment.status === 'COMPLETED' ? 'PAID' : 'PENDING';
+        await ride.save();
+
+        res.status(201).json({ ok: true, payment });
+    } catch (error) {
+        console.error('Payment creation error:', error);
+        res.status(500).json({ message: 'Error processing payment' });
+    }
+});
+
+// ── Get payment history for a user ──
+app.get('/api/payments/user/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { page = 1, limit = 20, status, role = 'rider' } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const query = role === 'driver' ? { driverId: userId } : { userId };
+        if (status) query.status = status.toUpperCase();
+
+        const [payments, total] = await Promise.all([
+            Payment.find(query)
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .populate('rideId', 'pickup dropoff vehicleCategory distance createdAt')
+                .lean(),
+            Payment.countDocuments(query)
+        ]);
+
+        // Compute summary stats
+        const allPayments = await Payment.find(
+            role === 'driver' ? { driverId: userId, status: 'COMPLETED' } : { userId, status: 'COMPLETED' }
+        ).select('amount fareBreakdown.driverPayout fareBreakdown.platformFee method');
+
+        const totalSpent = allPayments.reduce((s, p) => s + p.amount, 0);
+        const totalEarned = allPayments.reduce((s, p) => s + (p.fareBreakdown?.driverPayout || 0), 0);
+        const methodBreakdown = {};
+        allPayments.forEach(p => {
+            methodBreakdown[p.method] = (methodBreakdown[p.method] || 0) + 1;
+        });
+
+        res.json({
+            payments,
+            summary: {
+                totalSpent: Math.round(totalSpent * 100) / 100,
+                totalEarned: Math.round(totalEarned * 100) / 100,
+                totalTransactions: allPayments.length,
+                methodBreakdown
+            },
+            pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / parseInt(limit)) }
+        });
+    } catch (error) {
+        console.error('Payment history error:', error);
+        res.status(500).json({ message: 'Error fetching payment history' });
+    }
+});
+
+// ── Get payment details for a specific ride ──
+app.get('/api/payments/ride/:rideId', async (req, res) => {
+    try {
+        const payment = await Payment.findOne({ rideId: req.params.rideId })
+            .populate('userId', 'firstName lastName email')
+            .populate('driverId', 'firstName lastName email')
+            .lean();
+
+        if (!payment) return res.status(404).json({ message: 'Payment not found for this ride' });
+        res.json(payment);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching payment' });
+    }
+});
+
+// ── Process refund ──
+app.post('/api/payments/:paymentId/refund', async (req, res) => {
+    try {
+        const { refundAmount, refundReason } = req.body;
+        const payment = await Payment.findById(req.params.paymentId);
+        if (!payment) return res.status(404).json({ message: 'Payment not found' });
+        if (payment.status !== 'COMPLETED') {
+            return res.status(400).json({ message: 'Can only refund completed payments' });
+        }
+
+        const amount = refundAmount || payment.amount;
+        if (amount > payment.amount) {
+            return res.status(400).json({ message: 'Refund amount exceeds payment amount' });
+        }
+
+        // Credit rider wallet
+        await User.findByIdAndUpdate(payment.userId, {
+            $inc: { walletBalance: amount }
+        });
+
+        // Deduct from driver wallet
+        if (payment.driverId) {
+            const driverRefund = Math.round(amount * 0.80 * 100) / 100; // Driver bears 80% of refund
+            await User.findByIdAndUpdate(payment.driverId, {
+                $inc: { walletBalance: -driverRefund }
+            });
+        }
+
+        payment.status = amount >= payment.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
+        payment.refundAmount = amount;
+        payment.refundReason = refundReason || 'Rider request';
+        payment.refundedAt = new Date();
+        await payment.save();
+
+        // Notify rider
+        io.to(`user:${payment.userId}`).emit('payment:refunded', {
+            paymentId: payment._id,
+            refundAmount: amount,
+            reason: refundReason
+        });
+
+        res.json({ ok: true, payment });
+    } catch (error) {
+        console.error('Refund error:', error);
+        res.status(500).json({ message: 'Error processing refund' });
+    }
+});
+
+
+// ════════════════════════════════════════════════════════════════════════════════
+// ═══ DISPUTE RESOLUTION SYSTEM ═══
+// ════════════════════════════════════════════════════════════════════════════════
+
+// ── Raise a dispute ──
+app.post('/api/disputes', async (req, res) => {
+    try {
+        const { rideId, raisedBy, raisedByRole, category, description, fareDetails } = req.body;
+
+        if (!rideId || !raisedBy || !category || !description) {
+            return res.status(400).json({ message: 'rideId, raisedBy, category, and description are required' });
+        }
+
+        const ride = await Ride.findById(rideId);
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        const againstUser = raisedByRole === 'RIDER' ? ride.driverId : ride.userId;
+
+        // Set SLA deadlines
+        const now = new Date();
+        const responseSLA = new Date(now.getTime() + 4 * 60 * 60 * 1000);    // 4 hours for first response
+        const resolutionSLA = new Date(now.getTime() + 48 * 60 * 60 * 1000); // 48 hours for resolution
+
+        // Determine priority based on category
+        let priority = 'MEDIUM';
+        if (['SAFETY_CONCERN', 'HARASSING'].includes(category)) priority = 'CRITICAL';
+        else if (['OVERCHARGE', 'RIDE_NOT_COMPLETED'].includes(category)) priority = 'HIGH';
+        else if (['LOST_ITEM', 'OTHER'].includes(category)) priority = 'LOW';
+
+        const dispute = new Dispute({
+            rideId,
+            raisedBy,
+            raisedByRole: raisedByRole || 'RIDER',
+            againstUser,
+            category,
+            description,
+            fareDetails: fareDetails || {},
+            priority,
+            responseDeadline: responseSLA,
+            resolutionDeadline: resolutionSLA,
+            messages: [{
+                senderId: raisedBy,
+                senderRole: raisedByRole || 'RIDER',
+                message: description
+            }]
+        });
+
+        await dispute.save();
+
+        // Create notification for the other party
+        if (againstUser) {
+            const notification = new Notification({
+                userId: againstUser,
+                title: 'Dispute Raised',
+                message: `A ${category.replace(/_/g, ' ').toLowerCase()} dispute has been raised for your ride.`,
+                type: 'SYSTEM',
+                data: { disputeId: dispute._id, rideId, category }
+            });
+            await notification.save();
+            io.to(`user:${againstUser}`).emit('notification:new', {
+                title: notification.title,
+                message: notification.message,
+                type: notification.type
+            });
+        }
+
+        res.status(201).json({ ok: true, dispute });
+    } catch (error) {
+        console.error('Dispute creation error:', error);
+        res.status(500).json({ message: 'Error creating dispute' });
+    }
+});
+
+// ── Get disputes for a user ──
+app.get('/api/disputes/user/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { status, page = 1, limit = 20 } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const query = { $or: [{ raisedBy: userId }, { againstUser: userId }] };
+        if (status) query.status = status.toUpperCase();
+
+        const [disputes, total] = await Promise.all([
+            Dispute.find(query)
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .populate('rideId', 'pickup dropoff vehicleCategory fare createdAt')
+                .populate('raisedBy', 'firstName lastName role')
+                .lean(),
+            Dispute.countDocuments(query)
+        ]);
+
+        res.json({
+            disputes,
+            pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / parseInt(limit)) }
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching disputes' });
+    }
+});
+
+// ── Get single dispute ──
+app.get('/api/disputes/:disputeId', async (req, res) => {
+    try {
+        const dispute = await Dispute.findById(req.params.disputeId)
+            .populate('raisedBy', 'firstName lastName role email photoUrl')
+            .populate('againstUser', 'firstName lastName role email photoUrl')
+            .populate('rideId')
+            .lean();
+
+        if (!dispute) return res.status(404).json({ message: 'Dispute not found' });
+        res.json(dispute);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching dispute' });
+    }
+});
+
+// ── Add message to dispute ──
+app.post('/api/disputes/:disputeId/messages', async (req, res) => {
+    try {
+        const { senderId, senderRole, message } = req.body;
+        if (!senderId || !message) {
+            return res.status(400).json({ message: 'senderId and message are required' });
+        }
+
+        const dispute = await Dispute.findById(req.params.disputeId);
+        if (!dispute) return res.status(404).json({ message: 'Dispute not found' });
+
+        dispute.messages.push({ senderId, senderRole: senderRole || 'RIDER', message });
+        dispute.updatedAt = new Date();
+
+        // Update first response time for SLA tracking
+        if (!dispute.firstResponseAt && senderRole === 'ADMIN') {
+            dispute.firstResponseAt = new Date();
+        }
+
+        await dispute.save();
+        res.json({ ok: true, messages: dispute.messages });
+    } catch (error) {
+        res.status(500).json({ message: 'Error adding message to dispute' });
+    }
+});
+
+// ── Resolve dispute (admin) ──
+app.post('/api/disputes/:disputeId/resolve', async (req, res) => {
+    try {
+        const { outcome, refundAmount, notes, resolvedBy } = req.body;
+        const dispute = await Dispute.findById(req.params.disputeId);
+        if (!dispute) return res.status(404).json({ message: 'Dispute not found' });
+
+        dispute.status = 'RESOLVED';
+        dispute.resolution = {
+            outcome: outcome || 'NO_ACTION',
+            refundAmount: refundAmount || 0,
+            notes: notes || '',
+            resolvedAt: new Date(),
+            resolvedBy
+        };
+        dispute.updatedAt = new Date();
+        await dispute.save();
+
+        // Process refund if applicable
+        if (refundAmount > 0 && ['REFUND_FULL', 'REFUND_PARTIAL'].includes(outcome)) {
+            const payment = await Payment.findOne({ rideId: dispute.rideId, status: 'COMPLETED' });
+            if (payment) {
+                await User.findByIdAndUpdate(dispute.raisedBy, {
+                    $inc: { walletBalance: refundAmount }
+                });
+                payment.status = refundAmount >= payment.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
+                payment.refundAmount = refundAmount;
+                payment.refundReason = `Dispute resolution: ${outcome}`;
+                payment.refundedAt = new Date();
+                await payment.save();
+            }
+        }
+
+        // Notify both parties
+        const notification = new Notification({
+            userId: dispute.raisedBy,
+            title: 'Dispute Resolved',
+            message: `Your ${dispute.category.replace(/_/g, ' ').toLowerCase()} dispute has been resolved. Outcome: ${outcome.replace(/_/g, ' ')}`,
+            type: 'SYSTEM',
+            data: { disputeId: dispute._id, outcome, refundAmount }
+        });
+        await notification.save();
+        io.to(`user:${dispute.raisedBy}`).emit('notification:new', {
+            title: notification.title,
+            message: notification.message,
+            type: notification.type
+        });
+
+        res.json({ ok: true, dispute });
+    } catch (error) {
+        console.error('Dispute resolution error:', error);
+        res.status(500).json({ message: 'Error resolving dispute' });
+    }
+});
+
+
+// ════════════════════════════════════════════════════════════════════════════════
+// ═══ PROMO CODE SYSTEM ═══
+// ════════════════════════════════════════════════════════════════════════════════
+
+// ── Create promo code (admin) ──
+app.post('/api/promos', async (req, res) => {
+    try {
+        const { code, description, discountType, discountValue, maxDiscountAmount, minRideAmount,
+                applicableTo, vehicleCategories, maxUsageTotal, maxUsagePerUser, validFrom, validUntil } = req.body;
+
+        if (!code || !description || !discountType || !discountValue || !validFrom || !validUntil) {
+            return res.status(400).json({ message: 'code, description, discountType, discountValue, validFrom, validUntil are required' });
+        }
+
+        const promo = new Promo({
+            code: code.toUpperCase().trim(),
+            description,
+            discountType,
+            discountValue,
+            maxDiscountAmount: maxDiscountAmount || null,
+            minRideAmount: minRideAmount || 0,
+            applicableTo: applicableTo || 'ALL',
+            vehicleCategories: vehicleCategories || [],
+            maxUsageTotal: maxUsageTotal || null,
+            maxUsagePerUser: maxUsagePerUser || 1,
+            validFrom: new Date(validFrom),
+            validUntil: new Date(validUntil)
+        });
+
+        await promo.save();
+        res.status(201).json({ ok: true, promo });
+    } catch (error) {
+        if (error.code === 11000) {
+            return res.status(409).json({ message: 'Promo code already exists' });
+        }
+        console.error('Promo creation error:', error);
+        res.status(500).json({ message: 'Error creating promo code' });
+    }
+});
+
+// ── Validate and apply promo code ──
+app.post('/api/promos/apply', async (req, res) => {
+    try {
+        const { code, userId, rideAmount, vehicleCategory, isPooled } = req.body;
+
+        if (!code || !userId || !rideAmount) {
+            return res.status(400).json({ message: 'code, userId, and rideAmount are required' });
+        }
+
+        const promo = await Promo.findOne({ code: code.toUpperCase().trim(), isActive: true });
+        if (!promo) {
+            return res.status(404).json({ valid: false, message: 'Invalid or expired promo code' });
+        }
+
+        const now = new Date();
+        if (now < promo.validFrom || now > promo.validUntil) {
+            return res.status(400).json({ valid: false, message: 'Promo code is not active during this period' });
+        }
+
+        if (promo.maxUsageTotal !== null && promo.currentUsageCount >= promo.maxUsageTotal) {
+            return res.status(400).json({ valid: false, message: 'Promo code has reached maximum usage limit' });
+        }
+
+        // Check per-user usage limit
+        const userUsageCount = promo.usedBy.filter(u => u.userId.toString() === userId).length;
+        if (userUsageCount >= promo.maxUsagePerUser) {
+            return res.status(400).json({ valid: false, message: 'You have already used this promo code' });
+        }
+
+        // Check minimum ride amount
+        if (rideAmount < promo.minRideAmount) {
+            return res.status(400).json({ valid: false, message: `Minimum ride amount for this promo is ₹${promo.minRideAmount}` });
+        }
+
+        // Check applicability
+        if (promo.applicableTo === 'POOL_ONLY' && !isPooled) {
+            return res.status(400).json({ valid: false, message: 'This promo is only valid for pool rides' });
+        }
+        if (promo.applicableTo === 'SPECIFIC_CATEGORY' && promo.vehicleCategories.length > 0) {
+            if (!promo.vehicleCategories.includes(vehicleCategory)) {
+                return res.status(400).json({ valid: false, message: `This promo is only valid for: ${promo.vehicleCategories.join(', ')}` });
+            }
+        }
+        if (promo.applicableTo === 'FIRST_RIDE') {
+            const rideCount = await Ride.countDocuments({ userId, status: 'COMPLETED' });
+            if (rideCount > 0) {
+                return res.status(400).json({ valid: false, message: 'This promo is only valid for first-time riders' });
+            }
+        }
+
+        // Calculate discount
+        let discount = 0;
+        if (promo.discountType === 'PERCENTAGE') {
+            discount = Math.round(rideAmount * (promo.discountValue / 100) * 100) / 100;
+            if (promo.maxDiscountAmount !== null) {
+                discount = Math.min(discount, promo.maxDiscountAmount);
+            }
+        } else {
+            discount = Math.min(promo.discountValue, rideAmount);
+        }
+
+        const finalAmount = Math.max(0, Math.round((rideAmount - discount) * 100) / 100);
+
+        res.json({
+            valid: true,
+            code: promo.code,
+            description: promo.description,
+            discount,
+            originalAmount: rideAmount,
+            finalAmount,
+            discountType: promo.discountType,
+            discountValue: promo.discountValue
+        });
+    } catch (error) {
+        console.error('Promo apply error:', error);
+        res.status(500).json({ message: 'Error applying promo code' });
+    }
+});
+
+// ── Get all active promos (for admin or user browse) ──
+app.get('/api/promos', async (req, res) => {
+    try {
+        const { active } = req.query;
+        const query = {};
+        if (active === 'true') {
+            query.isActive = true;
+            query.validUntil = { $gte: new Date() };
+        }
+
+        const promos = await Promo.find(query).sort({ createdAt: -1 }).lean();
+        res.json(promos);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching promos' });
+    }
+});
+
+// ── Deactivate promo ──
+app.patch('/api/promos/:promoId/deactivate', async (req, res) => {
+    try {
+        const promo = await Promo.findByIdAndUpdate(
+            req.params.promoId,
+            { isActive: false, updatedAt: new Date() },
+            { new: true }
+        );
+        if (!promo) return res.status(404).json({ message: 'Promo not found' });
+        res.json({ ok: true, promo });
+    } catch (error) {
+        res.status(500).json({ message: 'Error deactivating promo' });
+    }
+});
+
+
+// ════════════════════════════════════════════════════════════════════════════════
+// ═══ ENHANCED USER ENDPOINTS ═══
+// ════════════════════════════════════════════════════════════════════════════════
+
+// ── User ride history with detailed stats ──
+app.get('/api/users/:userId/ride-history', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { page = 1, limit = 20, status, fromDate, toDate } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const query = { $or: [{ userId }, { driverId: userId }] };
+        if (status) query.status = status;
+        if (fromDate || toDate) {
+            query.createdAt = {};
+            if (fromDate) query.createdAt.$gte = new Date(fromDate);
+            if (toDate) query.createdAt.$lte = new Date(toDate);
+        }
+
+        const [rides, total] = await Promise.all([
+            Ride.find(query)
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .populate('userId', 'firstName lastName photoUrl')
+                .populate('driverId', 'firstName lastName photoUrl rating vehicleNumber')
+                .lean(),
+            Ride.countDocuments(query)
+        ]);
+
+        // Add review status to each ride
+        const rideIds = rides.map(r => r._id);
+        const existingReviews = await Review.find({ rideId: { $in: rideIds }, reviewerId: userId }).select('rideId rating');
+        const reviewMap = {};
+        existingReviews.forEach(r => { reviewMap[r.rideId.toString()] = r; });
+
+        const enrichedRides = rides.map(r => ({
+            ...r,
+            hasReview: !!reviewMap[r._id.toString()],
+            reviewRating: reviewMap[r._id.toString()]?.rating || null
+        }));
+
+        res.json({
+            rides: enrichedRides,
+            pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / parseInt(limit)) }
+        });
+    } catch (error) {
+        console.error('Ride history error:', error);
+        res.status(500).json({ message: 'Error fetching ride history' });
+    }
+});
+
+// ── User earnings summary (for drivers) ──
+app.get('/api/users/:userId/earnings', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { period = 'week' } = req.query;
+
+        // Calculate date range
+        const now = new Date();
+        let fromDate;
+        switch (period) {
+            case 'day': fromDate = new Date(now.getTime() - 24 * 60 * 60 * 1000); break;
+            case 'week': fromDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); break;
+            case 'month': fromDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); break;
+            case 'year': fromDate = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000); break;
+            default: fromDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        }
+
+        const completedRides = await Ride.find({
+            driverId: userId,
+            status: 'COMPLETED',
+            createdAt: { $gte: fromDate }
+        }).select('completedFare fare currentFare distance createdAt isPooled vehicleCategory co2Emissions');
+
+        const payments = await Payment.find({
+            driverId: userId,
+            status: 'COMPLETED',
+            createdAt: { $gte: fromDate }
+        }).select('amount fareBreakdown.driverPayout createdAt');
+
+        const totalRides = completedRides.length;
+        const totalFare = completedRides.reduce((s, r) => s + (r.completedFare || r.currentFare || r.fare || 0), 0);
+        const totalEarnings = payments.reduce((s, p) => s + (p.fareBreakdown?.driverPayout || p.amount * 0.80), 0);
+        const totalDistance = completedRides.reduce((s, r) => {
+            const d = parseFloat(r.distance) || 0;
+            return s + d;
+        }, 0);
+
+        // Daily breakdown
+        const dailyBreakdown = {};
+        completedRides.forEach(r => {
+            const day = r.createdAt.toISOString().split('T')[0];
+            if (!dailyBreakdown[day]) {
+                dailyBreakdown[day] = { rides: 0, earnings: 0, distance: 0 };
+            }
+            dailyBreakdown[day].rides += 1;
+            dailyBreakdown[day].earnings += (r.completedFare || r.currentFare || r.fare || 0) * 0.80;
+            dailyBreakdown[day].distance += parseFloat(r.distance) || 0;
+        });
+
+        // Category breakdown
+        const categoryBreakdown = {};
+        completedRides.forEach(r => {
+            const cat = r.vehicleCategory || 'CAR';
+            if (!categoryBreakdown[cat]) categoryBreakdown[cat] = { rides: 0, earnings: 0 };
+            categoryBreakdown[cat].rides += 1;
+            categoryBreakdown[cat].earnings += (r.completedFare || r.currentFare || r.fare || 0) * 0.80;
+        });
+
+        const pooledRides = completedRides.filter(r => r.isPooled).length;
+
+        res.json({
+            period,
+            from: fromDate.toISOString(),
+            to: now.toISOString(),
+            summary: {
+                totalRides,
+                totalFare: Math.round(totalFare),
+                totalEarnings: Math.round(totalEarnings),
+                totalDistanceKm: Math.round(totalDistance * 10) / 10,
+                avgFarePerRide: totalRides > 0 ? Math.round(totalFare / totalRides) : 0,
+                avgEarningsPerRide: totalRides > 0 ? Math.round(totalEarnings / totalRides) : 0,
+                pooledRides,
+                pooledPercentage: totalRides > 0 ? Math.round((pooledRides / totalRides) * 100) : 0
+            },
+            dailyBreakdown: Object.entries(dailyBreakdown)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([date, data]) => ({ date, ...data, earnings: Math.round(data.earnings) })),
+            categoryBreakdown: Object.entries(categoryBreakdown)
+                .map(([category, data]) => ({ category, ...data, earnings: Math.round(data.earnings) }))
+        });
+    } catch (error) {
+        console.error('Earnings error:', error);
+        res.status(500).json({ message: 'Error fetching earnings' });
+    }
+});
+
+// ── Emergency contacts management ──
+app.get('/api/users/:userId/emergency-contacts', async (req, res) => {
+    try {
+        const user = await User.findById(req.params.userId).select('emergencyContacts');
+        res.json(user?.emergencyContacts || []);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching emergency contacts' });
+    }
+});
+
+app.put('/api/users/:userId/emergency-contacts', async (req, res) => {
+    try {
+        const { contacts } = req.body;
+        if (!Array.isArray(contacts) || contacts.length > 5) {
+            return res.status(400).json({ message: 'Provide up to 5 emergency contacts' });
+        }
+
+        // Validate each contact
+        for (const contact of contacts) {
+            if (!contact.name || !contact.phone) {
+                return res.status(400).json({ message: 'Each contact must have name and phone' });
+            }
+        }
+
+        await User.findByIdAndUpdate(req.params.userId, {
+            emergencyContacts: contacts.map(c => ({
+                name: c.name,
+                phone: c.phone,
+                relationship: c.relationship || 'Other'
+            }))
+        });
+
+        res.json({ ok: true, contacts });
+    } catch (error) {
+        res.status(500).json({ message: 'Error updating emergency contacts' });
+    }
+});
+
+// ── User cancellation stats ──
+app.get('/api/users/:userId/cancellation-stats', async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        const [riderCancels, driverCancels, totalRides] = await Promise.all([
+            Ride.countDocuments({ userId, canceledBy: 'RIDER' }),
+            Ride.countDocuments({ driverId: userId, canceledBy: 'DRIVER' }),
+            Ride.countDocuments({ $or: [{ userId }, { driverId: userId }], status: { $in: ['COMPLETED', 'CANCELED'] } })
+        ]);
+
+        const recentCancels = await Ride.find({
+            $or: [
+                { userId, canceledBy: 'RIDER' },
+                { driverId: userId, canceledBy: 'DRIVER' }
+            ],
+            canceledAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+        }).select('cancelReason canceledAt cancellationFee');
+
+        const totalCancels = riderCancels + driverCancels;
+        const cancelRate = totalRides > 0 ? Math.round((totalCancels / totalRides) * 100) : 0;
+
+        res.json({
+            totalCancellations: totalCancels,
+            asRider: riderCancels,
+            asDriver: driverCancels,
+            totalRides,
+            cancellationRate: cancelRate,
+            recentCancellations: recentCancels,
+            isHighCanceller: cancelRate > 25
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching cancellation stats' });
+    }
+});
+
+
+// ════════════════════════════════════════════════════════════════════════════════
+// ═══ ADMIN ANALYTICS ENDPOINTS ═══
+// ════════════════════════════════════════════════════════════════════════════════
+
+// ── Revenue analytics ──
+app.get('/api/admin/revenue', async (req, res) => {
+    try {
+        const { period = 'week' } = req.query;
+        const now = new Date();
+        let fromDate;
+        switch (period) {
+            case 'day': fromDate = new Date(now.getTime() - 24 * 60 * 60 * 1000); break;
+            case 'week': fromDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); break;
+            case 'month': fromDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); break;
+            default: fromDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        }
+
+        const payments = await Payment.find({
+            status: 'COMPLETED',
+            createdAt: { $gte: fromDate }
+        }).select('amount fareBreakdown createdAt method');
+
+        const totalRevenue = payments.reduce((s, p) => s + p.amount, 0);
+        const platformRevenue = payments.reduce((s, p) => s + (p.fareBreakdown?.platformFee || p.amount * 0.15), 0);
+        const driverPayouts = payments.reduce((s, p) => s + (p.fareBreakdown?.driverPayout || p.amount * 0.80), 0);
+        const taxes = payments.reduce((s, p) => s + (p.fareBreakdown?.taxes || p.amount * 0.05), 0);
+
+        // Daily revenue
+        const dailyRevenue = {};
+        payments.forEach(p => {
+            const day = p.createdAt.toISOString().split('T')[0];
+            if (!dailyRevenue[day]) dailyRevenue[day] = { total: 0, platform: 0, count: 0 };
+            dailyRevenue[day].total += p.amount;
+            dailyRevenue[day].platform += (p.fareBreakdown?.platformFee || p.amount * 0.15);
+            dailyRevenue[day].count += 1;
+        });
+
+        // Method breakdown
+        const methodRevenue = {};
+        payments.forEach(p => {
+            if (!methodRevenue[p.method]) methodRevenue[p.method] = { amount: 0, count: 0 };
+            methodRevenue[p.method].amount += p.amount;
+            methodRevenue[p.method].count += 1;
+        });
+
+        res.json({
+            period,
+            summary: {
+                totalRevenue: Math.round(totalRevenue),
+                platformRevenue: Math.round(platformRevenue),
+                driverPayouts: Math.round(driverPayouts),
+                taxes: Math.round(taxes),
+                totalTransactions: payments.length,
+                avgTransactionValue: payments.length > 0 ? Math.round(totalRevenue / payments.length) : 0
+            },
+            dailyRevenue: Object.entries(dailyRevenue)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([date, data]) => ({ date, total: Math.round(data.total), platform: Math.round(data.platform), count: data.count })),
+            methodBreakdown: Object.entries(methodRevenue)
+                .map(([method, data]) => ({ method, amount: Math.round(data.amount), count: data.count }))
+        });
+    } catch (error) {
+        console.error('Revenue analytics error:', error);
+        res.status(500).json({ message: 'Error fetching revenue analytics' });
+    }
+});
+
+// ── Admin disputes dashboard ──
+app.get('/api/admin/disputes', async (req, res) => {
+    try {
+        const { status, priority, page = 1, limit = 20 } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const query = {};
+        if (status) query.status = status.toUpperCase();
+        if (priority) query.priority = priority.toUpperCase();
+
+        const [disputes, total, stats] = await Promise.all([
+            Dispute.find(query)
+                .sort({ priority: -1, createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .populate('raisedBy', 'firstName lastName role')
+                .populate('rideId', 'pickup dropoff fare vehicleCategory')
+                .lean(),
+            Dispute.countDocuments(query),
+            Promise.all([
+                Dispute.countDocuments({ status: 'OPEN' }),
+                Dispute.countDocuments({ status: 'UNDER_REVIEW' }),
+                Dispute.countDocuments({ status: 'RESOLVED' }),
+                Dispute.countDocuments({ slaBreached: true }),
+                Dispute.countDocuments({ priority: 'CRITICAL', status: { $nin: ['RESOLVED', 'CLOSED'] } })
+            ])
+        ]);
+
+        res.json({
+            disputes,
+            stats: {
+                open: stats[0],
+                underReview: stats[1],
+                resolved: stats[2],
+                slaBreached: stats[3],
+                criticalActive: stats[4]
+            },
+            pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / parseInt(limit)) }
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching disputes' });
+    }
+});
+
+// ── Admin review moderation ──
+app.get('/api/admin/reviews', async (req, res) => {
+    try {
+        const { status = 'UNDER_REVIEW', page = 1, limit = 20 } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const query = {};
+        if (status !== 'ALL') query.moderationStatus = status;
+
+        const [reviews, total] = await Promise.all([
+            Review.find(query)
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .populate('reviewerId', 'firstName lastName role')
+                .populate('revieweeId', 'firstName lastName role')
+                .populate('rideId', 'pickup dropoff vehicleCategory fare')
+                .lean(),
+            Review.countDocuments(query)
+        ]);
+
+        // Review sentiment stats
+        const allReviews = await Review.find({}).select('sentimentLabel rating createdAt');
+        const sentimentStats = { POSITIVE: 0, NEUTRAL: 0, NEGATIVE: 0 };
+        allReviews.forEach(r => { sentimentStats[r.sentimentLabel] = (sentimentStats[r.sentimentLabel] || 0) + 1; });
+
+        const avgRating = allReviews.length > 0
+            ? Math.round((allReviews.reduce((s, r) => s + r.rating, 0) / allReviews.length) * 10) / 10
+            : 0;
+
+        res.json({
+            reviews,
+            stats: {
+                total: allReviews.length,
+                avgRating,
+                sentimentStats,
+                reportedCount: await Review.countDocuments({ isReported: true })
+            },
+            pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / parseInt(limit)) }
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching reviews for moderation' });
+    }
+});
+
+// ── Admin: moderate a review ──
+app.patch('/api/admin/reviews/:reviewId', async (req, res) => {
+    try {
+        const { moderationStatus, moderatedBy } = req.body;
+        const review = await Review.findByIdAndUpdate(
+            req.params.reviewId,
+            {
+                moderationStatus: moderationStatus || 'VISIBLE',
+                moderatedAt: new Date(),
+                moderatedBy,
+                updatedAt: new Date()
+            },
+            { new: true }
+        );
+        if (!review) return res.status(404).json({ message: 'Review not found' });
+
+        // If hidden, recalculate reviewee rating
+        if (moderationStatus === 'HIDDEN') {
+            const visibleReviews = await Review.find({ revieweeId: review.revieweeId, moderationStatus: 'VISIBLE' });
+            const avgRating = visibleReviews.length > 0
+                ? Math.round((visibleReviews.reduce((s, r) => s + r.rating, 0) / visibleReviews.length) * 10) / 10
+                : 4.8;
+            await User.findByIdAndUpdate(review.revieweeId, { rating: avgRating });
+        }
+
+        res.json({ ok: true, review });
+    } catch (error) {
+        res.status(500).json({ message: 'Error moderating review' });
+    }
+});
+
+// ── Admin: user management ──
+app.get('/api/admin/users', async (req, res) => {
+    try {
+        const { role, search, page = 1, limit = 20, sortBy = 'createdAt', order = 'desc' } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const query = {};
+        if (role) query.role = role.toUpperCase();
+        if (search) {
+            const searchRegex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+            query.$or = [
+                { firstName: searchRegex },
+                { lastName: searchRegex },
+                { email: searchRegex },
+                { phone: searchRegex }
+            ];
+        }
+
+        const sortObj = {};
+        sortObj[sortBy] = order === 'asc' ? 1 : -1;
+
+        const [users, total] = await Promise.all([
+            User.find(query)
+                .sort(sortObj)
+                .skip(skip)
+                .limit(parseInt(limit))
+                .select('-__v')
+                .lean(),
+            User.countDocuments(query)
+        ]);
+
+        // Enrich with ride/review stats
+        const enrichedUsers = await Promise.all(users.map(async (u) => {
+            const [rideCount, reviewCount, cancelCount] = await Promise.all([
+                Ride.countDocuments({ $or: [{ userId: u._id }, { driverId: u._id }], status: 'COMPLETED' }),
+                Review.countDocuments({ revieweeId: u._id }),
+                Ride.countDocuments({
+                    $or: [
+                        { userId: u._id, canceledBy: 'RIDER' },
+                        { driverId: u._id, canceledBy: 'DRIVER' }
+                    ]
+                })
+            ]);
+            return { ...u, rideCount, reviewCount, cancelCount };
+        }));
+
+        res.json({
+            users: enrichedUsers,
+            summary: {
+                totalUsers: await User.countDocuments(),
+                totalRiders: await User.countDocuments({ role: 'RIDER' }),
+                totalDrivers: await User.countDocuments({ role: 'DRIVER' }),
+                verifiedDrivers: await User.countDocuments({ role: 'DRIVER', isVerified: true }),
+                pendingVerification: await User.countDocuments({ role: 'DRIVER', verificationStatus: 'PENDING' })
+            },
+            pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / parseInt(limit)) }
+        });
+    } catch (error) {
+        console.error('Admin users error:', error);
+        res.status(500).json({ message: 'Error fetching users' });
+    }
+});
+
+// ── Admin: verify/reject driver ──
+app.patch('/api/admin/drivers/:driverId/verify', async (req, res) => {
+    try {
+        const { status } = req.body;
+        if (!['APPROVED', 'REJECTED'].includes(status)) {
+            return res.status(400).json({ message: 'Status must be APPROVED or REJECTED' });
+        }
+
+        const driver = await User.findOneAndUpdate(
+            { _id: req.params.driverId, role: 'DRIVER' },
+            {
+                verificationStatus: status,
+                isVerified: status === 'APPROVED',
+                verificationDate: new Date()
+            },
+            { new: true }
+        );
+
+        if (!driver) return res.status(404).json({ message: 'Driver not found' });
+
+        // Notify driver
+        const notification = new Notification({
+            userId: driver._id,
+            title: status === 'APPROVED' ? 'Verification Approved!' : 'Verification Rejected',
+            message: status === 'APPROVED'
+                ? 'Your driver account has been verified. You can now accept rides!'
+                : 'Your driver verification was rejected. Please update your documents and try again.',
+            type: 'SYSTEM'
+        });
+        await notification.save();
+        io.to(`user:${driver._id}`).emit('notification:new', {
+            title: notification.title,
+            message: notification.message,
+            type: notification.type
+        });
+
+        res.json({ ok: true, driver });
+    } catch (error) {
+        res.status(500).json({ message: 'Error verifying driver' });
+    }
+});
+
+// ── Admin: suspend/unsuspend user ──
+app.patch('/api/admin/users/:userId/suspend', async (req, res) => {
+    try {
+        const { suspended, reason } = req.body;
+        const user = await User.findByIdAndUpdate(
+            req.params.userId,
+            { suspended: !!suspended, suspendReason: reason || '' },
+            { new: true }
+        );
+
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        if (suspended) {
+            const notification = new Notification({
+                userId: user._id,
+                title: 'Account Suspended',
+                message: reason || 'Your account has been suspended. Contact support for details.',
+                type: 'SYSTEM'
+            });
+            await notification.save();
+        }
+
+        res.json({ ok: true, user });
+    } catch (error) {
+        res.status(500).json({ message: 'Error updating user suspension' });
+    }
+});
+
+// ── Admin: platform stats overview ──
+app.get('/api/admin/platform-stats', async (req, res) => {
+    try {
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const thisWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const thisMonth = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+        const [
+            totalUsers, totalDrivers, totalRiders,
+            totalRides, completedRides, activeRides,
+            todayRides, weekRides, monthRides,
+            totalPayments, weekPayments,
+            totalDisputes, openDisputes,
+            totalReviews, avgRating
+        ] = await Promise.all([
+            User.countDocuments(),
+            User.countDocuments({ role: 'DRIVER' }),
+            User.countDocuments({ role: 'RIDER' }),
+            Ride.countDocuments(),
+            Ride.countDocuments({ status: 'COMPLETED' }),
+            Ride.countDocuments({ status: { $in: ['SEARCHING', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS'] } }),
+            Ride.countDocuments({ createdAt: { $gte: today } }),
+            Ride.countDocuments({ createdAt: { $gte: thisWeek } }),
+            Ride.countDocuments({ createdAt: { $gte: thisMonth } }),
+            Payment.aggregate([{ $match: { status: 'COMPLETED' } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+            Payment.aggregate([{ $match: { status: 'COMPLETED', createdAt: { $gte: thisWeek } } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+            Dispute.countDocuments(),
+            Dispute.countDocuments({ status: { $in: ['OPEN', 'UNDER_REVIEW'] } }),
+            Review.countDocuments(),
+            Review.aggregate([{ $group: { _id: null, avg: { $avg: '$rating' } } }])
+        ]);
+
+        // Online drivers count
+        const onlineDriverCount = onlineDrivers.size;
+
+        res.json({
+            users: { total: totalUsers, drivers: totalDrivers, riders: totalRiders, onlineDrivers: onlineDriverCount },
+            rides: { total: totalRides, completed: completedRides, active: activeRides, today: todayRides, thisWeek: weekRides, thisMonth: monthRides },
+            revenue: {
+                allTime: totalPayments[0]?.total || 0,
+                thisWeek: weekPayments[0]?.total || 0
+            },
+            disputes: { total: totalDisputes, open: openDisputes },
+            reviews: { total: totalReviews, avgRating: avgRating[0]?.avg ? Math.round(avgRating[0].avg * 10) / 10 : 0 }
+        });
+    } catch (error) {
+        console.error('Platform stats error:', error);
+        res.status(500).json({ message: 'Error fetching platform stats' });
+    }
+});
+
 
 // Only start listening when run directly (not when imported for testing)
 if (require.main === module) {
