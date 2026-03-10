@@ -8,10 +8,12 @@ Provides:
   - CO₂ savings computation
 """
 
+import asyncio
 import os
 import json
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Dict, Any
 
 import numpy as np
 import pandas as pd
@@ -31,6 +33,21 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 mongo_client: Optional[AsyncIOMotorClient] = None
 db = None
+background_task: Optional[asyncio.Task] = None
+
+MODEL_STATE: Dict[str, Any] = {
+    "trained_at": None,
+    "last_seen_count": 0,
+    "last_train_count": 0,
+    "model_snapshot": None,
+    "logs": [],
+    "config": {
+        "retrain_interval_minutes": 5,
+        "min_new_entries": 100,
+        "default_horizon_hours": 24,
+        "workers": 0,
+    },
+}
 
 # ─── Redis (optional cache) ──────────────────────────────────────────
 redis_client = None
@@ -38,17 +55,46 @@ try:
     import redis as redis_lib
     redis_client = redis_lib.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True, socket_connect_timeout=2)
     redis_client.ping()
-    print("✅ ML Service: Redis connected")
+    print("ML Service: Redis connected")
 except Exception:
     redis_client = None
-    print("⚠️  ML Service: Redis not available — running without cache")
+    print("ML Service: Redis not available - running without cache")
 
 # ─── sklearn ──────────────────────────────────────────────────────────
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
+from demand_pipeline import run_demand_pipeline, seed_demand_training_data, REGIONS
 
 # ─── FastAPI App ──────────────────────────────────────────────────────
-app = FastAPI(title="LeafLift ML Service", version="1.0.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    global mongo_client, db, background_task
+    if MONGODB_URI:
+        mongo_client = AsyncIOMotorClient(MONGODB_URI)
+        try:
+            db = mongo_client.get_default_database()
+        except Exception:
+            db = mongo_client["leaflift"]
+        print("ML Service: MongoDB connected")
+    else:
+        print("ML Service: No MONGODB_URI - using synthetic data")
+
+    background_task = asyncio.create_task(periodic_retrain_worker())
+    try:
+        await train_demand_model(force=True)
+        yield
+    finally:
+        if background_task:
+            background_task.cancel()
+            try:
+                await background_task
+            except asyncio.CancelledError:
+                pass
+        if mongo_client:
+            mongo_client.close()
+
+
+app = FastAPI(title="LeafLift ML Service", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,24 +102,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-async def startup():
-    global mongo_client, db
-    if MONGODB_URI:
-        mongo_client = AsyncIOMotorClient(MONGODB_URI)
-        db = mongo_client.get_default_database()
-        print("✅ ML Service: MongoDB connected")
-    else:
-        print("⚠️  ML Service: No MONGODB_URI — using synthetic data")
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    global mongo_client
-    if mongo_client:
-        mongo_client.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -98,6 +126,88 @@ def cache_set(key: str, data, ttl: int = 300):
         pass
 
 
+def add_log(message: str, level: str = "info"):
+    entry = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "level": level,
+        "message": message,
+    }
+    MODEL_STATE["logs"].append(entry)
+    MODEL_STATE["logs"] = MODEL_STATE["logs"][-200:]
+    cache_set("ml:demand:logs", MODEL_STATE["logs"], ttl=3600)
+
+
+def classify_heat_level(deficit: int) -> str:
+    if deficit > 10:
+        return "critical"
+    if deficit > 5:
+        return "high"
+    if deficit > 0:
+        return "medium"
+    return "low"
+
+
+async def get_total_ride_count() -> int:
+    if db is None:
+        return 0
+    try:
+        return int(await db.rides.count_documents({}))
+    except Exception:
+        return 0
+
+
+async def train_demand_model(force: bool = False) -> Dict[str, Any]:
+    ride_count = await get_total_ride_count()
+    min_new = int(MODEL_STATE["config"]["min_new_entries"])
+    should_retrain = force or MODEL_STATE["model_snapshot"] is None or (ride_count - MODEL_STATE["last_train_count"] >= min_new)
+
+    if not should_retrain:
+        return MODEL_STATE["model_snapshot"] or {}
+
+    if MONGODB_URI and ride_count < 500:
+        try:
+            seed_info = await asyncio.to_thread(
+                seed_demand_training_data,
+                mongo_uri=MONGODB_URI,
+                days=150,
+                avg_rides_per_day=900,
+                force=False,
+            )
+            add_log(f"Seed check executed before training: {seed_info}", "info")
+        except Exception as exc:
+            add_log(f"Seeding failed: {exc}", "warning")
+
+    df = await get_ride_dataframe()
+    horizon = int(MODEL_STATE["config"]["default_horizon_hours"])
+    workers = int(MODEL_STATE["config"]["workers"])
+    snapshot = await asyncio.to_thread(
+        run_demand_pipeline,
+        rides_df=df,
+        horizon_hours=horizon,
+        region_filter="all",
+        max_workers=workers if workers > 0 else None,
+    )
+
+    MODEL_STATE["model_snapshot"] = snapshot
+    MODEL_STATE["trained_at"] = datetime.utcnow().isoformat()
+    MODEL_STATE["last_seen_count"] = ride_count
+    MODEL_STATE["last_train_count"] = ride_count
+    add_log(f"Model trained with {ride_count} rides across {snapshot['summary']['regions_modeled']} regions", "success")
+    cache_set("ml:demand:latest-snapshot", snapshot, ttl=3600)
+    return snapshot
+
+
+async def periodic_retrain_worker():
+    await asyncio.sleep(2)
+    while True:
+        try:
+            await train_demand_model(force=False)
+        except Exception as exc:
+            add_log(f"Periodic retrain failed: {exc}", "error")
+        interval = int(MODEL_STATE["config"]["retrain_interval_minutes"])
+        await asyncio.sleep(max(1, interval) * 60)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # HELPER: load ride data from MongoDB or generate synthetic
 # ═══════════════════════════════════════════════════════════════════════
@@ -114,12 +224,22 @@ async def get_ride_dataframe() -> pd.DataFrame:
         if len(rides) > 50:
             df = pd.DataFrame(rides)
             df['createdAt'] = pd.to_datetime(df['createdAt'])
+            if 'pickup' in df.columns:
+                df['pickup_lat'] = df['pickup'].apply(lambda p: p.get('lat') if isinstance(p, dict) else None)
+                df['pickup_lng'] = df['pickup'].apply(lambda p: p.get('lng') if isinstance(p, dict) else None)
             return df
 
     # Synthetic data for demonstration
     np.random.seed(42)
     n = 3000
     dates = pd.date_range(end=datetime.now(), periods=n, freq='20min')
+    region_points = [
+        (19.1197, 72.8464), (28.6315, 77.2167), (12.9352, 77.6245), (17.4435, 78.3772),
+        (13.0418, 80.2341), (22.5726, 88.4159), (18.5912, 73.7389), (26.9124, 75.7873),
+    ]
+    region_idx = np.random.randint(0, len(region_points), size=n)
+    lat_noise = np.random.normal(0, 0.015, size=n)
+    lng_noise = np.random.normal(0, 0.015, size=n)
     df = pd.DataFrame({
         'createdAt': dates,
         'fare': np.random.exponential(120, n) + 30,
@@ -128,6 +248,8 @@ async def get_ride_dataframe() -> pd.DataFrame:
         'vehicleCategory': np.random.choice(['BIKE', 'AUTO', 'CAR', 'BIG_CAR'], n, p=[0.35, 0.25, 0.30, 0.10]),
         'co2Saved': np.random.exponential(0.5, n),
         'co2Emissions': np.random.exponential(1.2, n),
+        'pickup_lat': np.array([region_points[i][0] for i in region_idx]) + lat_noise,
+        'pickup_lng': np.array([region_points[i][1] for i in region_idx]) + lng_noise,
     })
     return df
 
@@ -139,60 +261,61 @@ async def get_ride_dataframe() -> pd.DataFrame:
 async def predict_demand(
     region: str = Query("all", description="Region name or 'all'"),
     hours_ahead: int = Query(24, description="Hours to predict ahead"),
+    workers: int = Query(0, description="Parallel worker processes. 0 = auto"),
+    seed_if_needed: bool = Query(True, description="Seed MongoDB with synthetic training rides if data is insufficient"),
 ):
-    """Predict ride demand for the next N hours using Random Forest."""
-    cache_key = f"ml:demand:{region}:{hours_ahead}"
-    cached = cache_get(cache_key)
-    if cached:
-        return cached
+    """Hierarchical demand prediction: trained local regional models + global rollup."""
+    if seed_if_needed and MONGODB_URI and MODEL_STATE["model_snapshot"] is None:
+        try:
+            await asyncio.to_thread(
+                seed_demand_training_data,
+                mongo_uri=MONGODB_URI,
+                days=150,
+                avg_rides_per_day=900,
+                force=False,
+            )
+        except Exception as exc:
+            add_log(f"Seed-on-request failed: {exc}", "warning")
 
-    df = await get_ride_dataframe()
-    df['hour'] = df['createdAt'].dt.hour
-    df['dayofweek'] = df['createdAt'].dt.dayofweek
-    df['is_weekend'] = df['dayofweek'].isin([5, 6]).astype(int)
-    df['month'] = df['createdAt'].dt.month
+    snapshot = await train_demand_model(force=False)
+    if not snapshot:
+        return {"region": region, "hours_ahead": hours_ahead, "predictions": [], "local_predictions": [], "global_forecast": {"timeline": [], "hotspots": []}}
 
-    # Aggregate rides per hour
-    hourly = df.groupby([df['createdAt'].dt.date, 'hour']).size().reset_index(name='rides')
-    hourly.columns = ['date', 'hour', 'rides']
-    hourly['dayofweek'] = pd.to_datetime(hourly['date']).dt.dayofweek
-    hourly['is_weekend'] = hourly['dayofweek'].isin([5, 6]).astype(int)
-    hourly['month'] = pd.to_datetime(hourly['date']).dt.month
+    local = snapshot["local_predictions"]
+    global_timeline = snapshot["global_forecast"]["timeline"]
 
-    features = ['hour', 'dayofweek', 'is_weekend', 'month']
-    X = hourly[features].values
-    y = hourly['rides'].values
-
-    # Train Random Forest
-    model = RandomForestRegressor(n_estimators=50, max_depth=8, random_state=42)
-    model.fit(X, y)
-
-    # Predict next N hours
-    now = datetime.now()
-    predictions = []
-    for i in range(hours_ahead):
-        future = now + timedelta(hours=i)
-        feat = np.array([[future.hour, future.weekday(), int(future.weekday() in [5, 6]), future.month]])
-        pred = max(0, int(model.predict(feat)[0]))
-        predictions.append({
-            "hour": future.strftime("%H:00"),
-            "datetime": future.isoformat(),
-            "predicted_rides": pred,
-            "confidence": round(0.7 + np.random.random() * 0.25, 2),
-        })
-
-    # Feature importance
-    importances = dict(zip(features, [round(float(x), 3) for x in model.feature_importances_]))
+    if region.lower() != "all":
+        region_row = next((r for r in local if r["region"].lower() == region.lower()), None)
+        legacy_predictions = (region_row or {}).get("predictions", [])
+        confidence = int(round(((region_row or {}).get("confidence", 0.55)) * 100))
+        total_training = int((region_row or {}).get("train_samples", 0))
+        filtered_local = [region_row] if region_row else []
+    else:
+        legacy_predictions = [
+            {
+                "hour": datetime.fromisoformat(p["datetime"]).strftime("%H:00"),
+                "datetime": p["datetime"],
+                "predicted_rides": p["predicted_rides"],
+            }
+            for p in global_timeline[: max(1, min(72, hours_ahead))]
+        ]
+        confidence = int(round(np.mean([r["confidence"] for r in local]) * 100)) if local else 55
+        total_training = int(sum(r["train_samples"] for r in local))
+        filtered_local = local
 
     result = {
         "region": region,
         "hours_ahead": hours_ahead,
-        "model": "RandomForestRegressor",
-        "predictions": predictions,
-        "feature_importances": importances,
-        "total_training_samples": len(hourly),
+        "model": "RegionalRandomForestParallel",
+        "predictions": legacy_predictions,
+        "confidence": confidence,
+        "total_training_samples": total_training,
+        "local_predictions": filtered_local,
+        "global_forecast": snapshot["global_forecast"],
+        "summary": snapshot["summary"],
+        "trained_at": MODEL_STATE["trained_at"],
+        "config": MODEL_STATE["config"],
     }
-    cache_set(cache_key, result, 180)
     return result
 
 
@@ -414,6 +537,128 @@ async def sustainability_analytics():
 # ═══════════════════════════════════════════════════════════════════════
 # HEALTH CHECK
 # ═══════════════════════════════════════════════════════════════════════
+@app.post("/api/ml/demand-pipeline/seed")
+async def seed_demand_data(
+    days: int = Query(150, ge=30, le=365),
+    avg_rides_per_day: int = Query(900, ge=200, le=4000),
+    force: bool = Query(False),
+):
+    if not MONGODB_URI:
+        return {"seeded": False, "reason": "MONGODB_URI missing"}
+    try:
+        info = await asyncio.to_thread(
+            seed_demand_training_data,
+            mongo_uri=MONGODB_URI,
+            days=days,
+            avg_rides_per_day=avg_rides_per_day,
+            force=force,
+        )
+        if info.get("quota_exceeded"):
+            add_log(f"Manual seed skipped due to Atlas quota: {info.get('error', 'quota exceeded')}", "warning")
+            return {"status": "warning", "seed": info, "message": "Atlas quota exceeded. Seed skipped."}
+        add_log(f"Manual seed completed: {info}", "success")
+        return {"status": "ok", "seed": info}
+    except Exception as exc:
+        msg = str(exc)
+        if "space quota" in msg.lower() or "over your space quota" in msg.lower():
+            add_log(f"Manual seed skipped due to Atlas quota: {msg}", "warning")
+            return {"status": "warning", "message": "Atlas quota exceeded. Seed skipped."}
+        add_log(f"Manual seed failed: {exc}", "error")
+        return {"status": "error", "message": msg}
+
+
+@app.post("/api/ml/demand-pipeline/run")
+async def run_parallel_demand_pipeline(
+    region: str = Query("all"),
+    hours_ahead: int = Query(24, ge=1, le=72),
+    workers: int = Query(0, ge=0, le=32),
+    seed_if_needed: bool = Query(True),
+):
+    if workers > 0:
+        MODEL_STATE["config"]["workers"] = workers
+    MODEL_STATE["config"]["default_horizon_hours"] = hours_ahead
+    if seed_if_needed and MONGODB_URI:
+        await asyncio.to_thread(seed_demand_training_data, mongo_uri=MONGODB_URI, days=150, avg_rides_per_day=900, force=False)
+    snapshot = await train_demand_model(force=True)
+    if region.lower() == "all":
+        return {"status": "ok", **snapshot, "trained_at": MODEL_STATE["trained_at"]}
+    local = [r for r in snapshot.get("local_predictions", []) if r["region"].lower() == region.lower()]
+    return {"status": "ok", "local_predictions": local, "global_forecast": snapshot.get("global_forecast", {}), "summary": snapshot.get("summary", {}), "trained_at": MODEL_STATE["trained_at"]}
+
+
+@app.get("/api/ml/demand/status")
+async def demand_model_status():
+    current_count = await get_total_ride_count()
+    return {
+        "trained_at": MODEL_STATE["trained_at"],
+        "last_seen_count": current_count,
+        "last_train_count": MODEL_STATE["last_train_count"],
+        "new_entries_since_train": max(0, current_count - MODEL_STATE["last_train_count"]),
+        "config": MODEL_STATE["config"],
+        "regions_modeled": (MODEL_STATE["model_snapshot"] or {}).get("summary", {}).get("regions_modeled", 0),
+    }
+
+
+@app.post("/api/ml/demand/config")
+async def update_demand_model_config(
+    min_new_entries: int = Query(100, ge=1, le=50000),
+    retrain_interval_minutes: int = Query(5, ge=1, le=120),
+    default_horizon_hours: int = Query(24, ge=1, le=72),
+    workers: int = Query(0, ge=0, le=32),
+):
+    MODEL_STATE["config"]["min_new_entries"] = min_new_entries
+    MODEL_STATE["config"]["retrain_interval_minutes"] = retrain_interval_minutes
+    MODEL_STATE["config"]["default_horizon_hours"] = default_horizon_hours
+    MODEL_STATE["config"]["workers"] = workers
+    add_log(
+        f"Admin updated config: min_new_entries={min_new_entries}, retrain_interval_minutes={retrain_interval_minutes}, horizon={default_horizon_hours}, workers={workers}",
+        "info",
+    )
+    return {"status": "ok", "config": MODEL_STATE["config"]}
+
+
+@app.post("/api/ml/demand/retrain")
+async def force_retrain():
+    snapshot = await train_demand_model(force=True)
+    return {"status": "ok", "trained_at": MODEL_STATE["trained_at"], "summary": snapshot.get("summary", {})}
+
+
+@app.get("/api/ml/demand/live-zones")
+async def demand_live_zones(region: str = Query("all"), top_n: int = Query(8, ge=1, le=20)):
+    snapshot = await train_demand_model(force=False)
+    local = snapshot.get("local_predictions", [])
+    if region.lower() != "all":
+        local = [r for r in local if r["region"].lower() == region.lower()]
+    region_lookup = {r["name"]: {"lat": r["lat"], "lng": r["lng"]} for r in REGIONS}
+    zones = []
+    for item in local:
+        predicted = int(item.get("aggregate_next_window", 0) / max(1, MODEL_STATE["config"]["default_horizon_hours"]))
+        drivers = max(2, int(predicted / 5))
+        deficit = max(0, int(predicted / 4) - drivers)
+        coords = region_lookup.get(item["region"], {"lat": 20.5937, "lng": 78.9629})
+        zones.append({
+            "name": item["region"],
+            "region": item["region"],
+            "predicted": predicted,
+            "rides": predicted,
+            "drivers": drivers,
+            "deficit": deficit,
+            "heatLevel": classify_heat_level(deficit),
+            "confidence": item.get("confidence", 0.6),
+            "trend": item.get("trend", "stable"),
+            "lat": coords["lat"],
+            "lng": coords["lng"],
+        })
+    zones = sorted(zones, key=lambda z: z["predicted"], reverse=True)[:top_n]
+    return {"zones": zones, "trained_at": MODEL_STATE["trained_at"]}
+
+
+@app.get("/api/ml/demand/logs")
+async def demand_logs(limit: int = Query(50, ge=1, le=200)):
+    logs = MODEL_STATE["logs"][-limit:]
+    return {"logs": logs, "count": len(logs)}
+
+
 @app.get("/api/ml/health")
 async def health():
     mongo_ok = db is not None
@@ -422,6 +667,8 @@ async def health():
         "status": "ok",
         "mongo": "connected" if mongo_ok else "not connected",
         "redis": "connected" if redis_ok else "not available",
+        "demand_model_trained_at": MODEL_STATE["trained_at"],
+        "demand_log_count": len(MODEL_STATE["logs"]),
     }
 
 
@@ -429,3 +676,4 @@ async def health():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
