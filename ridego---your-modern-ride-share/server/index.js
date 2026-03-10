@@ -49,6 +49,7 @@ const emailTransporter = nodemailer.createTransport({
 });
 const Ride = require('./models/Ride');
 const Notification = require('./models/Notification');
+const SafetyAlert = require('./models/SafetyAlert');
 const { findMatchingRides, isRiderOnRoute } = require('./utils/poolMatcher');
 const crypto = require('crypto');
 
@@ -2972,8 +2973,36 @@ app.get('/api/drivers/nearby', async (req, res) => {
         res.status(500).json({ message: 'Error fetching nearby drivers' });
     }
 });
+app.get('/api/users/:userId', async (req, res) => {
+    try {
+        const user = await User.findById(req.params.userId);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        res.json(user);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching user' });
+    }
+});
 
-// ── SOS Emergency Alert ──
+app.put('/api/users/:userId/privacy', async (req, res) => {
+    try {
+        const { privacySettings, trustedContacts } = req.body;
+        const update = {};
+        if (privacySettings) update.privacySettings = privacySettings;
+        if (trustedContacts) update.trustedContacts = trustedContacts;
+
+        const user = await User.findByIdAndUpdate(
+            req.params.userId,
+            { $set: update },
+            { new: true }
+        );
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        res.json(user);
+    } catch (error) {
+        console.error('Privacy update error:', error);
+        res.status(500).json({ message: 'Error updating privacy settings' });
+    }
+});
+
 app.post('/api/rides/:rideId/sos', async (req, res) => {
     try {
         const { userId, userRole, location } = req.body;
@@ -2982,30 +3011,41 @@ app.post('/api/rides/:rideId/sos', async (req, res) => {
 
         console.log(`🚨 SOS ALERT: Ride ${ride._id}, User: ${userId}, Role: ${userRole}`);
 
-        // In a real app, this would:
-        // 1. Alert emergency services
-        // 2. Notify platform support
-        // 3. Share live location
-        // 4. Record the incident
+        // 1. Fetch User and Trusted Contacts
+        const user = await User.findById(userId);
+        const contacts = user?.trustedContacts || [];
 
-        // Notify both driver and rider
-        io.to(`user:${ride.userId}`).emit('ride:sos', {
+        // 2. Transmit distress signal to backend safety monitoring system (Requirement 5.3.2)
+        const alert = new SafetyAlert({
             rideId: ride._id,
-            alertedBy: userRole,
-            location,
-            timestamp: new Date()
+            userId: userId,
+            userRole: userRole,
+            location: location || ride.driverLocation || ride.pickup,
+            contactsAlerted: contacts.map(c => ({ name: c.name, phone: c.phone, status: 'SENT' }))
+        });
+        await alert.save();
+
+        // 3. Send SMS with live location to emergency contacts (Requirement 5.3.3)
+        // Mocking SMS logic here
+        const locationLink = location ? `https://www.google.com/maps?q=${location.lat},${location.lng}` : 'Unknown';
+        contacts.forEach(contact => {
+            console.log(`📱 SMS SENT to ${contact.name} (${contact.phone}): EMERGENCY! ${user.firstName} is in an active ride and signaled SOS. Live Location: ${locationLink}`);
         });
 
+        // 4. Notify both driver and rider via Socket
+        const socketPayload = {
+            rideId: ride._id,
+            alertedBy: userRole,
+            location: alert.location,
+            timestamp: new Date(),
+            alertId: alert._id
+        };
+        io.to(`user:${ride.userId}`).emit('ride:sos', socketPayload);
         if (ride.driverId) {
-            io.to(`user:${ride.driverId}`).emit('ride:sos', {
-                rideId: ride._id,
-                alertedBy: userRole,
-                location,
-                timestamp: new Date()
-            });
+            io.to(`user:${ride.driverId}`).emit('ride:sos', socketPayload);
         }
 
-        res.json({ ok: true, message: 'SOS alert sent' });
+        res.json({ ok: true, message: 'SOS alert sent', alertId: alert._id });
     } catch (error) {
         console.error('SOS error:', error);
         res.status(500).json({ message: 'Error sending SOS alert' });

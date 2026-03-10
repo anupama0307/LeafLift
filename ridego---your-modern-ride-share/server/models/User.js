@@ -60,7 +60,11 @@ const userSchema = new mongoose.Schema({
         shareStats: { type: Boolean, default: true },
         publicProfile: { type: Boolean, default: true },
         locationSharing: { type: Boolean, default: true }
-    }
+    },
+    trustedContacts: [{
+        name: { type: String, required: true },
+        phone: { type: String, required: true }
+    }]
 }, {
     toJSON: { getters: true },
     toObject: { getters: true }

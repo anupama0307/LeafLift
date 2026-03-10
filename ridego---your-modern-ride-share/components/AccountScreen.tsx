@@ -63,7 +63,7 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
   const [shareTripStatus, setShareTripStatus] = useState(true);
   const [twoFactorAuth, setTwoFactorAuth] = useState(false);
   const [rideRecording, setRideRecording] = useState(false);
-  const [trustedContacts, setTrustedContacts] = useState<string[]>([]);
+  const [trustedContacts, setTrustedContacts] = useState<{ name: string; phone: string }[]>(user?.trustedContacts || []);
 
   // Trips state
   const [trips, setTrips] = useState<any[]>([]);
@@ -630,27 +630,61 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
           <div className="py-6 text-center">
             <span className="material-icons-outlined text-4xl text-gray-300 dark:text-zinc-600 mb-2">group_add</span>
             <p className="text-sm font-bold text-gray-500 dark:text-zinc-500">No trusted contacts added</p>
-            <p className="text-xs text-gray-400 dark:text-zinc-600 mt-1">Add contacts to share your live trip status</p>
+            <p className="text-xs text-gray-400 dark:text-zinc-600 mt-1">Add contacts to alert them in case of emergency</p>
           </div>
         ) : (
           trustedContacts.map((contact, i) => (
             <div key={i} className="flex items-center justify-between py-3 border-b border-gray-100 dark:border-zinc-800 last:border-b-0">
               <div className="flex items-center gap-3">
-                <div className="size-10 rounded-full bg-leaf-100 dark:bg-leaf-900/30 flex items-center justify-center">
-                  <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400">person</span>
+                <div className="size-10 rounded-full bg-red-100 dark:bg-red-900/20 flex items-center justify-center">
+                  <span className="material-icons-outlined text-red-600 dark:text-red-400">person</span>
                 </div>
-                <span className="text-sm font-bold text-black dark:text-white">{contact}</span>
+                <div>
+                    <p className="text-sm font-bold text-black dark:text-white leading-none mb-1">{contact.name}</p>
+                    <p className="text-[10px] font-bold text-gray-400 font-mono">{contact.phone}</p>
+                </div>
               </div>
-              <button onClick={() => setTrustedContacts(trustedContacts.filter((_, idx) => idx !== i))} className="text-red-400 hover:text-red-500">
+              <button onClick={async () => {
+                   const newList = trustedContacts.filter((_, idx) => idx !== i);
+                   setTrustedContacts(newList);
+                   if (user?._id) {
+                       const resp = await fetch(`${API_BASE_URL}/api/users/${user._id}/privacy`, {
+                           method: 'PUT',
+                           headers: { 'Content-Type': 'application/json' },
+                           body: JSON.stringify({ trustedContacts: newList })
+                       });
+                       if (resp.ok) {
+                           const updated = await resp.json();
+                           localStorage.setItem('leaflift_user', JSON.stringify(updated));
+                           if (onUserUpdate) onUserUpdate(updated);
+                       }
+                   }
+              }} className="text-red-400 hover:text-red-500">
                 <span className="material-icons-outlined text-xl">close</span>
               </button>
             </div>
           ))
         )}
         <button
-          onClick={() => {
-            const name = prompt('Enter contact name or phone number:');
-            if (name?.trim()) setTrustedContacts([...trustedContacts, name.trim()]);
+          onClick={async () => {
+            const name = prompt('Enter contact name:');
+            const phone = prompt('Enter contact phone number:');
+            if (name?.trim() && phone?.trim()) {
+                const newList = [...trustedContacts, { name: name.trim(), phone: phone.trim() }];
+                setTrustedContacts(newList);
+                if (user?._id) {
+                    const resp = await fetch(`${API_BASE_URL}/api/users/${user._id}/privacy`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ trustedContacts: newList })
+                    });
+                    if (resp.ok) {
+                        const updated = await resp.json();
+                        localStorage.setItem('leaflift_user', JSON.stringify(updated));
+                        if (onUserUpdate) onUserUpdate(updated);
+                    }
+                }
+            }
           }}
           className="w-full py-3 flex items-center justify-center gap-2 text-leaf-600 dark:text-leaf-400 font-bold text-sm hover:bg-leaf-50 dark:hover:bg-leaf-900/10 rounded-xl transition-colors"
         >

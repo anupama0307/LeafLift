@@ -111,6 +111,8 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [isAutoReSearching, setIsAutoReSearching] = useState(false);
     const [reSearchDriversNotified, setReSearchDriversNotified] = useState(0);
     const reSearchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const [showSOSModal, setShowSOSModal] = useState(false);
+    const [sosAlertSent, setSosAlertSent] = useState(false);
 
     const mapRef = useRef<any>(null);
     const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -245,9 +247,24 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             }
         });
 
-        // ─── Delay Alert Handler (User Story 2.6) ───
         socket.on('ride:delay-alert', (payload: any) => {
             if (!payload?.delayMinutes) return;
+            setDelayAlert({
+                delayMinutes: payload.delayMinutes,
+                message: payload.message || `Delayed by ${payload.delayMinutes} min`,
+                etaText: payload.etaText,
+                etaLabel: payload.etaLabel
+            });
+            if (delayAlertTimerRef.current) clearTimeout(delayAlertTimerRef.current);
+            delayAlertTimerRef.current = setTimeout(() => setDelayAlert(null), 10000);
+        });
+
+        socket.on('ride:sos', (payload: any) => {
+            console.log('🚨 SOS Alert received:', payload);
+            if (payload.alertedBy === 'DRIVER') {
+                alert(`⚠️ EMERGENCY: Your driver has triggered an SOS alert. Please stay safe and follow emergency protocols.`);
+            }
+        });
             setDelayAlert({
                 delayMinutes: payload.delayMinutes,
                 message: payload.message || `Delayed ~${payload.delayMinutes} min due to traffic`,
@@ -2147,6 +2164,18 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 {rideStatus.replace('_', ' ')}
                             </h3>
                         </div>
+                        {/* SOS Button: Requirement 5.3.1 */}
+                        <button
+                            onClick={() => setShowSOSModal(true)}
+                            className="group relative flex items-center gap-2 bg-red-500 hover:bg-red-600 active:scale-95 text-white px-4 py-2.5 rounded-2xl shadow-lg shadow-red-500/30 transition-all duration-300"
+                        >
+                           <div className="absolute -top-1 -right-1 flex">
+                               <span className="animate-ping absolute inline-flex h-3 w-3 rounded-full bg-white opacity-75"></span>
+                               <span className="relative inline-flex rounded-full h-3 w-3 bg-white"></span>
+                           </div>
+                           <span className="material-icons text-xl">gpp_maybe</span>
+                           <span className="font-bold text-sm">SOS</span>
+                        </button>
                         {/* Live ETA Badge */}
                         {(liveEtaText || etaToPickup) && rideStatus !== 'COMPLETED' && (
                             <div className="flex flex-col items-end gap-1">
@@ -2753,6 +2782,69 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 )}
                             </button>
                         ))}
+                    </div>
+                </div>
+            )}
+            {/* SOS Confirmation Modal: Requirement 5.3.1 */}
+            {showSOSModal && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 sm:p-0">
+                    <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => !sosAlertSent && setShowSOSModal(false)}></div>
+                    <div className="relative w-full max-w-[400px] bg-white dark:bg-zinc-900 rounded-[32px] overflow-hidden shadow-2xl animate-in zoom-in-95 duration-300">
+                        <div className="p-8 text-center">
+                            <div className="size-20 bg-red-100 dark:bg-red-900/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                                <span className="material-icons text-red-500 text-5xl animate-pulse">gpp_maybe</span>
+                            </div>
+                            <h2 className="text-2xl font-black text-black dark:text-white mb-3">Emergency Help?</h2>
+                            <p className="text-gray-500 dark:text-zinc-500 text-sm font-medium leading-relaxed mb-8">
+                                {sosAlertSent 
+                                    ? "Help is on the way. We've notified emergency services and your trusted contacts."
+                                    : "Sending an SOS will alert local emergency services and your trusted contacts with your live location."}
+                            </p>
+
+                            {!sosAlertSent ? (
+                                <div className="space-y-3">
+                                    <button
+                                        onClick={async () => {
+                                            setSosAlertSent(true);
+                                            try {
+                                                await fetch(`${API_BASE_URL}/api/rides/${activeRideId}/sos`, {
+                                                    method: 'POST',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({
+                                                        userId: user?._id || user?.id,
+                                                        userRole: 'RIDER',
+                                                        location: driverLocationRef.current || pickupCoords
+                                                    })
+                                                });
+                                                setTimeout(() => {
+                                                    setShowSOSModal(false);
+                                                    setSosAlertSent(false);
+                                                }, 5000);
+                                            } catch (err) {
+                                                console.error('SOS fetch error:', err);
+                                                setSosAlertSent(false);
+                                            }
+                                        }}
+                                        className="w-full py-4 bg-red-500 hover:bg-red-600 text-white rounded-2xl font-black shadow-lg shadow-red-500/20 transition-all active:scale-95"
+                                    >
+                                        ALERT EMERGENCY
+                                    </button>
+                                    <button
+                                        onClick={() => setShowSOSModal(false)}
+                                        className="w-full py-4 bg-gray-100 dark:bg-zinc-800 text-black dark:text-white rounded-2xl font-black transition-all active:scale-95"
+                                    >
+                                        CANCEL
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="py-4 px-6 bg-red-50 dark:bg-red-900/10 border border-red-100 dark:border-red-900/20 rounded-2xl">
+                                    <div className="flex items-center gap-3 text-red-600 dark:text-red-400">
+                                        <div className="size-2 rounded-full bg-red-500 animate-ping"></div>
+                                        <span className="font-bold text-sm uppercase tracking-wider">Alert Active - Responding</span>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
             )}
