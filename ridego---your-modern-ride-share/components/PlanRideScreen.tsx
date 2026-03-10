@@ -126,6 +126,8 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     // ─── US 2.2 — Arrival ETA Countdown State ───
     const [arrivalEtaMin, setArrivalEtaMin] = useState<number | null>(null);
     const [arrivalEstimatedTime, setArrivalEstimatedTime] = useState<string | null>(null);
+    // ─── US 2.3 — Trip Progress Bar State ───
+    const [tripProgressPct, setTripProgressPct] = useState<number | null>(null);
 
     // ─── Delay Alert State ───
     const [delayAlert, setDelayAlert] = useState<{ delayMinutes: number; message: string; etaText: string; etaLabel: string } | null>(null);
@@ -527,6 +529,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         if (rideStatus !== 'IN_PROGRESS' || !activeRideId) {
             setArrivalEtaMin(null);
             setArrivalEstimatedTime(null);
+            setTripProgressPct(null); // 2.3 — clear progress on exit
             return;
         }
 
@@ -541,10 +544,17 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                 if (data.estimatedArrivalTime) {
                     setArrivalEstimatedTime(data.estimatedArrivalTime);
                 }
+                // 2.3 — derive progress % from same payload (no extra fetch)
+                if (data.originalEtaMinutes > 0 && data.elapsedMinutes !== null) {
+                    const pct = Math.min(100, Math.round((data.elapsedMinutes / data.originalEtaMinutes) * 100));
+                    setTripProgressPct(pct);
+                } else if (data.elapsedMinutes !== null) {
+                    setTripProgressPct(0);
+                }
             } catch { }
         };
 
-        // 2.2.3 — fetch immediately, then every 60 seconds
+        // 2.2.3 / 2.3.3 — fetch immediately, then every 60 seconds
         fetchArrivalEta();
         const timer = setInterval(fetchArrivalEta, 60000);
         return () => clearInterval(timer);
@@ -2723,6 +2733,38 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                     <span className="ml-auto text-[9px] text-emerald-500 dark:text-emerald-600 font-medium">↻ refreshes every 60s</span>
                                 </div>
                             )}
+                        </div>
+                    )}
+
+                    {/* ── US 2.3 — Trip progress bar ── */}
+                    {rideStatus === 'IN_PROGRESS' && tripProgressPct !== null && (
+                        <div className="mb-4 bg-gray-50 dark:bg-zinc-800 rounded-2xl px-4 pt-3 pb-3">
+                            <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-1.5">
+                                    <span className="material-icons-outlined text-gray-500 dark:text-gray-400" style={{ fontSize: '14px' }}>route</span>
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-gray-500 dark:text-gray-400">Trip Progress</span>
+                                </div>
+                                <span className="text-xs font-black dark:text-white">{tripProgressPct}%</span>
+                            </div>
+                            {/* 2.3.1 — progress bar track */}
+                            <div className="relative h-2.5 w-full bg-gray-200 dark:bg-zinc-700 rounded-full overflow-hidden">
+                                <div
+                                    className="h-full rounded-full transition-all duration-700 ease-out"
+                                    style={{
+                                        width: `${tripProgressPct}%`,
+                                        background: tripProgressPct >= 100
+                                            ? '#22c55e'
+                                            : 'linear-gradient(to right, #10b981, #14b8a6)'
+                                    }}
+                                />
+                            </div>
+                            <div className="flex justify-between mt-1.5">
+                                <span className="text-[9px] text-gray-400 dark:text-zinc-500 font-medium">Started</span>
+                                <span className="text-[9px] font-medium"
+                                    style={{ color: tripProgressPct >= 100 ? '#22c55e' : '#6b7280' }}>
+                                    {tripProgressPct >= 100 ? 'Arriving now ✓' : 'Destination'}
+                                </span>
+                            </div>
                         </div>
                     )}
 

@@ -4941,6 +4941,49 @@ app.get('/api/rides/:rideId/arrival-eta', async (req, res) => {
     }
 });
 
+// ── US 2.3 — Trip progress bar for active ride ──────────────────────────────────────────────────────────────
+// GET /api/rides/:rideId/trip-progress
+// Returns progressPercent (0–100) from elapsedTime / originalEtaMinutes.
+app.get('/api/rides/:rideId/trip-progress', async (req, res) => {
+    try {
+        const ride = await Ride.findById(req.params.rideId)
+            .select('status startedAt originalEtaMinutes')
+            .lean();
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        if (ride.status !== 'IN_PROGRESS') {
+            return res.json({
+                progressPercent: 0,
+                elapsedMinutes: null,
+                originalEtaMinutes: ride.originalEtaMinutes || null,
+                status: ride.status,
+                message: 'Ride not in progress'
+            });
+        }
+
+        const originalEtaMinutes = ride.originalEtaMinutes || 0;
+        let progressPercent = 0;
+        let elapsedMinutes = null;
+
+        if (ride.startedAt && originalEtaMinutes > 0) {
+            elapsedMinutes = Math.floor((Date.now() - new Date(ride.startedAt).getTime()) / 60000);
+            progressPercent = Math.min(100, Math.round((elapsedMinutes / originalEtaMinutes) * 100));
+        } else if (ride.startedAt) {
+            elapsedMinutes = Math.floor((Date.now() - new Date(ride.startedAt).getTime()) / 60000);
+        }
+
+        res.json({
+            progressPercent,
+            elapsedMinutes,
+            originalEtaMinutes,
+            startedAt: ride.startedAt,
+            status: ride.status
+        });
+    } catch (err) {
+        res.status(500).json({ message: 'Error fetching trip progress' });
+    }
+});
+
 // ── Live ETA for active rides ──
 /**
  * @swagger
