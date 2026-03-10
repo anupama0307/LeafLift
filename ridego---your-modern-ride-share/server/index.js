@@ -172,6 +172,19 @@ const performBackgroundCheck = async (userData) => {
 app.use(cors());
 app.use(express.json());
 
+// ─── Health Check Endpoint (used by CI/CD smoke tests) ───────────────────────
+app.get('/api/health', (req, res) => {
+    const dbState = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+    res.status(200).json({
+        status: 'ok',
+        service: 'LeafLift API',
+        version: '1.0.0',
+        uptime: Math.floor(process.uptime()),
+        db: dbState[mongoose.connection.readyState] || 'unknown',
+        timestamp: new Date().toISOString(),
+    });
+});
+
 io.on('connection', (socket) => {
     socket.on('register', ({ userId, role }) => {
         if (userId) {
