@@ -22,18 +22,6 @@ const FleetScreen: React.FC = () => {
       if (insightRes.ok) { const d = await insightRes.json(); setInsights(d.insights || []); }
     } catch (e) { console.error('Fleet fetch error:', e); }
     finally {
-      // Fallback data if server didn't respond
-      setVehicles(prev => prev.length ? prev : [
-        { type: 'Bike', total: 45, active: 32, idle: 8, maintenance: 5, utilization: 71.1 },
-        { type: 'Auto', total: 38, active: 22, idle: 12, maintenance: 4, utilization: 57.9 },
-        { type: 'Car', total: 52, active: 41, idle: 7, maintenance: 4, utilization: 78.8 },
-        { type: 'SUV', total: 24, active: 15, idle: 6, maintenance: 3, utilization: 62.5 },
-      ]);
-      setInsights(prev => prev.length ? prev : [
-        { title: 'Bike Supply Gap', suggestion: 'Add 8 more bikes in T. Nagar during 8-10 AM to meet peak demand.', impact: '+12% ride fulfillment', priority: 'high' },
-        { title: 'Reduce SUV Idle Time', suggestion: 'Shift idle SUV drivers to Car category during off-peak hours (11 AM - 4 PM).', impact: '-18% idle cost', priority: 'medium' },
-        { title: 'Auto Demand in Velachery', suggestion: 'Incentivize auto drivers to operate in Velachery during evening hours.', impact: '+9% coverage', priority: 'low' },
-      ]);
       setLoading(false);
     }
   }, [period]);
@@ -41,7 +29,15 @@ const FleetScreen: React.FC = () => {
   useEffect(() => {
     fetchData();
     const socket = io({ path: '/socket.io' });
-    socket.on('fleet-update', (d: any) => { if (d) setVehicles(prev => prev.length ? prev : prev); });
+    socket.on('fleet-update', (d: any) => {
+      if (Array.isArray(d)) {
+        setVehicles(d);
+        return;
+      }
+      if (Array.isArray(d?.vehicles)) {
+        setVehicles(d.vehicles);
+      }
+    });
     return () => { socket.disconnect(); };
   }, [fetchData]);
 
@@ -64,36 +60,36 @@ const FleetScreen: React.FC = () => {
   const totalMaint = vehicles.reduce((s, v) => s + v.maintenance, 0);
   const avgUtil = totalVehicles > 0 ? (totalActive / totalVehicles * 100) : 0;
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="size-8 border-3 border-blue-500/20 border-t-blue-500 rounded-full animate-spin"></div></div>;
+  if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-accent-purple/20 border-t-accent-purple rounded-full animate-spin"></div></div>;
 
   return (
-    <div className="space-y-4">
+    <div className="max-w-[1400px] mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-bold text-gray-900 dark:text-white">Fleet Management</h1>
-          <p className="text-xs text-gray-500 dark:text-gray-400">Vehicle utilization, optimization, and reports</p>
+          <h1 className="text-lg font-bold text-white">Fleet Management</h1>
+          <p className="text-xs text-zinc-500">Vehicle utilization, optimization, and reports</p>
         </div>
         <button onClick={handleExport} disabled={exportLoading}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-xs font-semibold transition-colors disabled:opacity-50">
+          className="flex items-center gap-1.5 px-4 py-2 bg-accent-purple hover:bg-accent-purple/80 text-white rounded-xl text-xs font-semibold transition-colors disabled:opacity-50">
           <span className="material-icons text-sm">{exportLoading ? 'hourglass_empty' : 'download'}</span>Export CSV
         </button>
       </div>
 
       {/* Tabs + Period */}
       <div className="flex items-center justify-between">
-        <div className="flex gap-1 bg-gray-100 dark:bg-black p-1 rounded-lg">
-          {[{ key: 'utilization', label: 'Utilization', icon: 'speed' }, { key: 'report', label: 'Report', icon: 'assessment' }, { key: 'optimization', label: 'Optimization', icon: 'auto_fix_high' }].map(t => (
+        <div className="flex gap-1 bg-zinc-900 p-1 rounded-full border border-zinc-800">
+          {[{ key: 'utilization', label: 'Utilization' }, { key: 'report', label: 'Report' }, { key: 'optimization', label: 'Optimization' }].map(t => (
             <button key={t.key} onClick={() => setTab(t.key as any)}
-              className={`flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${tab === t.key ? 'bg-white dark:bg-black text-blue-600 dark:text-blue-400 shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}>
-              <span className="material-icons" style={{ fontSize: '14px' }}>{t.icon}</span>{t.label}
+              className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${tab === t.key ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'}`}>
+              {t.label}
             </button>
           ))}
         </div>
-        <div className="flex gap-1 bg-gray-100 dark:bg-black p-0.5 rounded-lg">
+        <div className="flex gap-1 bg-zinc-900 p-1 rounded-full border border-zinc-800">
           {(['day', 'week', 'month'] as const).map(p => (
             <button key={p} onClick={() => setPeriod(p)}
-              className={`px-2 py-1 rounded-md text-[10px] font-semibold ${period === p ? 'bg-white dark:bg-black text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              className={`px-3 py-1 rounded-full text-[10px] font-semibold ${period === p ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'}`}>
               {p.charAt(0).toUpperCase() + p.slice(1)}
             </button>
           ))}
@@ -101,64 +97,59 @@ const FleetScreen: React.FC = () => {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {[
-          { label: 'Total', value: totalVehicles, icon: 'directions_car', color: 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10' },
-          { label: 'Active', value: totalActive, icon: 'check_circle', color: 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/10' },
-          { label: 'Idle', value: totalIdle, icon: 'pause_circle', color: 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10' },
-          { label: 'Maintenance', value: totalMaint, icon: 'build', color: 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10' },
-          { label: 'Utilization', value: `${avgUtil.toFixed(1)}%`, icon: 'speed', color: 'text-violet-600 dark:text-violet-400 bg-violet-50 dark:bg-violet-500/10' },
+          { label: 'Total', value: totalVehicles, color: 'text-accent-purple' },
+          { label: 'Active', value: totalActive, color: 'text-accent-green' },
+          { label: 'Idle', value: totalIdle, color: 'text-accent-yellow' },
+          { label: 'Maintenance', value: totalMaint, color: 'text-accent-rose' },
+          { label: 'Utilization', value: `${avgUtil.toFixed(1)}%`, color: 'text-accent-cyan' },
         ].map((c, i) => (
-          <div key={i} className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-3">
-            <div className="flex items-center gap-2">
-              <div className={`size-7 rounded-lg flex items-center justify-center ${c.color}`}>
-                <span className="material-icons" style={{ fontSize: '14px' }}>{c.icon}</span>
-              </div>
-              <div>
-                <p className="text-sm font-bold text-gray-900 dark:text-white">{c.value}</p>
-                <p className="text-[9px] font-semibold text-gray-400 uppercase">{c.label}</p>
-              </div>
-            </div>
+          <div key={i} className="card !p-4">
+            <p className={`text-2xl font-bold ${c.color}`}>{c.value}</p>
+            <p className="text-[9px] text-zinc-500 font-semibold uppercase mt-1">{c.label}</p>
           </div>
         ))}
       </div>
 
       {/* Utilization Tab */}
       {tab === 'utilization' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {vehicles.length === 0 && (
+            <div className="col-span-2 card text-center py-8">
+              <p className="text-xs text-zinc-500">No fleet data available yet. Waiting for server data...</p>
+            </div>
+          )}
           {vehicles.map((v, i) => (
-            <div key={i} className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
+            <div key={i} className="card">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-xs font-bold text-gray-900 dark:text-white capitalize">{v.type}</h3>
-                <span className={`text-xs font-bold ${v.utilization >= 70 ? 'text-green-600 dark:text-green-400' : v.utilization >= 40 ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'}`}>
+                <h3 className="text-sm font-bold text-white capitalize">{v.type}</h3>
+                <span className={`text-sm font-bold ${v.utilization >= 70 ? 'text-accent-green' : v.utilization >= 40 ? 'text-accent-yellow' : 'text-accent-rose'}`}>
                   {v.utilization.toFixed(1)}%
                 </span>
               </div>
-              {/* Utilization Bar */}
-              <div className="h-3 bg-gray-100 dark:bg-black rounded-full overflow-hidden mb-3">
-                <div className={`h-full rounded-full transition-all ${v.utilization >= 70 ? 'bg-green-500' : v.utilization >= 40 ? 'bg-amber-500' : 'bg-red-500'}`}
+              <div className="h-2 bg-zinc-800 rounded-full overflow-hidden mb-4">
+                <div className={`h-full rounded-full transition-all ${v.utilization >= 70 ? 'bg-accent-green' : v.utilization >= 40 ? 'bg-accent-yellow' : 'bg-accent-rose'}`}
                   style={{ width: `${v.utilization}%` }}></div>
               </div>
-              {/* Breakdown */}
               <div className="grid grid-cols-4 gap-2">
                 {[
-                  { label: 'Total', value: v.total, c: 'text-gray-900 dark:text-white' },
-                  { label: 'Active', value: v.active, c: 'text-green-600 dark:text-green-400' },
-                  { label: 'Idle', value: v.idle, c: 'text-amber-600 dark:text-amber-400' },
-                  { label: 'Service', value: v.maintenance, c: 'text-red-600 dark:text-red-400' },
+                  { label: 'Total', value: v.total, c: 'text-white' },
+                  { label: 'Active', value: v.active, c: 'text-accent-green' },
+                  { label: 'Idle', value: v.idle, c: 'text-accent-yellow' },
+                  { label: 'Service', value: v.maintenance, c: 'text-accent-rose' },
                 ].map((s, j) => (
                   <div key={j} className="text-center">
                     <p className={`text-xs font-bold ${s.c}`}>{s.value}</p>
-                    <p className="text-[8px] text-gray-400 font-semibold uppercase">{s.label}</p>
+                    <p className="text-[8px] text-zinc-500 font-semibold uppercase">{s.label}</p>
                   </div>
                 ))}
               </div>
-              {/* Visual breakdown bar */}
-              <div className="flex h-1.5 rounded-full overflow-hidden mt-3 bg-gray-100 dark:bg-black">
+              <div className="flex h-1.5 rounded-full overflow-hidden mt-3 bg-zinc-800">
                 {v.total > 0 && <>
-                  <div className="bg-green-500 transition-all" style={{ width: `${(v.active / v.total) * 100}%` }}></div>
-                  <div className="bg-amber-500 transition-all" style={{ width: `${(v.idle / v.total) * 100}%` }}></div>
-                  <div className="bg-red-500 transition-all" style={{ width: `${(v.maintenance / v.total) * 100}%` }}></div>
+                  <div className="bg-accent-green transition-all" style={{ width: `${(v.active / v.total) * 100}%` }}></div>
+                  <div className="bg-accent-yellow transition-all" style={{ width: `${(v.idle / v.total) * 100}%` }}></div>
+                  <div className="bg-accent-rose transition-all" style={{ width: `${(v.maintenance / v.total) * 100}%` }}></div>
                 </>}
               </div>
             </div>
@@ -168,42 +159,43 @@ const FleetScreen: React.FC = () => {
 
       {/* Report Tab */}
       {tab === 'report' && (
-        <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
-          <h3 className="text-xs font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-            <span className="material-icons text-sm text-blue-500">assessment</span>Fleet Report ({period})
-          </h3>
+        <div className="card">
+          <h3 className="text-sm font-bold text-white mb-4">Fleet Report ({period})</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-left">
               <thead>
-                <tr className="border-b border-gray-200 dark:border-zinc-900">
-                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Type</th>
-                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Total</th>
-                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Active</th>
-                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Idle</th>
-                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Maintenance</th>
-                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2 pr-4">Utilization</th>
-                  <th className="text-[9px] font-bold text-gray-400 uppercase pb-2">Trend</th>
+                <tr className="border-b border-zinc-800">
+                  <th className="text-[9px] font-bold text-zinc-500 uppercase pb-3 pr-4">Type</th>
+                  <th className="text-[9px] font-bold text-zinc-500 uppercase pb-3 pr-4">Total</th>
+                  <th className="text-[9px] font-bold text-zinc-500 uppercase pb-3 pr-4">Active</th>
+                  <th className="text-[9px] font-bold text-zinc-500 uppercase pb-3 pr-4">Idle</th>
+                  <th className="text-[9px] font-bold text-zinc-500 uppercase pb-3 pr-4">Maintenance</th>
+                  <th className="text-[9px] font-bold text-zinc-500 uppercase pb-3 pr-4">Utilization</th>
+                  <th className="text-[9px] font-bold text-zinc-500 uppercase pb-3">Trend</th>
                 </tr>
               </thead>
               <tbody>
+                {vehicles.length === 0 && (
+                  <tr><td colSpan={7} className="text-center text-xs text-zinc-600 py-8">No fleet data available yet.</td></tr>
+                )}
                 {vehicles.map((v, i) => (
-                  <tr key={i} className="border-b border-gray-50 dark:border-zinc-900/50">
-                    <td className="text-[10px] font-semibold text-gray-900 dark:text-white py-2.5 pr-4 capitalize">{v.type}</td>
-                    <td className="text-[10px] text-gray-600 dark:text-white py-2.5 pr-4">{v.total}</td>
-                    <td className="text-[10px] text-green-600 dark:text-green-400 py-2.5 pr-4 font-semibold">{v.active}</td>
-                    <td className="text-[10px] text-amber-600 dark:text-amber-400 py-2.5 pr-4">{v.idle}</td>
-                    <td className="text-[10px] text-red-600 dark:text-red-400 py-2.5 pr-4">{v.maintenance}</td>
-                    <td className="py-2.5 pr-4">
+                  <tr key={i} className="border-b border-zinc-800/50">
+                    <td className="text-[10px] font-semibold text-white py-3 pr-4 capitalize">{v.type}</td>
+                    <td className="text-[10px] text-zinc-300 py-3 pr-4">{v.total}</td>
+                    <td className="text-[10px] text-accent-green py-3 pr-4 font-semibold">{v.active}</td>
+                    <td className="text-[10px] text-accent-yellow py-3 pr-4">{v.idle}</td>
+                    <td className="text-[10px] text-accent-rose py-3 pr-4">{v.maintenance}</td>
+                    <td className="py-3 pr-4">
                       <div className="flex items-center gap-2">
-                        <div className="flex-1 h-1.5 bg-gray-100 dark:bg-black rounded-full max-w-[60px]">
-                          <div className={`h-full rounded-full ${v.utilization >= 70 ? 'bg-green-500' : v.utilization >= 40 ? 'bg-amber-500' : 'bg-red-500'}`}
+                        <div className="flex-1 h-1.5 bg-zinc-800 rounded-full max-w-[60px]">
+                          <div className={`h-full rounded-full ${v.utilization >= 70 ? 'bg-accent-green' : v.utilization >= 40 ? 'bg-accent-yellow' : 'bg-accent-rose'}`}
                             style={{ width: `${v.utilization}%` }}></div>
                         </div>
-                        <span className="text-[10px] font-bold text-gray-900 dark:text-white">{v.utilization.toFixed(1)}%</span>
+                        <span className="text-[10px] font-bold text-white">{v.utilization.toFixed(1)}%</span>
                       </div>
                     </td>
-                    <td className="py-2.5">
-                      <span className={`material-icons text-sm ${v.utilization >= 70 ? 'text-green-600' : 'text-red-500'}`}>
+                    <td className="py-3">
+                      <span className={`material-icons text-sm ${v.utilization >= 70 ? 'text-accent-green' : 'text-accent-rose'}`}>
                         {v.utilization >= 70 ? 'trending_up' : 'trending_down'}
                       </span>
                     </td>
@@ -217,47 +209,35 @@ const FleetScreen: React.FC = () => {
 
       {/* Optimization Tab */}
       {tab === 'optimization' && (
-        <div className="space-y-3">
-          <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-4">
-            <h3 className="text-xs font-bold text-gray-900 dark:text-white mb-1 flex items-center gap-2">
-              <span className="material-icons text-sm text-violet-500">auto_fix_high</span>Fleet Optimization Insights
-            </h3>
-            <p className="text-[10px] text-gray-400 mb-4">AI-generated recommendations to improve fleet efficiency</p>
+        <div className="space-y-4">
+          <div className="card !pb-3">
+            <h3 className="text-sm font-bold text-white mb-1">Fleet Optimization Insights</h3>
+            <p className="text-[10px] text-zinc-500">AI-generated recommendations to improve fleet efficiency</p>
           </div>
           {insights.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {insights.map((ins, i) => {
-                const prColors: Record<string, { icon: string; border: string; bg: string; text: string; }> = {
-                  high: { icon: 'priority_high', border: 'border-red-200 dark:border-red-800', bg: 'bg-red-50 dark:bg-red-500/10', text: 'text-red-600 dark:text-red-400' },
-                  medium: { icon: 'remove', border: 'border-amber-200 dark:border-amber-800', bg: 'bg-amber-50 dark:bg-amber-500/10', text: 'text-amber-600 dark:text-amber-400' },
-                  low: { icon: 'arrow_downward', border: 'border-blue-200 dark:border-blue-800', bg: 'bg-blue-50 dark:bg-blue-500/10', text: 'text-blue-600 dark:text-blue-400' },
+                const prColors: Record<string, { border: string; accent: string }> = {
+                  high: { border: 'border-red-500/30', accent: 'text-red-400' },
+                  medium: { border: 'border-amber-500/30', accent: 'text-amber-400' },
+                  low: { border: 'border-accent-cyan/30', accent: 'text-accent-cyan' },
                 };
                 const pc = prColors[ins.priority] || prColors.medium;
                 return (
-                  <div key={i} className={`rounded-xl border ${pc.border} ${pc.bg} p-4`}>
-                    <div className="flex items-start gap-3">
-                      <div className={`size-8 rounded-lg flex items-center justify-center ${pc.text} bg-white dark:bg-black flex-shrink-0`}>
-                        <span className="material-icons text-base">{pc.icon}</span>
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <h4 className="text-xs font-bold text-gray-900 dark:text-white">{ins.title}</h4>
-                          <span className={`text-[8px] font-bold uppercase px-1.5 py-0.5 rounded ${pc.text} bg-white/50 dark:bg-black/50`}>{ins.priority}</span>
-                        </div>
-                        <p className="text-[10px] text-gray-600 dark:text-white leading-relaxed">{ins.suggestion}</p>
-                        <p className="text-[9px] font-semibold text-gray-400 mt-2 flex items-center gap-1">
-                          <span className="material-icons" style={{ fontSize: '10px' }}>trending_up</span>Expected Impact: {ins.impact}
-                        </p>
-                      </div>
+                  <div key={i} className={`card border-l-[3px] ${pc.border}`}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <h4 className="text-xs font-bold text-white">{ins.title}</h4>
+                      <span className={`text-[8px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-zinc-800 ${pc.accent}`}>{ins.priority}</span>
                     </div>
+                    <p className="text-[10px] text-zinc-400 leading-relaxed">{ins.suggestion}</p>
+                    <p className={`text-[9px] font-semibold mt-2 ${pc.accent}`}>Impact: {ins.impact}</p>
                   </div>
                 );
               })}
             </div>
           ) : (
-            <div className="bg-white dark:bg-black rounded-xl border border-gray-200 dark:border-zinc-900 p-8 text-center">
-              <span className="material-icons text-3xl text-gray-300 dark:text-gray-600 mb-2">auto_fix_high</span>
-              <p className="text-xs text-gray-400">No optimization insights available. Start the ML service to generate recommendations.</p>
+            <div className="card text-center py-8">
+              <p className="text-xs text-zinc-500">No optimization insights available. Start the ML service to generate recommendations.</p>
             </div>
           )}
         </div>
