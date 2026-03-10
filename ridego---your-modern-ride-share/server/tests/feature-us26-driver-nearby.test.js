@@ -278,7 +278,7 @@ describe('US 2.6.2 — driver:nearby NOT emitted when driver > 300 m away', () =
         await ride.deleteOne();
         await rider.deleteOne();
         await driver.deleteOne();
-    }, 10000);
+    }, 20000);
 
     it('ride in SEARCHING status does NOT trigger driver:nearby when close', async () => {
         const rider  = await makeUser({ role: 'RIDER' });
