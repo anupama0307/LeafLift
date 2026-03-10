@@ -2007,7 +2007,16 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 const soloPrice = route ? Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate) : 0;
                                 const co2 = route ? calculateCO2(route.distance, cat.id) : 0;
                                 const co2Pool = route ? calculateCO2(route.distance, 'pool') : 0;
-                                const etaMin = route ? Math.round(route.duration / 60) : 0;
+
+                                // US 2.1 — per-vehicle ETA using vehicle-specific speed assumption
+                                const VEHICLE_SPEED_KMH: Record<string, number> = { BIKE: 20, AUTO: 25, CAR: 28, BIG_CAR: 26 };
+                                const vehicleSpeed = VEHICLE_SPEED_KMH[cat.id] || 28;
+                                const distKm = route
+                                    ? route.distance / 1000
+                                    : pickupCoords && dropoffCoords
+                                        ? getDistanceKm(pickupCoords.lat, pickupCoords.lng, dropoffCoords.lat, dropoffCoords.lng)
+                                        : 0;
+                                const etaMin = distKm > 0 ? Math.max(1, Math.round((distKm / vehicleSpeed) * 60)) : 0;
 
                                 // 3.5.2 — determine eco tier for this vehicle + mode
                                 const isPoolMode = rideMode === 'Pooled';
@@ -2156,6 +2165,62 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 </span>
                             </div>
                         )}
+                        {/* ── US 2.1 — Trip preview: distance, duration, map-pin address preview ── */}
+                        {(() => {
+                            const route = availableRoutes[selectedRouteIndex];
+                            const tripKm: number | null = route
+                                ? parseFloat((route.distance / 1000).toFixed(1))
+                                : pickupCoords && dropoffCoords
+                                ? parseFloat(getDistanceKm(pickupCoords.lat, pickupCoords.lng, dropoffCoords.lat, dropoffCoords.lng).toFixed(1))
+                                : null;
+                            // Use selected vehicle's speed for the preview card duration
+                            const PREVIEW_SPEED: Record<string, number> = { BIKE: 20, AUTO: 25, CAR: 28, BIG_CAR: 26 };
+                            const previewSpeed = PREVIEW_SPEED[selectedCategory] || 28;
+                            const tripMin: number | null = tripKm !== null
+                                ? Math.max(1, Math.round((tripKm / previewSpeed) * 60))
+                                : null;
+                            if (tripKm === null) return null;
+                            return (
+                                <div className="mb-3 bg-gray-50 dark:bg-zinc-800/60 border border-gray-100 dark:border-zinc-700 rounded-2xl overflow-hidden">
+                                    {/* 2.1.2 — Distance + Duration stats */}
+                                    <div className="flex divide-x divide-gray-200 dark:divide-zinc-700">
+                                        <div className="flex-1 flex items-center gap-2 px-4 py-3">
+                                            <span className="material-icons-outlined text-blue-500 text-[18px]">straighten</span>
+                                            <div>
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 dark:text-zinc-500">Distance</p>
+                                                <p className="text-base font-black dark:text-white">{tripKm}<span className="text-xs font-bold"> km</span></p>
+                                            </div>
+                                        </div>
+                                        <div className="flex-1 flex items-center gap-2 px-4 py-3">
+                                            <span className="material-icons-outlined text-orange-500 text-[18px]">schedule</span>
+                                            <div>
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 dark:text-zinc-500">
+                                                    {VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label ?? 'Est.'} Duration
+                                                </p>
+                                                <p className="text-base font-black dark:text-white">{tripMin}<span className="text-xs font-bold"> min</span></p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {/* 2.1.3 — Map-pin address preview */}
+                                    <div className="px-4 pb-3 pt-1 border-t border-gray-100 dark:border-zinc-700">
+                                        <div className="flex items-stretch gap-2">
+                                            {/* Pin rail */}
+                                            <div className="flex flex-col items-center pt-1">
+                                                <div className="size-3 rounded-full bg-green-500 shrink-0" />
+                                                <div className="flex-1 w-0.5 border-l-2 border-dashed border-gray-300 dark:border-zinc-600 my-1" style={{ minHeight: 20 }} />
+                                                <div className="size-3 rounded-full bg-red-500 shrink-0" />
+                                            </div>
+                                            {/* Addresses */}
+                                            <div className="flex-1 min-w-0 flex flex-col justify-between py-0.5 gap-1">
+                                                <p className="text-xs font-semibold text-gray-700 dark:text-gray-200 truncate">{pickup || 'Pickup'}</p>
+                                                <p className="text-xs font-semibold text-gray-700 dark:text-gray-200 truncate">{destination || 'Dropoff'}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })()}
+
                         <button
                             onClick={() => setShowPaymentModal(true)}
                             className="w-full flex items-center justify-between mb-3 p-3 bg-gray-50 dark:bg-zinc-800 rounded-xl hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors"

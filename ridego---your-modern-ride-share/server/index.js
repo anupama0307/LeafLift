@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
@@ -2133,6 +2133,42 @@ app.get('/api/rides/driver/:driverId', async (req, res) => {
  *               items:
  *                 $ref: '#/components/schemas/Ride'
  */
+// ── US 2.1 — Trip distance & duration estimate before booking ────────────────────
+// GET /api/rides/estimate?pickupLat=&pickupLng=&dropoffLat=&dropoffLng=
+// Returns straight-line distance (Haversine) + ETA per vehicle category.
+app.get('/api/rides/estimate', (req, res) => {
+    const { pickupLat, pickupLng, dropoffLat, dropoffLng } = req.query;
+    const pLat = parseFloat(pickupLat);
+    const pLng = parseFloat(pickupLng);
+    const dLat = parseFloat(dropoffLat);
+    const dLng = parseFloat(dropoffLng);
+
+    if ([pLat, pLng, dLat, dLng].some(n => Number.isNaN(n))) {
+        return res.status(400).json({ message: 'pickupLat, pickupLng, dropoffLat, dropoffLng are required numeric query params' });
+    }
+
+    const straightLineKm = parseFloat(getDistanceKm(pLat, pLng, dLat, dLng).toFixed(2));
+
+    // Speed assumptions (km/h) to estimate door-to-door travel time
+    const SPEED_KMH = { BIKE: 20, AUTO: 25, CAR: 28, BIG_CAR: 28 };
+    const vehicleEstimates = Object.entries(SPEED_KMH).map(([category, speed]) => ({
+        category,
+        straightLineKm,
+        estimatedDurationMin: Math.max(1, Math.round((straightLineKm / speed) * 60)),
+        co2EmittedG: Math.round(straightLineKm * (CO2_RATES_G_PER_KM[category] || 120)),
+    }));
+
+    // Default estimate uses average car speed (28 km/h)
+    const estimatedDurationMin = Math.max(1, Math.round((straightLineKm / SPEED_KMH.CAR) * 60));
+
+    res.json({
+        straightLineKm,
+        estimatedDurationMin,
+        note: 'Straight-line (Haversine) distance. Actual road distance may be longer.',
+        vehicleEstimates,
+    });
+});
+
 app.get('/api/rides/nearby', async (req, res) => {
     try {
         const { lat, lng, radius = 6 } = req.query;
