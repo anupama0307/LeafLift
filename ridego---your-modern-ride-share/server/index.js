@@ -253,6 +253,17 @@ io.on('connection', (socket) => {
         entry.location = { lat, lng, updatedAt: new Date() };
         entry.lastUpdate = now;
         onlineDrivers.set(driverId, entry);
+
+        // Cache driver's vehicleType once (avoids repeated DB hits)
+        if (!entry.vehicleType) {
+            User.findById(driverId).select('vehicleType').then(u => {
+                if (u?.vehicleType) {
+                    const e = onlineDrivers.get(driverId);
+                    if (e) e.vehicleType = u.vehicleType;
+                }
+            }).catch(() => {});
+        }
+
         io.to('riders:online').emit('nearby:driver:update', { driverId, lat, lng });
 
         // ── US 2.6 — Driver Nearby Detection ──
@@ -281,7 +292,7 @@ io.on('connection', (socket) => {
         io.to('riders:online').emit('nearby:driver:remove', { driverId });
     });
 
-    socket.on('rider:search', ({ rideId, riderId, pickup, dropoff, fare, isPooled }) => {
+    socket.on('rider:search', ({ rideId, riderId, pickup, dropoff, fare, isPooled, vehicleCategory }) => {
         if (!rideId || !pickup || !pickup.lat || !pickup.lng) return;
         socket.data.searchRideId = rideId;
 
@@ -291,13 +302,19 @@ io.on('connection', (socket) => {
         if (isPooled) return;
 
         const NEARBY_RADIUS_KM = 6;
-        const payload = { rideId, riderId, pickup, dropoff, fare, isPooled };
+        const payload = { rideId, riderId, pickup, dropoff, fare, isPooled, vehicleCategory };
 
         // Send only to drivers within radius instead of broadcasting to all
         for (const [driverId, entry] of onlineDrivers.entries()) {
             if (!entry.location || typeof entry.location.lat !== 'number') {
                 // Driver has no GPS yet, skip
                 continue;
+            }
+            // Vehicle type filter: only match if driver's type matches requested category
+            if (entry.vehicleType && vehicleCategory) {
+                const match = entry.vehicleType === vehicleCategory ||
+                    (entry.vehicleType === 'SUV' && vehicleCategory === 'BIG_CAR');
+                if (!match) continue;
             }
             const dist = getDistanceKm(entry.location.lat, entry.location.lng, pickup.lat, pickup.lng);
             if (dist !== null && dist <= NEARBY_RADIUS_KM) {
@@ -359,6 +376,12 @@ io.on('connection', (socket) => {
         // Both rides continue searching — broadcast individual requests to nearby drivers
         broadcastIndividualRide(proposal.rideAId, io);
         broadcastIndividualRide(proposal.rideBId, io);
+    });
+
+    // ─── UPI Payment: Rider requests driver show QR ───
+    socket.on('payment:upi:request', ({ driverId, rideId, fare }) => {
+        if (!driverId) return;
+        io.to(`user:${driverId}`).emit('payment:upi:show', { rideId, fare });
     });
 
     socket.on('disconnect', () => {
@@ -1295,10 +1318,21 @@ app.get('/api/users/:userId', async (req, res) => {
  */
 app.put('/api/users/:userId', async (req, res) => {
     try {
-        const allowedFields = ['firstName', 'lastName', 'email', 'phone', 'dob', 'gender', 'photoUrl', 'license', 'aadhar', 'vehicleMake', 'vehicleModel', 'vehicleNumber', 'accessibilitySupport'];
+        const allowedFields = ['firstName', 'lastName', 'email', 'phone', 'dob', 'gender', 'photoUrl', 'license', 'aadhar', 'licenseUrl', 'aadharUrl', 'vehicleMake', 'vehicleModel', 'vehicleNumber', 'vehicleType', 'accessibilitySupport'];
         const updates = {};
         for (const key of allowedFields) {
             if (req.body[key] !== undefined) updates[key] = req.body[key];
+        }
+        // Auto-verify driver when both license and aadhar are submitted
+        const currentUser = await User.findById(req.params.userId);
+        if (currentUser?.role === 'DRIVER') {
+            const newLicense = updates.license || currentUser.license;
+            const newAadhar = updates.aadhar || currentUser.aadhar;
+            if (newLicense && newAadhar) {
+                updates.isVerified = true;
+                updates.verificationStatus = 'APPROVED';
+                updates.verificationDate = new Date();
+            }
         }
         const user = await User.findByIdAndUpdate(req.params.userId, updates, { new: true, runValidators: true });
         if (!user) return res.status(404).json({ message: 'User not found' });
@@ -2158,6 +2192,12 @@ app.post('/api/rides', async (req, res) => {
             // Send to drivers within radius
             for (const [driverId, entry] of onlineDrivers) {
                 if (!entry.location) continue;
+                // Vehicle type filter
+                if (entry.vehicleType && ride.vehicleCategory) {
+                    const match = entry.vehicleType === ride.vehicleCategory ||
+                        (entry.vehicleType === 'SUV' && ride.vehicleCategory === 'BIG_CAR');
+                    if (!match) continue;
+                }
                 const dist = getDistanceKm(ride.pickup.lat, ride.pickup.lng, entry.location.lat, entry.location.lng);
                 if (dist !== null && dist <= RIDE_BROADCAST_RADIUS_KM) {
                     for (const sid of entry.socketIds) {

@@ -75,6 +75,10 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
   const [poolStopOtp, setPoolStopOtp] = useState('');
   const [poolStopLoading, setPoolStopLoading] = useState(false);
 
+  // ─── UPI QR Payment Modal State ───
+  const [showUpiQrModal, setShowUpiQrModal] = useState(false);
+  const [upiPaymentFare, setUpiPaymentFare] = useState<number | null>(null);
+
   const mapRef = useRef<any>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const driverMarkerRef = useRef<any>(null);
@@ -343,6 +347,11 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
       }
     };
 
+    const handleUpiShow = (payload: any) => {
+      setUpiPaymentFare(payload?.fare || null);
+      setShowUpiQrModal(true);
+    };
+
     socket.on('ride:request', handleRequest);
     socket.on('ride:status', handleStatus);
     socket.on('ride:otp', handleOtp);
@@ -358,6 +367,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
     socket.on('ride:stop-skipped', handleStopSkipped);
     socket.on('ride:canceled', handleRideCanceled);
     socket.on('pool:stop-update', handlePoolStopUpdate);
+    socket.on('payment:upi:show', handleUpiShow);
 
     return () => {
       socket.off('ride:request', handleRequest);
@@ -375,6 +385,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
       socket.off('ride:stop-skipped', handleStopSkipped);
       socket.off('ride:canceled', handleRideCanceled);
       socket.off('pool:stop-update', handlePoolStopUpdate);
+      socket.off('payment:upi:show', handleUpiShow);
     };
   }, [user?._id, user?.id]);
 
@@ -450,6 +461,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
         const { latitude, longitude } = position.coords;
         const coords = { lat: latitude, lng: longitude };
         setDriverLocation(coords);
+        driverLocationRef.current = coords; // keep ref immediately in sync (no render-cycle delay)
         socketRef.current?.emit('driver:location', { driverId: user?._id || user?.id, lat: latitude, lng: longitude });
 
         const userId = user?._id || user?.id;
@@ -515,12 +527,15 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
   }, [riderLocation, driverLocation, mapLoaded]);
 
   const isWithinRadius = (req: any, radiusKm = 6) => {
-    if (!driverLocation || !req.pickup) return false;
+    // Use ref to avoid stale closure — socket handlers capture this function at mount time
+    // but driverLocationRef is always current
+    const loc = driverLocationRef.current;
+    if (!loc || !req.pickup) return false;
     const R = 6371;
     const toRad = (v: number) => (v * Math.PI) / 180;
-    const dLat = toRad(req.pickup.lat - driverLocation.lat);
-    const dLon = toRad(req.pickup.lng - driverLocation.lng);
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(driverLocation.lat)) * Math.cos(toRad(req.pickup.lat)) * Math.sin(dLon / 2) ** 2;
+    const dLat = toRad(req.pickup.lat - loc.lat);
+    const dLon = toRad(req.pickup.lng - loc.lng);
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(loc.lat)) * Math.cos(toRad(req.pickup.lat)) * Math.sin(dLon / 2) ** 2;
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c <= radiusKm;
   };
@@ -1000,6 +1015,19 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
             <div>
               <h1 className="text-3xl font-black text-black dark:text-white leading-tight">Welcome,</h1>
               <h2 className="text-2xl font-bold text-leaf-600 dark:text-leaf-400">{user?.firstName || 'Driver'}</h2>
+              {(user?.vehicleType || user?.vehicleMake) && (
+                <div className="flex items-center gap-2 mt-1.5">
+                  <span className="material-icons-outlined text-sm text-gray-400">
+                    {user?.vehicleType === 'BIKE' ? 'two_wheeler' : user?.vehicleType === 'AUTO' ? 'airport_shuttle' : user?.vehicleType === 'SUV' ? 'rv_hookup' : 'directions_car'}
+                  </span>
+                  <span className="text-xs font-black text-gray-500 dark:text-zinc-400 uppercase tracking-wide">
+                    {[user?.vehicleType, user?.vehicleMake, user?.vehicleModel].filter(Boolean).join(' · ')}
+                  </span>
+                  {user?.vehicleNumber && (
+                    <span className="text-[10px] font-black bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400 px-2 py-0.5 rounded-full">{user.vehicleNumber}</span>
+                  )}
+                </div>
+              )}
             </div>
             <button
               onClick={() => setIsNotificationsOpen(true)}
@@ -1134,7 +1162,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
           </div>
 
           {!activeRide && (
-            <div className="absolute bottom-0 inset-x-0 z-40 bg-white dark:bg-zinc-950 rounded-t-[40px] p-6 shadow-2xl animate-in slide-in-from-bottom duration-500">
+            <div className="absolute bottom-[88px] inset-x-0 z-40 bg-white dark:bg-zinc-950 rounded-t-[40px] p-6 shadow-2xl animate-in slide-in-from-bottom duration-500">
               <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-6"></div>
               <div className="flex items-center justify-between mb-6">
                 <h3 className="text-2xl font-black dark:text-white">Nearby Requests</h3>
@@ -1239,7 +1267,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
       {/* Shared Ride Overlay */}
       {
         activeRide && (
-          <div className="absolute bottom-0 inset-x-0 z-50 bg-white dark:bg-zinc-900 rounded-t-3xl shadow-2xl p-6">
+          <div className="absolute bottom-[88px] inset-x-0 z-50 bg-white dark:bg-zinc-900 rounded-t-3xl shadow-2xl p-6 max-h-[70vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <p className="text-xs uppercase tracking-widest text-gray-400 font-bold">Ride Status</p>
@@ -1632,25 +1660,7 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
         )
       }
 
-      {/* Floating Nav - hidden during active ride to avoid overlapping the ride panel */}
-      {
-        !activeRide && (
-          <div className="absolute bottom-8 left-0 right-0 z-40 px-8 flex justify-between pointer-events-none">
-            <button
-              onClick={() => onNavigate?.('ACCOUNT')}
-              className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
-            >
-              <span className="material-icons-outlined">person</span>
-            </button>
-            <button
-              onClick={() => onNavigate?.('INBOX')}
-              className="size-14 bg-white dark:bg-zinc-900 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto border border-gray-100 dark:border-zinc-700 hover:scale-105 transition-transform"
-            >
-              <span className="material-icons-outlined">chat_bubble</span>
-            </button>
-          </div>
-        )
-      }
+
 
       {/* Modals */}
       {
@@ -1912,6 +1922,49 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
           </div>
         )
       }
+      {/* ── UPI QR Payment Modal ── */}
+      {showUpiQrModal && (
+        <div className="absolute inset-0 z-[200] bg-black/80 backdrop-blur-md flex items-center justify-center p-6">
+          <div className="bg-white dark:bg-zinc-900 w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center">
+            <div className="mb-4">
+              <div className="size-14 bg-purple-600 text-white rounded-2xl flex items-center justify-center mx-auto mb-3">
+                <span className="material-icons-outlined text-3xl">qr_code_2</span>
+              </div>
+              <h3 className="text-xl font-black dark:text-white">Scan to Pay</h3>
+              {upiPaymentFare && (
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Amount: <span className="font-black text-purple-600">₹{upiPaymentFare}</span></p>
+              )}
+            </div>
+
+            {user?.upiQrCodeUrl ? (
+              <div className="flex justify-center mb-5">
+                <div className="bg-white p-3 rounded-2xl shadow-sm border border-purple-100">
+                  <img src={user.upiQrCodeUrl} alt="UPI QR" className="size-52 object-contain" />
+                </div>
+              </div>
+            ) : user?.upiId ? (
+              <div className="bg-purple-50 dark:bg-purple-900/20 rounded-2xl p-4 mb-5">
+                <p className="text-[10px] uppercase font-black text-purple-400 mb-1">Your UPI ID</p>
+                <p className="text-lg font-black text-purple-700 dark:text-purple-300">{user.upiId}</p>
+              </div>
+            ) : (
+              <div className="bg-amber-50 dark:bg-amber-900/20 rounded-2xl p-4 mb-5">
+                <p className="text-sm font-bold text-amber-700 dark:text-amber-400">No UPI details set up</p>
+                <p className="text-[10px] text-amber-600 dark:text-amber-500 mt-1">Add your UPI QR in Account settings</p>
+              </div>
+            )}
+
+            <p className="text-[11px] text-gray-400 dark:text-gray-500 mb-5">Show this screen to the rider — they can scan with GPay or any UPI app.</p>
+
+            <button
+              onClick={() => setShowUpiQrModal(false)}
+              className="w-full bg-black dark:bg-white text-white dark:text-black font-black py-4 rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-all"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
     </div >
   );
 };

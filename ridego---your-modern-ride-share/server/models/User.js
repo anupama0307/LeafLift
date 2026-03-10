@@ -26,6 +26,7 @@ const userSchema = new mongoose.Schema({
     vehicleMake: { type: String },
     vehicleModel: { type: String },
     vehicleNumber: { type: String },
+    vehicleType: { type: String, enum: ['BIKE', 'AUTO', 'CAR', 'SUV'], default: 'CAR' },
     rating: { type: Number, default: 4.8 },
     isVerified: { type: Boolean, default: false },
     verificationStatus: { type: String, enum: ['PENDING', 'APPROVED', 'REJECTED'], default: 'PENDING' },

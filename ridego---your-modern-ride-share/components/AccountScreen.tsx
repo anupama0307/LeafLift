@@ -1,5 +1,5 @@
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { auth } from '../src/firebase';
 
 interface AccountScreenProps {
@@ -8,7 +8,7 @@ interface AccountScreenProps {
   onUserUpdate?: (updatedUser: any) => void;
 }
 
-type AccountSubScreen = 'MAIN' | 'SETTINGS' | 'SAFETY_PRIVACY' | 'HELP' | 'WALLET' | 'TRIPS' | 'CO2_HISTORY' | 'SUSTAINABILITY';
+type AccountSubScreen = 'MAIN' | 'SETTINGS' | 'SAFETY_PRIVACY' | 'HELP' | 'WALLET' | 'TRIPS' | 'CO2_HISTORY' | 'SUSTAINABILITY' | 'ECO_DRIVING';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
@@ -63,6 +63,15 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
 
   // Sustainability trend data (last 7 completed rides)
   const [sustainabilityTrends, setSustainabilityTrends] = useState<Array<{ date: string; co2Saved: number; co2Emitted: number; distance: number }>>([]);
+
+  // Verification modal state
+  const [verifyModalOpen, setVerifyModalOpen] = useState(false);
+  const [verifyDocType, setVerifyDocType] = useState<'license' | 'aadhar'>('license');
+  const [verifyDocNumber, setVerifyDocNumber] = useState('');
+  const [verifyDocPreview, setVerifyDocPreview] = useState<string | null>(null);
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!user?._id) return;
@@ -1091,6 +1100,125 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
   };
 
   // --- US 3.3 — CO2 History Screen ---
+  const renderEcoDriving = () => {
+    const totalSaved = stats?.totalCO2Saved || 0;
+    const totalEmitted = stats?.totalCO2Emitted || 0;
+    const totalTrips = stats?.totalTrips || 0;
+    const totalKm = stats?.totalKmTraveled || 0;
+    const total = totalSaved + totalEmitted;
+    const efficiencyScore = total > 0 ? Math.round((totalSaved / total) * 100) : 0;
+    const savedKg = (totalSaved / 1000).toFixed(2);
+    const emittedKg = (totalEmitted / 1000).toFixed(2);
+    const savedRatio = total > 0 ? totalSaved / total : 0;
+    const treeEquiv = (totalSaved / 21000).toFixed(2);
+
+    const metrics = [
+      { label: 'Total Trips', value: String(totalTrips), icon: 'directions_car', color: 'bg-blue-50 dark:bg-blue-900/20', iconColor: 'text-blue-500' },
+      { label: 'Km Driven', value: `${totalKm} km`, icon: 'speed', color: 'bg-purple-50 dark:bg-purple-900/20', iconColor: 'text-purple-500' },
+      { label: 'CO₂ Saved', value: `${savedKg} kg`, icon: 'eco', color: 'bg-green-50 dark:bg-green-900/20', iconColor: 'text-green-500' },
+      { label: 'CO₂ Emitted', value: `${emittedKg} kg`, icon: 'local_fire_department', color: 'bg-orange-50 dark:bg-orange-900/20', iconColor: 'text-orange-500' },
+    ];
+
+    return (
+      <div className="px-5 pb-24 animate-in fade-in duration-300 bg-white dark:bg-black min-h-full">
+        <SubScreenHeader title="Eco-Driving Insights" onBack={() => setSubScreen('MAIN')} />
+
+        {/* Efficiency Score Hero */}
+        <div className="bg-gradient-to-br from-leaf-500 to-emerald-700 rounded-3xl p-6 mb-6 text-white shadow-xl relative overflow-hidden">
+          <div className="absolute right-3 bottom-3 opacity-10">
+            <span className="material-icons text-[90px]">park</span>
+          </div>
+          <p className="text-[10px] font-black uppercase tracking-widest opacity-70 mb-1">Eco Efficiency Score</p>
+          <div className="flex items-end gap-3 mb-4">
+            <h2 className="text-6xl font-black leading-none">{efficiencyScore}</h2>
+            <span className="text-2xl font-bold mb-1">%</span>
+          </div>
+          {/* Score bar */}
+          <div className="w-full bg-white/20 rounded-full h-2.5 overflow-hidden mb-2">
+            <div
+              className="bg-white h-2.5 rounded-full transition-all duration-700"
+              style={{ width: `${efficiencyScore}%` }}
+            />
+          </div>
+          <p className="text-xs opacity-80">
+            {efficiencyScore >= 70 ? '🌳 Excellent eco-driver!' : efficiencyScore >= 40 ? '🌿 Good going, keep it up!' : totalTrips === 0 ? '🌱 Complete rides to build your score' : '🌱 Room to improve — try more eco routes'}
+          </p>
+        </div>
+
+        {/* 4-stat grid */}
+        <div className="grid grid-cols-2 gap-3 mb-6">
+          {metrics.map(m => (
+            <div key={m.label} className={`${m.color} rounded-2xl p-4 border border-gray-100 dark:border-zinc-800`}>
+              <div className={`size-9 rounded-xl bg-white dark:bg-zinc-900 flex items-center justify-center mb-3 shadow-sm`}>
+                <span className={`material-icons-outlined text-lg ${m.iconColor}`}>{m.icon}</span>
+              </div>
+              <p className="text-xl font-black text-black dark:text-white">{m.value}</p>
+              <p className="text-[10px] font-bold text-gray-500 dark:text-zinc-400 uppercase tracking-wide">{m.label}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* CO2 breakdown bar */}
+        {total > 0 && (
+          <div className="bg-gray-50 dark:bg-zinc-900/50 rounded-2xl border border-gray-100 dark:border-zinc-800 p-4 mb-6">
+            <p className="text-xs font-black uppercase tracking-widest text-gray-400 mb-3">Emissions Breakdown</p>
+            <div className="flex h-4 rounded-full overflow-hidden mb-2">
+              <div className="bg-green-500 transition-all duration-700" style={{ width: `${Math.round(savedRatio * 100)}%` }} />
+              <div className="bg-orange-400 flex-1" />
+            </div>
+            <div className="flex justify-between">
+              <span className="text-[10px] font-bold text-green-600 dark:text-green-400">🟢 {savedKg} kg saved ({Math.round(savedRatio * 100)}%)</span>
+              <span className="text-[10px] font-bold text-orange-500">🟠 {emittedKg} kg emitted</span>
+            </div>
+          </div>
+        )}
+
+        {/* Tree equivalent */}
+        <div className="bg-leaf-50 dark:bg-leaf-900/20 rounded-2xl border border-leaf-100 dark:border-leaf-900/40 p-4 mb-6">
+          <div className="flex items-center gap-3">
+            <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400 text-2xl">park</span>
+            <div>
+              <p className="text-sm font-black text-leaf-700 dark:text-leaf-400">{treeEquiv} tree-equivalents absorbed</p>
+              <p className="text-[10px] text-gray-500 dark:text-zinc-400 mt-0.5">Based on ~21 kg CO₂ absorbed per tree/year</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Recent trip eco trend from sustainability trends */}
+        {sustainabilityTrends.length > 0 && (
+          <div className="bg-gray-50 dark:bg-zinc-900/50 rounded-2xl border border-gray-100 dark:border-zinc-800 p-4">
+            <p className="text-xs font-black uppercase tracking-widest text-gray-400 mb-3">Recent Trip Eco Trend</p>
+            <div className="space-y-2">
+              {[...sustainabilityTrends].slice(-7).reverse().map((t, i) => {
+                const saved = t.co2Saved || 0;
+                const emitted = t.co2Emitted || 0;
+                const tot = saved + emitted;
+                const pct = tot > 0 ? Math.round((saved / tot) * 100) : 0;
+                return (
+                  <div key={i} className="flex items-center gap-3">
+                    <span className="text-[10px] text-gray-400 w-16 shrink-0">{new Date(t.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</span>
+                    <div className="flex-1 bg-gray-200 dark:bg-zinc-700 rounded-full h-2 overflow-hidden">
+                      <div className="bg-green-500 h-2 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                    </div>
+                    <span className="text-[10px] font-black text-green-600 w-8 text-right">{pct}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {totalTrips === 0 && (
+          <div className="py-12 bg-gray-50 dark:bg-zinc-900 rounded-3xl flex flex-col items-center justify-center text-center px-8">
+            <span className="material-icons-outlined text-5xl text-gray-300 dark:text-zinc-600 mb-3">analytics</span>
+            <p className="font-black text-gray-400">No data yet</p>
+            <p className="text-sm text-gray-400 dark:text-zinc-500 mt-1">Complete your first ride to see your eco metrics here.</p>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderCO2History = () => {
     const summary = co2History?.summary;
     const monthly: any[] = co2History?.monthly || [];
@@ -1412,6 +1540,46 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
     );
   };
 
+  // --- Verification handlers ---
+  const handleOpenVerifyModal = (docType: 'license' | 'aadhar') => {
+    setVerifyDocType(docType);
+    setVerifyDocNumber(docType === 'license' ? (user?.license || '') : (user?.aadhar || ''));
+    setVerifyDocPreview(null);
+    setVerifyMsg(null);
+    setVerifyModalOpen(true);
+  };
+
+  const handleVerifySubmit = async () => {
+    if (!verifyDocNumber.trim()) { setVerifyMsg('Please enter the document number.'); return; }
+    setVerifyLoading(true);
+    try {
+      const updates: any = {};
+      if (verifyDocType === 'license') {
+        updates.license = verifyDocNumber.trim();
+        if (verifyDocPreview) updates.licenseUrl = verifyDocPreview;
+      } else {
+        updates.aadhar = verifyDocNumber.trim();
+        if (verifyDocPreview) updates.aadharUrl = verifyDocPreview;
+      }
+      const resp = await fetch(`${API_BASE_URL}/api/users/${user._id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+      if (resp.ok) {
+        const updated = await resp.json();
+        onUserUpdate?.(updated);
+        setVerifyMsg('✅ Document submitted!');
+        setTimeout(() => { setVerifyModalOpen(false); setVerifyMsg(null); }, 1500);
+      } else {
+        setVerifyMsg('Failed to submit. Please try again.');
+      }
+    } catch {
+      setVerifyMsg('Network error. Please try again.');
+    }
+    setVerifyLoading(false);
+  };
+
   // --- Route to sub-screens ---
   if (subScreen === 'SETTINGS') return renderSettings();
   if (subScreen === 'SAFETY_PRIVACY') return renderSafetyPrivacy();
@@ -1420,6 +1588,84 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
   if (subScreen === 'TRIPS') return renderTrips();
   if (subScreen === 'CO2_HISTORY') return renderCO2History();
   if (subScreen === 'SUSTAINABILITY') return renderSustainability();
+  if (subScreen === 'ECO_DRIVING') return renderEcoDriving();
+
+  // ─── Vehicle Section Component ───
+  const VehicleSection: React.FC<{ user: any; onUserUpdate?: (u: any) => void; apiBase: string }> = ({ user: u, onUserUpdate: onUpd, apiBase }) => {
+    const VTYPES = [
+      { id: 'BIKE', label: 'Bike', icon: 'two_wheeler' },
+      { id: 'AUTO', label: 'Auto', icon: 'airport_shuttle' },
+      { id: 'CAR', label: 'Car', icon: 'directions_car' },
+      { id: 'SUV', label: 'SUV', icon: 'rv_hookup' },
+    ];
+    const [vType, setVType] = React.useState(u?.vehicleType || 'CAR');
+    const [make, setMake] = React.useState(u?.vehicleMake || '');
+    const [model, setModel] = React.useState(u?.vehicleModel || '');
+    const [plate, setPlate] = React.useState(u?.vehicleNumber || '');
+    const [saving, setSaving] = React.useState(false);
+    const [saved, setSaved] = React.useState(false);
+
+    const handleSave = async () => {
+      setSaving(true);
+      try {
+        const resp = await fetch(`${apiBase}/api/users/${u._id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ vehicleType: vType, vehicleMake: make, vehicleModel: model, vehicleNumber: plate }),
+        });
+        if (resp.ok) { const updated = await resp.json(); onUpd?.(updated); setSaved(true); setTimeout(() => setSaved(false), 2000); }
+      } catch { /* silent */ }
+      setSaving(false);
+    };
+
+    return (
+      <div className="bg-gray-50 dark:bg-zinc-900/50 p-5 rounded-[32px] border border-gray-100 dark:border-zinc-800 space-y-4">
+        {/* Vehicle type picker */}
+        <div className="grid grid-cols-4 gap-2">
+          {VTYPES.map(v => (
+            <button
+              key={v.id}
+              onClick={() => setVType(v.id)}
+              className={`flex flex-col items-center gap-1.5 py-3 rounded-2xl border-2 transition-all ${
+                vType === v.id
+                  ? 'border-leaf-500 bg-leaf-50 dark:bg-leaf-900/20'
+                  : 'border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800'
+              }`}
+            >
+              <span className={`material-icons-outlined text-xl ${ vType === v.id ? 'text-leaf-600 dark:text-leaf-400' : 'text-gray-400' }`}>{v.icon}</span>
+              <span className={`text-[10px] font-black ${ vType === v.id ? 'text-leaf-700 dark:text-leaf-400' : 'text-gray-400' }`}>{v.label}</span>
+            </button>
+          ))}
+        </div>
+        {/* Make / Model / Plate */}
+        {['Make', 'Model', 'Plate No.'].map((lbl, i) => {
+          const val = [make, model, plate][i];
+          const setter = [setMake, setModel, setPlate][i];
+          return (
+            <div key={lbl}>
+              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">{lbl}</label>
+              <input
+                value={val}
+                onChange={e => setter(e.target.value)}
+                placeholder={lbl === 'Make' ? 'e.g. Honda' : lbl === 'Model' ? 'e.g. Activa' : 'e.g. TN 37 AB 1234'}
+                className="w-full px-4 py-2.5 rounded-2xl border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-sm font-bold text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-leaf-400"
+              />
+            </div>
+          );
+        })}
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="w-full py-3 rounded-2xl bg-black dark:bg-white text-white dark:text-black font-black text-sm flex items-center justify-center gap-2 disabled:opacity-50 transition-all"
+        >
+          {saving ? <span className="material-icons-outlined text-sm animate-spin">refresh</span>
+            : saved ? <span className="material-icons-outlined text-sm">check</span>
+            : <span className="material-icons-outlined text-sm">save</span>}
+          {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Vehicle'}
+        </button>
+      </div>
+    );
+  };
 
   if (isDriver) {
     return (
@@ -1467,43 +1713,156 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
           </div>
         </div>
 
+        {/* Vehicle Details */}
+        <div className="mb-8">
+          <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-4 px-1">Your Vehicle</h3>
+          <VehicleSection user={user} onUserUpdate={onUserUpdate} apiBase={API_BASE_URL} />
+        </div>
+
         {/* Driver Verification Status */}
         <div className="mb-8">
           <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-4 px-1">Verification Status</h3>
-          <div className="bg-gray-50 dark:bg-zinc-900/50 p-6 rounded-[32px] space-y-5 border border-gray-100 dark:border-zinc-800">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className="size-10 rounded-2xl bg-white dark:bg-zinc-800 flex items-center justify-center shadow-sm">
-                  <span className={`material-icons-outlined ${user?.license && user?.isVerified ? 'text-green-500' : 'text-amber-500'}`}>{user?.license && user?.isVerified ? 'verified_user' : 'hourglass_empty'}</span>
-                </div>
-                <span className="text-sm font-black">Driving License</span>
-              </div>
-              <span className={`material-icons ${user?.license && user?.isVerified ? 'text-green-500' : 'text-amber-500'}`}>{user?.license && user?.isVerified ? 'check_circle' : 'pending'}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className="size-10 rounded-2xl bg-white dark:bg-zinc-800 flex items-center justify-center shadow-sm">
-                  <span className={`material-icons-outlined ${user?.aadhar && user?.isVerified ? 'text-green-500' : 'text-amber-500'}`}>{user?.aadhar && user?.isVerified ? 'fingerprint' : 'hourglass_empty'}</span>
-                </div>
-                <span className="text-sm font-black">Aadhar Verification</span>
-              </div>
-              <span className={`material-icons ${user?.aadhar && user?.isVerified ? 'text-green-500' : 'text-amber-500'}`}>{user?.aadhar && user?.isVerified ? 'check_circle' : 'pending'}</span>
-            </div>
+          <div className="bg-gray-50 dark:bg-zinc-900/50 p-2 rounded-[32px] space-y-1 border border-gray-100 dark:border-zinc-800">
+            {[
+              { docType: 'license' as const, label: 'Driving License', icon: 'badge', iconVerified: 'verified_user' },
+              { docType: 'aadhar' as const, label: 'Aadhar Verification', icon: 'fingerprint', iconVerified: 'fingerprint' },
+            ].map(doc => {
+              const submitted = doc.docType === 'license' ? !!user?.license : !!user?.aadhar;
+              const isVerifiedDoc = submitted && !!user?.isVerified;
+              return (
+                <button
+                  key={doc.docType}
+                  onClick={() => !isVerifiedDoc && handleOpenVerifyModal(doc.docType)}
+                  className={`w-full flex items-center justify-between p-4 rounded-[24px] transition-all text-left ${!isVerifiedDoc ? 'hover:bg-gray-100 dark:hover:bg-zinc-800 active:scale-[0.98] cursor-pointer' : 'cursor-default'}`}
+                >
+                  <div className="flex items-center gap-4">
+                    <div className={`size-10 rounded-2xl flex items-center justify-center shadow-sm ${isVerifiedDoc ? 'bg-green-50 dark:bg-green-900/20' : submitted ? 'bg-amber-50 dark:bg-amber-900/20' : 'bg-white dark:bg-zinc-800'}`}>
+                      <span className={`material-icons-outlined ${isVerifiedDoc ? 'text-green-500' : submitted ? 'text-amber-500' : 'text-gray-400'}`}>{isVerifiedDoc ? doc.iconVerified : doc.icon}</span>
+                    </div>
+                    <div>
+                      <p className="text-sm font-black dark:text-white">{doc.label}</p>
+                      <p className={`text-[10px] font-bold ${isVerifiedDoc ? 'text-green-500' : submitted ? 'text-amber-500' : 'text-gray-400 dark:text-zinc-500'}`}>
+                        {isVerifiedDoc ? 'Verified ✓' : submitted ? 'Under review' : 'Tap to upload'}
+                      </p>
+                    </div>
+                  </div>
+                  {isVerifiedDoc
+                    ? <span className="material-icons text-green-500">check_circle</span>
+                    : <span className={`material-icons ${submitted ? 'text-amber-400' : 'text-gray-300 dark:text-zinc-600'}`}>{submitted ? 'pending' : 'upload_file'}</span>
+                  }
+                </button>
+              );
+            })}
           </div>
         </div>
 
         {/* Driver Menu */}
         <div className="space-y-1">
-          <MenuButton icon="analytics" title="Eco-Driving Insights" subtitle="Efficiency Score: 88%" badge="Eco" />
+          <MenuButton
+            icon="analytics"
+            title="Eco-Driving Insights"
+            subtitle={stats && (stats.totalCO2Saved + stats.totalCO2Emitted) > 0
+              ? `Efficiency: ${Math.round(stats.totalCO2Saved / (stats.totalCO2Saved + stats.totalCO2Emitted) * 100)}% eco-score`
+              : stats?.totalTrips > 0 ? `${stats.totalTrips} trips tracked` : 'Track your green driving metrics'}
+            badge="Eco"
+            onClick={() => setSubScreen('ECO_DRIVING')}
+          />
           <MenuButton icon="security" title="Safety & Privacy" subtitle="Managed transmission & encryption" onClick={() => setSubScreen('SAFETY_PRIVACY')} />
           <MenuButton icon="settings" title="Dashboard Settings" onClick={() => setSubScreen('SETTINGS')} />
-          <MenuButton icon="help_outline" title="Driver Support" />
           <MenuButton icon="logout" title="Sign out" destructive onClick={onSignOut} />
         </div>
 
         <div className="mt-12 opacity-30 text-center text-[10px] font-bold uppercase tracking-widest text-black dark:text-white pb-8">
           LeafLift Driver v1.2.0
         </div>
+
+        {/* Verification Upload Modal */}
+        {verifyModalOpen && (
+          <div className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex items-end justify-center">
+            <div className="bg-white dark:bg-zinc-950 w-full max-w-lg rounded-t-[40px] p-8 animate-in slide-in-from-bottom duration-300 shadow-2xl pb-12">
+              <div className="w-12 h-1.5 bg-gray-100 dark:bg-zinc-800 rounded-full mx-auto mb-6"></div>
+              <div className="flex items-center gap-3 mb-6">
+                <div className="size-12 rounded-2xl bg-leaf-50 dark:bg-leaf-900/20 flex items-center justify-center">
+                  <span className="material-icons-outlined text-leaf-600 dark:text-leaf-400">{verifyDocType === 'license' ? 'badge' : 'fingerprint'}</span>
+                </div>
+                <div>
+                  <h3 className="text-xl font-black dark:text-white">{verifyDocType === 'license' ? 'Driving License' : 'Aadhar Card'}</h3>
+                  <p className="text-xs text-gray-400">Submit your document for verification</p>
+                </div>
+              </div>
+
+              <div className="space-y-4 mb-6">
+                <div>
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">
+                    {verifyDocType === 'license' ? 'License Number' : 'Aadhar Number'}
+                  </label>
+                  <input
+                    type="text"
+                    value={verifyDocNumber}
+                    onChange={e => setVerifyDocNumber(e.target.value)}
+                    placeholder={verifyDocType === 'license' ? 'e.g. DL-0420110012345' : 'e.g. 1234 5678 9012'}
+                    className="w-full px-4 py-3 rounded-2xl border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-900 text-sm font-bold text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-leaf-400"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">
+                    Document Photo (Optional)
+                  </label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    ref={fileInputRef}
+                    className="hidden"
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onloadend = () => setVerifyDocPreview(reader.result as string);
+                      reader.readAsDataURL(file);
+                    }}
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full py-4 rounded-2xl border-2 border-dashed border-gray-200 dark:border-zinc-700 flex flex-col items-center justify-center gap-2 bg-gray-50 dark:bg-zinc-900 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors"
+                  >
+                    {verifyDocPreview ? (
+                      <img src={verifyDocPreview} alt="Doc preview" className="h-20 object-cover rounded-xl" />
+                    ) : (
+                      <>
+                        <span className="material-icons-outlined text-gray-400 text-2xl">upload_file</span>
+                        <span className="text-xs font-bold text-gray-400">Tap to select photo</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {verifyMsg && (
+                <p className={`text-xs font-bold text-center mb-4 ${verifyMsg.startsWith('✅') ? 'text-green-500' : 'text-red-500'}`}>{verifyMsg}</p>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setVerifyModalOpen(false)}
+                  className="flex-1 py-3.5 rounded-2xl border border-gray-200 dark:border-zinc-700 font-black text-sm text-gray-600 dark:text-zinc-300 hover:bg-gray-50 dark:hover:bg-zinc-900 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleVerifySubmit}
+                  disabled={verifyLoading || !verifyDocNumber.trim()}
+                  className="flex-[2] py-3.5 rounded-2xl bg-black dark:bg-white text-white dark:text-black font-black text-sm disabled:opacity-50 flex items-center justify-center gap-2 transition-opacity"
+                >
+                  {verifyLoading
+                    ? <span className="material-icons-outlined text-sm animate-spin">refresh</span>
+                    : <span className="material-icons-outlined text-sm">verified_user</span>
+                  }
+                  {verifyLoading ? 'Submitting...' : 'Submit for Verification'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
