@@ -25,6 +25,11 @@ This epic aims to build user trust and prioritize safety as a core platform valu
     - [x] 5.4.2 Integrate background check API to validate user identity. (Simulated background check service)
     - [x] 5.4.3 Display "Verified" badge on the user's public profile. (Dynamic badge in AccountScreen)
 
+- [x] User Story 5.5: As a rider I want gender-preference pooling options so that I feel safe and comfortable while sharing a ride. (Implemented)
+    - [x] 5.5.1 Add gender filter options to the ride request screen. (Integrated into Safety Preferences)
+    - [x] 5.5.2 Update matching algorithm to respect gender constraints. (Server-side cross-preference validation)
+    - [x] 5.5.3 Verify co-rider gender compatibility before confirming the ride. (Real-time gender display in match proposals)
+
 ## Technical Components
 - `User.js`: Schema includes `privacySettings`, `trustedContacts`, and encryption for location fields.
 - `SafetyAlert.js`: New schema for tracking emergency SOS triggers.

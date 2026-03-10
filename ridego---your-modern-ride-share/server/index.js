@@ -1365,9 +1365,12 @@ app.post('/api/rides', verifyToken, async (req, res) => {
                     isPooled: true,
                     'pickup.lat': { $exists: true },
                     'dropoff.lat': { $exists: true }
-                }).populate('userId', 'firstName lastName email phone');
+                }).populate('userId', 'firstName lastName email phone gender');
 
                 console.log(`🔍 Pool matching: found ${candidateRides.length} candidate rides for rider ${ride.userId}`);
+
+                const currentRider = await User.findById(ride.userId).select('gender');
+                const currentRiderGender = currentRider?.gender || 'Unknown';
 
                 for (const candidate of candidateRides) {
                     const pickupDist = getDistanceKm(
@@ -1388,22 +1391,34 @@ app.post('/api/rides', verifyToken, async (req, res) => {
                     let wheelchairCompatible = true;
                     if (rideNeedsWC && !candidateIsFriendly) {
                         wheelchairCompatible = false;
-                        console.log(`  ❌ MISMATCH: Rider ${ride.userId} needs wheelchair, but candidate ${candidate.userId._id} is not Friendly.`);
                     } else if (candidateNeedsWC && !rideIsFriendly) {
                         wheelchairCompatible = false;
-                        console.log(`  ❌ MISMATCH: Candidate ${candidate.userId._id} needs wheelchair, but rider ${ride.userId} is not Friendly.`);
                     } else if (rideNeedsWC && candidateNeedsWC) {
-                        // Prevent two wheelchair users in one car for space/luggage reasons
                         wheelchairCompatible = false;
-                        console.log(`  ❌ MISMATCH: Both riders need wheelchair access (Space constraint).`);
                     }
 
-                    console.log(`  📏 Candidate ${candidate._id}: pickup dist=${pickupDist?.toFixed(2)}km, dropoff dist=${dropoffDist?.toFixed(2)}km | WC Compatible: ${wheelchairCompatible}`);
+                    // 🚻 Gender Compatibility Check (User Story 5.5)
+                    const candidateGender = candidate.userId?.gender || 'Unknown';
+                    const rideGenderPref = ride.safetyPreferences?.genderPreference || 'any';
+                    const candidateGenderPref = candidate.safetyPreferences?.genderPreference || 'any';
+
+                    let genderCompatible = true;
+                    
+                    // Rule 1: Respect ride's own preference
+                    if (rideGenderPref === 'male' && candidateGender !== 'Male') genderCompatible = false;
+                    if (rideGenderPref === 'female' && candidateGender !== 'Female') genderCompatible = false;
+
+                    // Rule 2: Respect candidate's preference
+                    if (candidateGenderPref === 'male' && currentRiderGender !== 'Male') genderCompatible = false;
+                    if (candidateGenderPref === 'female' && currentRiderGender !== 'Female') genderCompatible = false;
+
+                    console.log(`  📏 Candidate ${candidate._id}: pickup dist=${pickupDist?.toFixed(2)}km, dropoff dist=${dropoffDist?.toFixed(2)}km | WC: ${wheelchairCompatible} | Gender: ${genderCompatible}`);
 
                     if (pickupDist !== null && dropoffDist !== null &&
                         pickupDist <= POOL_PICKUP_RADIUS_KM &&
                         dropoffDist <= POOL_DROPOFF_RADIUS_KM &&
-                        wheelchairCompatible) {
+                        wheelchairCompatible && 
+                        genderCompatible) {
                         poolMatch = candidate;
                         console.log(`  ✅ MATCHED! Rider ${ride.userId} ↔ Rider ${candidate.userId._id || candidate.userId}`);
                         break;
