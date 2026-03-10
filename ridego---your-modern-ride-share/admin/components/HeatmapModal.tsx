@@ -5,8 +5,8 @@ interface RegionInfo { name: string; lat: number; lng: number; rides: number; dr
 interface HeatmapData { riders: HeatPoint[]; drivers: HeatPoint[]; regions: RegionInfo[]; updatedAt: string; }
 interface HeatmapModalProps { isOpen: boolean; onClose: () => void; }
 
-const OLA_API_KEY = (import.meta.env.VITE_OLA_MAPS_API_KEY as string) || '';
-const MAP_CENTER = { lat: 20.5937, lng: 78.9629 };
+const MAPBOX_TOKEN = (window as any).MAPBOX_TOKEN as string;
+const MAP_CENTER: [number, number] = [78.9629, 20.5937];
 
 const HeatmapModal: React.FC<HeatmapModalProps> = ({ isOpen, onClose }) => {
   const [data, setData] = useState<HeatmapData | null>(null);
@@ -14,7 +14,7 @@ const HeatmapModal: React.FC<HeatmapModalProps> = ({ isOpen, onClose }) => {
   const [layer, setLayer] = useState<'riders' | 'drivers' | 'both'>('both');
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<any>(null);
-  const markersRef = useRef<any[]>([]);
+  const regionMarkersRef = useRef<any[]>([]);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchData = useCallback(async () => {
@@ -25,90 +25,121 @@ const HeatmapModal: React.FC<HeatmapModalProps> = ({ isOpen, onClose }) => {
     finally { setLoading(false); }
   }, []);
 
-  const clearMarkers = useCallback(() => { markersRef.current.forEach(m => m.remove()); markersRef.current = []; }, []);
+  // Build GeoJSON from heat points
+  const toGeoJSON = (points: HeatPoint[]) => ({
+    type: 'FeatureCollection' as const,
+    features: points.map(p => ({
+      type: 'Feature' as const,
+      geometry: { type: 'Point' as const, coordinates: [p.lng, p.lat] },
+      properties: { intensity: p.intensity },
+    })),
+  });
 
-  const renderHeatPoints = useCallback((map: any) => {
+  // Update/add heatmap sources and layers
+  const updateLayers = useCallback((map: any) => {
     if (!data || !map) return;
-    clearMarkers();
-    const maplibregl = (window as any).maplibregl;
-    if (!maplibregl) return;
 
-    // Rider blobs — red radial gradient circles (sized for India-wide zoom)
-    if (layer === 'riders' || layer === 'both') {
-      data.riders.forEach(p => {
-        const blobSize = 15 + p.intensity * 25;
-        const el = document.createElement('div');
-        el.style.cssText = 'width:' + blobSize + 'px;height:' + blobSize + 'px;border-radius:50%;background:radial-gradient(circle,rgba(220,38,38,' + (0.3 + p.intensity * 0.45) + ') 0%,rgba(220,38,38,' + (0.1 + p.intensity * 0.15) + ') 50%,rgba(220,38,38,0) 100%);pointer-events:none;filter:blur(1px);';
-        const marker = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([p.lng, p.lat]).addTo(map);
-        markersRef.current.push(marker);
+    // Riders source
+    const ridersGeo = toGeoJSON(layer !== 'drivers' ? data.riders : []);
+    if (map.getSource('riders-src')) {
+      map.getSource('riders-src').setData(ridersGeo);
+    } else {
+      map.addSource('riders-src', { type: 'geojson', data: ridersGeo });
+      map.addLayer({
+        id: 'riders-heat',
+        type: 'heatmap',
+        source: 'riders-src',
+        paint: {
+          'heatmap-weight': ['interpolate', ['linear'], ['get', 'intensity'], 0, 0, 1, 1],
+          'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'],
+            0, 'rgba(0,0,0,0)', 0.15, 'rgba(255,150,170,0.5)',
+            0.35, 'rgba(255,100,120,0.7)', 0.55, 'rgba(255,60,80,0.85)',
+            0.75, 'rgba(240,30,50,0.95)', 1, '#FF1744'],
+          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 3, 25, 8, 60],
+          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 3, 1.2, 8, 3],
+          'heatmap-opacity': 0.95,
+        },
       });
     }
 
-    // Driver blobs — blue radial gradient circles (sized for India-wide zoom)
-    if (layer === 'drivers' || layer === 'both') {
-      data.drivers.forEach(p => {
-        const blobSize = 12 + p.intensity * 23;
-        const el = document.createElement('div');
-        el.style.cssText = 'width:' + blobSize + 'px;height:' + blobSize + 'px;border-radius:50%;background:radial-gradient(circle,rgba(37,99,235,' + (0.3 + p.intensity * 0.4) + ') 0%,rgba(37,99,235,' + (0.1 + p.intensity * 0.12) + ') 50%,rgba(37,99,235,0) 100%);pointer-events:none;filter:blur(1px);';
-        const marker = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([p.lng, p.lat]).addTo(map);
-        markersRef.current.push(marker);
+    // Drivers source
+    const driversGeo = toGeoJSON(layer !== 'riders' ? data.drivers : []);
+    if (map.getSource('drivers-src')) {
+      map.getSource('drivers-src').setData(driversGeo);
+    } else {
+      map.addSource('drivers-src', { type: 'geojson', data: driversGeo });
+      map.addLayer({
+        id: 'drivers-heat',
+        type: 'heatmap',
+        source: 'drivers-src',
+        paint: {
+          'heatmap-weight': ['interpolate', ['linear'], ['get', 'intensity'], 0, 0, 1, 1],
+          'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'],
+            0, 'rgba(0,0,0,0)', 0.15, 'rgba(80,230,255,0.5)',
+            0.35, 'rgba(40,210,240,0.7)', 0.55, 'rgba(10,190,220,0.85)',
+            0.75, 'rgba(0,170,200,0.95)', 1, '#00BCD4'],
+          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 3, 22, 8, 55],
+          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 3, 1.0, 8, 2.5],
+          'heatmap-opacity': 0.95,
+        },
       });
     }
 
-    // Region labels — clickable with popup
+    // Region labels — clear old and re-add
+    const mapboxgl = (window as any).mapboxgl;
+    regionMarkersRef.current.forEach(m => m.remove());
+    regionMarkersRef.current = [];
+    const levelColors: Record<string, string> = { critical: '#FB7185', high: '#F97316', medium: '#FDE047', low: '#4ADE80' };
     data.regions.forEach(r => {
-      const colors: Record<string, string> = { critical: '#DC2626', high: '#EA580C', medium: '#D97706', low: '#059669' };
-      const bgColor = colors[r.heatLevel] || colors.low;
+      const bgColor = levelColors[r.heatLevel] || levelColors.low;
       const el = document.createElement('div');
-      el.innerHTML = '<div style="background:' + bgColor + ';color:#fff;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:700;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.15);font-family:Inter,system-ui,sans-serif;text-align:center;line-height:1.3;cursor:pointer;">' + (r.name || 'Unknown') + '</div>';
-      el.style.cssText = 'filter:drop-shadow(0 1px 2px rgba(0,0,0,.2));';
-      const popup = new maplibregl.Popup({ offset: 10, closeButton: false }).setHTML(
-        '<div style="font-family:Inter,system-ui,sans-serif;padding:6px;">' +
-        '<p style="font-weight:700;font-size:13px;margin:0 0 6px;">' + (r.name || 'Unknown') + '</p>' +
-        '<p style="font-size:11px;margin:2px 0;">Rides: <b>' + (r.rides ?? 0) + '</b></p>' +
-        '<p style="font-size:11px;margin:2px 0;">Drivers: <b>' + (r.drivers ?? 0) + '</b></p>' +
-        '<p style="font-size:11px;margin:2px 0;">Deficit: <b style="color:' + (r.deficit > 0 ? '#DC2626' : '#059669') + '">' + (r.deficit ?? 0) + '</b></p>' +
-        '<p style="font-size:10px;margin:5px 0 0;text-transform:uppercase;font-weight:700;color:' + bgColor + '">' + (r.heatLevel || 'low') + '</p></div>'
+      el.innerHTML = `<div style="background:${bgColor};color:#000;padding:3px 10px;border-radius:20px;font-size:10px;font-weight:800;white-space:nowrap;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.4);">${r.name || 'Zone'}</div>`;
+      const popup = new mapboxgl.Popup({ offset: 12, closeButton: false, className: 'mapbox-dark-popup' }).setHTML(
+        `<div style="font-family:Inter,sans-serif;background:#121214;border:1px solid #333;border-radius:12px;padding:10px;min-width:140px;">
+          <p style="font-weight:800;font-size:13px;color:#fff;margin:0 0 6px;">${r.name || 'Zone'}</p>
+          <p style="font-size:11px;color:#a1a1aa;margin:2px 0;">Rides: <b style="color:#fff">${r.rides ?? 0}</b></p>
+          <p style="font-size:11px;color:#a1a1aa;margin:2px 0;">Drivers: <b style="color:#fff">${r.drivers ?? 0}</b></p>
+          <p style="font-size:11px;color:#a1a1aa;margin:2px 0;">Deficit: <b style="color:${r.deficit > 0 ? '#FB7185' : '#4ADE80'}">${r.deficit > 0 ? '+' : ''}${r.deficit ?? 0}</b></p>
+          <p style="font-size:9px;text-transform:uppercase;font-weight:800;color:${bgColor};margin:6px 0 0;">${r.heatLevel || 'low'}</p>
+        </div>`
       );
-      const marker = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([r.lng, r.lat]).setPopup(popup).addTo(map);
-      markersRef.current.push(marker);
+      const marker = new mapboxgl.Marker({ element: el, anchor: 'center' }).setLngLat([r.lng, r.lat]).setPopup(popup).addTo(map);
+      regionMarkersRef.current.push(marker);
     });
-  }, [data, layer, clearMarkers]);
+  }, [data, layer]);
 
+  // Init Mapbox map
   useEffect(() => {
     if (!isOpen || !mapRef.current) return;
     const initMap = () => {
-      const maplibregl = (window as any).maplibregl;
-      if (!maplibregl) { setTimeout(initMap, 300); return; }
+      const mapboxgl = (window as any).mapboxgl;
+      if (!mapboxgl) { setTimeout(initMap, 300); return; }
       if (!mapRef.current) return;
       if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; }
-      const isDark = document.documentElement.classList.contains('dark');
-      const mapStyle = isDark
-        ? 'https://api.olamaps.io/tiles/vector/v1/styles/default-dark-standard/style.json'
-        : 'https://api.olamaps.io/tiles/vector/v1/styles/default-light-standard/style.json';
-      const map = new maplibregl.Map({
-        container: mapRef.current!,
-        style: mapStyle,
-        center: [MAP_CENTER.lng, MAP_CENTER.lat],
+      mapboxgl.accessToken = MAPBOX_TOKEN;
+      const map = new mapboxgl.Map({
+        container: mapRef.current,
+        style: 'mapbox://styles/mapbox/dark-v11',
+        center: MAP_CENTER,
         zoom: 4.5,
-        transformRequest: (url: string) => {
-          if (url.includes('olamaps.io')) { const sep = url.includes('?') ? '&' : '?'; return { url: `${url}${sep}api_key=${OLA_API_KEY}` }; }
-          return { url };
-        },
         attributionControl: false,
       });
-      map.addControl(new maplibregl.NavigationControl(), 'top-right');
+      map.addControl(new mapboxgl.NavigationControl(), 'top-right');
       mapInstance.current = map;
-      map.on('load', () => renderHeatPoints(map));
-      map.on('error', (e: any) => {
-        if (e.error?.message?.includes('Source layer') || e.error?.message?.includes('does not exist')) return;
-      });
+      map.on('load', () => { if (data) updateLayers(map); });
     };
     setTimeout(initMap, 100);
-    return () => { if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; } };
+    return () => {
+      regionMarkersRef.current.forEach(m => m.remove());
+      regionMarkersRef.current = [];
+      if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; }
+    };
   }, [isOpen]);
 
-  useEffect(() => { if (mapInstance.current && data) renderHeatPoints(mapInstance.current); }, [data, layer, renderHeatPoints]);
+  // Re-render layers when data or layer filter changes
+  useEffect(() => {
+    if (mapInstance.current && data) updateLayers(mapInstance.current);
+  }, [data, layer, updateLayers]);
 
   useEffect(() => {
     if (isOpen) { fetchData(); intervalRef.current = setInterval(fetchData, 60000); }
@@ -122,47 +153,47 @@ const HeatmapModal: React.FC<HeatmapModalProps> = ({ isOpen, onClose }) => {
   const criticalZones = data?.regions.filter(r => r.heatLevel === 'critical' || r.heatLevel === 'high').length || 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-white dark:bg-black w-full h-full shadow-2xl overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-black w-full h-full shadow-2xl overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
-        <div className="bg-gray-900 dark:bg-zinc-950 p-4 flex-shrink-0">
+        <div className="bg-[#121214] border-b border-[#222224] p-4 flex-shrink-0">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <span className="material-icons text-lg">satellite_alt</span>Live Demand Heatmap
+                <span className="material-icons text-lg text-accent-purple">satellite_alt</span>Live Demand Heatmap
               </h2>
-              <p className="text-[10px] text-gray-400 mt-0.5">OLA Maps - Updates every 60s</p>
+              <p className="text-[10px] text-zinc-500 mt-0.5">Mapbox GL — GPU-accelerated · Updates every 60s</p>
             </div>
-            <button onClick={onClose} className="size-8 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors">
+            <button onClick={onClose} className="w-8 h-8 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 flex items-center justify-center transition-colors">
               <span className="material-icons text-white text-sm">close</span>
             </button>
           </div>
         </div>
 
         {/* Layer Toggle */}
-        <div className="flex items-center gap-2 px-4 py-2.5 bg-gray-50 dark:bg-zinc-950/50 border-b border-gray-200 dark:border-zinc-900 flex-shrink-0">
-          <div className="flex bg-white dark:bg-black rounded-lg p-0.5 border border-gray-200 dark:border-zinc-900">
-            {[{ key: 'both', label: 'All', icon: 'layers' }, { key: 'riders', label: 'Riders', icon: 'person_pin_circle' }, { key: 'drivers', label: 'Drivers', icon: 'local_taxi' }].map(opt => (
+        <div className="flex items-center gap-3 px-4 py-2.5 bg-[#121214] border-b border-[#222224] flex-shrink-0">
+          <div className="flex bg-zinc-900 rounded-full p-1 border border-zinc-800">
+            {[{ key: 'both', label: 'All' }, { key: 'riders', label: 'Riders' }, { key: 'drivers', label: 'Drivers' }].map(opt => (
               <button key={opt.key} onClick={() => setLayer(opt.key as any)}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-semibold transition-all ${layer === opt.key ? 'bg-white dark:bg-black text-blue-600 dark:text-blue-400 shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}>
-                <span className="material-icons" style={{ fontSize: '12px' }}>{opt.icon}</span>{opt.label}
+                className={`px-3 py-1 rounded-full text-[10px] font-semibold transition-all ${layer === opt.key ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'}`}>
+                {opt.label}
               </button>
             ))}
           </div>
           <div className="flex-1"></div>
           <div className="flex items-center gap-3 text-[10px] font-semibold">
-            <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-red-500"></span><span className="text-gray-500 dark:text-gray-400">{totalRiders} riders</span></span>
-            <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-blue-500"></span><span className="text-gray-500 dark:text-gray-400">{totalDrivers} drivers</span></span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-accent-rose"></span><span className="text-zinc-400">{totalRiders} riders</span></span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-accent-cyan"></span><span className="text-zinc-400">{totalDrivers} drivers</span></span>
           </div>
         </div>
 
         {/* Map */}
         <div className="flex-1 relative">
           {loading && (
-            <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 dark:bg-black/80">
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/80">
               <div className="flex flex-col items-center gap-2">
-                <div className="size-8 border-3 border-blue-500/20 border-t-blue-500 rounded-full animate-spin"></div>
-                <span className="text-xs font-medium text-gray-500">Loading map data...</span>
+                <div className="w-8 h-8 border-2 border-accent-purple/20 border-t-accent-purple rounded-full animate-spin"></div>
+                <span className="text-xs font-medium text-zinc-500">Loading heatmap data...</span>
               </div>
             </div>
           )}
@@ -170,25 +201,25 @@ const HeatmapModal: React.FC<HeatmapModalProps> = ({ isOpen, onClose }) => {
         </div>
 
         {/* Bottom Stats */}
-        <div className="p-3 bg-gray-50 dark:bg-zinc-950/50 border-t border-gray-200 dark:border-zinc-900 flex-shrink-0">
+        <div className="p-3 bg-[#121214] border-t border-[#222224] flex-shrink-0">
           <div className="grid grid-cols-4 gap-2">
             {[
-              { label: 'Zones', value: data?.regions.length || 0, color: 'text-gray-900 dark:text-white' },
-              { label: 'Critical', value: criticalZones, color: criticalZones > 0 ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400' },
-              { label: 'Riders', value: totalRiders, color: 'text-red-500 dark:text-red-400' },
-              { label: 'Drivers', value: totalDrivers, color: 'text-blue-500 dark:text-blue-400' },
+              { label: 'Zones', value: data?.regions.length || 0, color: 'text-white' },
+              { label: 'Critical', value: criticalZones, color: criticalZones > 0 ? 'text-accent-rose' : 'text-accent-green' },
+              { label: 'Riders', value: totalRiders, color: 'text-accent-rose' },
+              { label: 'Drivers', value: totalDrivers, color: 'text-accent-cyan' },
             ].map((s, i) => (
               <div key={i} className="text-center">
                 <p className={`text-sm font-bold ${s.color}`}>{s.value}</p>
-                <p className="text-[9px] text-gray-400 font-semibold uppercase">{s.label}</p>
+                <p className="text-[9px] text-zinc-500 font-semibold uppercase">{s.label}</p>
               </div>
             ))}
           </div>
-          <div className="flex items-center justify-center gap-4 mt-2 pt-2 border-t border-gray-200 dark:border-zinc-900">
-            {[{ level: 'Low', color: 'bg-emerald-500' }, { level: 'Medium', color: 'bg-amber-500' }, { level: 'High', color: 'bg-orange-500' }, { level: 'Critical', color: 'bg-red-500' }].map(item => (
+          <div className="flex items-center justify-center gap-4 mt-2 pt-2 border-t border-zinc-800">
+            {[{ level: 'Low', color: 'bg-accent-green' }, { level: 'Medium', color: 'bg-accent-yellow' }, { level: 'High', color: 'bg-orange-500' }, { level: 'Critical', color: 'bg-accent-rose' }].map(item => (
               <div key={item.level} className="flex items-center gap-1">
-                <div className={`size-2.5 rounded-full ${item.color}`}></div>
-                <span className="text-[9px] font-semibold text-gray-500 dark:text-gray-400">{item.level}</span>
+                <div className={`w-2.5 h-2.5 rounded-full ${item.color}`}></div>
+                <span className="text-[9px] font-semibold text-zinc-500">{item.level}</span>
               </div>
             ))}
           </div>
@@ -199,3 +230,4 @@ const HeatmapModal: React.FC<HeatmapModalProps> = ({ isOpen, onClose }) => {
 };
 
 export default HeatmapModal;
+
