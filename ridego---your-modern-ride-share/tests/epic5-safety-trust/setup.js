@@ -55,8 +55,9 @@ const userSchema = new mongoose.Schema({
     dailyRoute: {
         source: { type: String, default: '' },
         destination: { type: String, default: '' },
-        isActive: { type: Boolean, default: false },
     },
+    isVerified: { type: Boolean, default: false },
+    verificationStatus: { type: String, enum: ['PENDING', 'APPROVED', 'REJECTED'], default: 'PENDING' },
 }, { timestamps: true });
 
 /* ───────── Ride Schema (inline) ───────── */
@@ -100,6 +101,13 @@ const rideSchema = new mongoose.Schema({
     cancellationFee: Number,
     autoReSearched: { type: Boolean, default: false },
     previousDriverIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    safetyPreferences: {
+        womenOnly: { type: Boolean, default: false },
+        verifiedOnly: { type: Boolean, default: false },
+        needsWheelchair: { type: Boolean, default: false },
+        wheelchairFriendly: { type: Boolean, default: false },
+        genderPreference: { type: String, enum: ['any', 'male', 'female'], default: 'any' }
+    },
 }, { timestamps: true });
 
 export const User = mongoose.models.User || mongoose.model('User', userSchema);
