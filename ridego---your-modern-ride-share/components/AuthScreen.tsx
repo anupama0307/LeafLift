@@ -56,7 +56,11 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
   // OAuth complete state (for filling remaining fields after Google/Apple sign in)
   const [oauthUser, setOauthUser] = useState<any>(null);
 
-
+  // General state
+  const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // OTP countdown timer
   useEffect(() => {
