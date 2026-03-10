@@ -127,6 +127,10 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [delayAlert, setDelayAlert] = useState<{ delayMinutes: number; message: string; etaText: string; etaLabel: string } | null>(null);
     const delayAlertTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+    // ─── Driver Nearby Banner State (US 2.6.3) ───
+    const [driverNearbyBanner, setDriverNearbyBanner] = useState(false);
+    const driverNearbyTimerRef = useRef<NodeJS.Timeout | null>(null);
+
     // ─── Multi-Stop State ───
     const [stops, setStops] = useState<Array<{ address: string; lat: number; lng: number }>>([]);
     const [showStopSearch, setShowStopSearch] = useState(false);
@@ -298,6 +302,13 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             // Auto-dismiss after 10 seconds
             if (delayAlertTimerRef.current) clearTimeout(delayAlertTimerRef.current);
             delayAlertTimerRef.current = setTimeout(() => setDelayAlert(null), 10000);
+        });
+
+        // ─── Driver Nearby Handler (US 2.6.3) ───
+        socket.on('driver:nearby', () => {
+            setDriverNearbyBanner(true);
+            if (driverNearbyTimerRef.current) clearTimeout(driverNearbyTimerRef.current);
+            driverNearbyTimerRef.current = setTimeout(() => setDriverNearbyBanner(false), 10000);
         });
 
         // ─── Multi-Stop Handlers ───
@@ -1451,6 +1462,34 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         {/* Progress bar for auto-dismiss */}
                         <div className="mt-3 h-1 bg-amber-200 dark:bg-amber-800 rounded-full overflow-hidden">
                             <div className="h-full bg-amber-500 dark:bg-amber-400 rounded-full animate-[shrink_10s_linear_forwards]" style={{ animation: 'shrink 10s linear forwards' }} />
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Driver Nearby Banner (US 2.6.3) ── */}
+            {driverNearbyBanner && (
+                <div className="absolute top-16 left-4 right-4 z-[90] animate-in slide-in-from-top duration-500">
+                    <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 rounded-2xl p-4 shadow-xl backdrop-blur-sm">
+                        <div className="flex items-start gap-3">
+                            <div className="size-10 bg-green-100 dark:bg-green-800/50 rounded-xl flex items-center justify-center shrink-0">
+                                <span className="material-icons-outlined text-green-600 dark:text-green-400">directions_car</span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <h4 className="text-sm font-black text-green-800 dark:text-green-300">Your driver is nearby!</h4>
+                                <p className="text-xs text-green-700 dark:text-green-400 mt-0.5">
+                                    Please be ready at the pickup point.
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setDriverNearbyBanner(false)}
+                                className="p-1 rounded-lg hover:bg-green-200 dark:hover:bg-green-800 transition-colors shrink-0"
+                            >
+                                <span className="material-icons-outlined text-green-500 text-sm">close</span>
+                            </button>
+                        </div>
+                        <div className="mt-3 h-1 bg-green-200 dark:bg-green-800 rounded-full overflow-hidden">
+                            <div className="h-full bg-green-500 dark:bg-green-400 rounded-full" style={{ animation: 'shrink 10s linear forwards' }} />
                         </div>
                     </div>
                 </div>
