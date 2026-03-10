@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { OLA_CONFIG } from '../constants';
 import { joinRideRoom, registerSocket } from '../src/services/realtime';
-import { decodePolyline, formatRouteInfo, getRoute, searchPlaces } from '../src/utils/olaApi';
+import { decodePolyline, formatRouteInfo, getDistanceKm, getRoute, searchPlaces } from '../src/utils/olaApi';
 import { OlaPlace } from '../types';
 
 declare global {
@@ -149,7 +149,13 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
     socketRef.current = socket;
 
     const handleRequest = (payload: any) => {
-      if (!payload?.rideId) return;
+      const { rideId, pickup, dropoff, fare, isPooled, routeIndex } = payload;
+      if (!rideId) return;
+
+      // Deduplication check
+      if (requestDataRef.current.has(rideId)) return;
+
+      // Radius check only if location known, otherwise show (User might click Refresh)
       const request = {
         rideId: payload.rideId,
         pickup: payload.pickup,
@@ -160,17 +166,9 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
         poolGroupRiders: payload.poolGroupRiders || null,
         routeIndex: payload.routeIndex
       };
-      // Client-side location filter: only show rides within 6 km
-      const loc = driverLocationRef.current;
-      if (loc && request.pickup && typeof request.pickup.lat === 'number') {
-        const R = 6371;
-        const toR = (v: number) => (v * Math.PI) / 180;
-        const dLat = toR(request.pickup.lat - loc.lat);
-        const dLon = toR(request.pickup.lng - loc.lng);
-        const a = Math.sin(dLat / 2) ** 2 + Math.cos(toR(loc.lat)) * Math.cos(toR(request.pickup.lat)) * Math.sin(dLon / 2) ** 2;
-        const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        if (dist > 6) return; // Too far, ignore
-      }
+      // ─── Filter: GPS within 6km OR matches Daily Route ───
+      if (!isWithinRadius(request)) return;
+      
       addOrUpdateRequestMarker(request);
       setRequests((prev) => {
         const rideIdStr = String(payload.rideId);
@@ -230,7 +228,9 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
     };
 
     const handleNearbyRiderUpdate = (payload: any) => {
-      if (!payload?.rideId) return;
+      const { rideId, pickup, dropoff, fare, isPooled, routeIndex } = payload;
+      if (!rideId) return;
+      console.log(`📡 Real-time update for ride ${rideId} (Route Index: ${routeIndex})`);
       const request = {
         rideId: payload.rideId,
         pickup: payload.pickup,
@@ -416,12 +416,12 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
     }
   };
 
-  // Fetch nearby ride requests once GPS is available
+  // Fetch nearby ride requests immediately when online
   useEffect(() => {
-    if (isOnline && driverLocation && !activeRide) {
+    if (isOnline && !activeRide) {
       fetchRequests();
     }
-  }, [isOnline, !!driverLocation]);
+  }, [isOnline, activeRide]);
 
   // Keep driverLocationRef in sync for socket handler access
   useEffect(() => {
@@ -430,12 +430,12 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
 
   // Poll for nearby rides every 30 seconds to stay fresh
   useEffect(() => {
-    if (!isOnline || !driverLocation || activeRide) return;
+    if (!isOnline || activeRide) return;
     const interval = setInterval(() => {
       fetchRequests();
     }, 30000);
     return () => clearInterval(interval);
-  }, [isOnline, !!driverLocation, activeRide]);
+  }, [isOnline, activeRide]);
 
   useEffect(() => {
     if (!isOnline && !activeRide) return;
@@ -511,14 +511,23 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
   }, [riderLocation, driverLocation, mapLoaded]);
 
   const isWithinRadius = (req: any, radiusKm = 6) => {
-    if (!driverLocation || !req.pickup) return false;
-    const R = 6371;
-    const toRad = (v: number) => (v * Math.PI) / 180;
-    const dLat = toRad(req.pickup.lat - driverLocation.lat);
-    const dLon = toRad(req.pickup.lng - driverLocation.lng);
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(driverLocation.lat)) * Math.cos(toRad(req.pickup.lat)) * Math.sin(dLon / 2) ** 2;
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c <= radiusKm;
+    if (!req.pickup) return false;
+    
+    // 1. Daily Route match (Route 1 to 2) - takes precedence as it's a fixed intent
+    if (dailyRouteSource && dailyRouteDest && req.pickup && req.dropoff) {
+      const pDist = getDistanceKm(req.pickup.lat, req.pickup.lng, dailyRouteSource.latitude, dailyRouteSource.longitude);
+      const dDist = getDistanceKm(req.dropoff.lat, req.dropoff.lng, dailyRouteDest.latitude, dailyRouteDest.longitude);
+      if (pDist <= 5 && dDist <= 5) return true;
+    }
+
+    // 2. GPS Proximity (if location available)
+    if (driverLocation) {
+      const dist = getDistanceKm(driverLocation.lat, driverLocation.lng, req.pickup.lat, req.pickup.lng);
+      return dist <= radiusKm;
+    }
+
+    // 3. Fallback: if no GPS lock yet, show the ride (avoids initial blindness)
+    return true;
   };
 
   const addOrUpdateRequestMarker = (request: any) => {
@@ -550,17 +559,26 @@ const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, onNavigate }) =
     if (!isOnline) {
       setIsOnline(true);
     }
+    const dId = user?._id || user?.id;
     try {
-      if (!driverLocation) return;
-      const resp = await fetch(`${API_BASE_URL}/api/rides/nearby?lat=${driverLocation.lat}&lng=${driverLocation.lng}&radius=6`);
+      // If no location yet, fetch without coords to avoid returning early
+      let url = `${API_BASE_URL}/api/rides/nearby?driverId=${dId}`;
+      if (driverLocation) {
+        url += `&lat=${driverLocation.lat}&lng=${driverLocation.lng}&radius=6`;
+      }
+
+      const resp = await fetch(url);
       if (resp.ok) {
         const rides = await resp.json();
         const newRequests = rides.map((ride: any) => ({
           rideId: ride._id,
           pickup: ride.pickup,
           dropoff: ride.dropoff,
-          fare: ride.fare,
-          isPooled: ride.isPooled
+          fare: ride.currentFare || ride.fare,
+          isPooled: ride.isPooled,
+          poolGroupId: ride.poolGroupId,
+          poolGroupRiders: ride.poolGroupRiders || ride.pooledRiders || [],
+          routeIndex: ride.routeIndex
         }));
         // Clear ALL old markers before setting new state
         requestMarkersRef.current.forEach(m => m.remove());

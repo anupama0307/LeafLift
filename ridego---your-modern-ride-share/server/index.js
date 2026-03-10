@@ -1,15 +1,29 @@
-﻿const express = require('express');
+const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
 const nodemailer = require('nodemailer');
+const jwt = require('jsonwebtoken');
+const { verifyToken } = require('./middleware/auth');
 
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 require('dotenv').config();
 
 const axios = require('axios');
+const Razorpay = require('razorpay');
+const razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET,
+});
+
+// PhonePe Configuration
+const PHONEPE_MERCHANT_ID = process.env.PHONEPE_MERCHANT_ID;
+const PHONEPE_SALT_KEY = process.env.PHONEPE_SALT_KEY;
+const PHONEPE_SALT_INDEX = process.env.PHONEPE_SALT_INDEX || "1";
+const PHONEPE_API_URL = process.env.PHONEPE_API_URL || "https://api-preprod.phonepe.com/apis/pg-sandbox/pg/v1/pay";
+const PHONEPE_STATUS_URL = process.env.PHONEPE_STATUS_URL || "https://api-preprod.phonepe.com/apis/pg-sandbox/pg/v1/status";
 const User = require('./models/User');
 
 // In-memory OTP store (use Redis in production)
@@ -60,6 +74,15 @@ function isRideInPendingProposal(rideId) {
 
 const app = express();
 let PORT = parseInt(process.env.PORT, 10) || 5001;
+
+const generateToken = (user) => {
+    return jwt.sign(
+        { id: user._id, role: user.role, email: user.email },
+        process.env.JWT_SECRET || 'leaflift-fallback-secret-2024',
+        { expiresIn: '7d' }
+    );
+};
+
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
     cors: {
@@ -97,6 +120,27 @@ const getDistanceKm = (lat1, lng1, lat2, lng2) => {
         Math.sin(dLng / 2) * Math.sin(dLng / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
+};
+
+const isRideMatchForDriver = (ride, driverEntry, radiusKm = 6) => {
+    // 1. Live GPS match
+    if (driverEntry.location && typeof driverEntry.location.lat === 'number') {
+        const d = getDistanceKm(driverEntry.location.lat, driverEntry.location.lng, ride.pickup.lat, ride.pickup.lng);
+        if (d !== null && d <= radiusKm) return { match: true, type: 'GPS' };
+    }
+
+    // 2. Daily Route match (Route 1 to 2)
+    const dr = driverEntry.dailyRoute;
+    if (dr && dr.isActive && dr.source && dr.destination) {
+        const pDist = getDistanceKm(ride.pickup.lat, ride.pickup.lng, dr.source.lat, dr.source.lng);
+        const dDist = getDistanceKm(ride.dropoff.lat, ride.dropoff.lng, dr.destination.lat, dr.destination.lng);
+        // If pickup is near source and dropoff near destination, it's a match!
+        if (pDist !== null && dDist !== null && pDist <= 5 && dDist <= 5) {
+            return { match: true, type: 'DAILY_ROUTE' };
+        }
+    }
+
+    return { match: false };
 };
 
 const estimateEtaMinutes = (distanceKm, speedKmh = 28) => {
@@ -137,9 +181,17 @@ io.on('connection', (socket) => {
             socket.data.role = 'DRIVER';
             socket.join('drivers:online');
             // Track this socket in onlineDrivers so location-filtered emits work
-            const entry = onlineDrivers.get(userId) || { socketIds: new Set(), location: null };
+            const entry = onlineDrivers.get(userId) || { socketIds: new Set(), location: null, dailyRoute: null };
             entry.socketIds.add(socket.id);
             onlineDrivers.set(userId, entry);
+
+            // Async fetch dailyRoute for better matching
+            User.findById(userId).select('dailyRoute').then(u => {
+                if (u && u.dailyRoute && u.dailyRoute.isActive) {
+                    entry.dailyRoute = u.dailyRoute;
+                    console.log(`📡 Cached dailyRoute for online driver: ${userId}`);
+                }
+            }).catch(e => console.error('Error fetching driver route on reg:', e));
         }
         if (role === 'RIDER') {
             socket.data.role = 'RIDER';
@@ -175,27 +227,18 @@ io.on('connection', (socket) => {
         io.to('riders:online').emit('nearby:driver:remove', { driverId });
     });
 
-    socket.on('rider:search', ({ rideId, riderId, pickup, dropoff, fare, isPooled }) => {
+    socket.on('rider:search', ({ rideId, riderId, pickup, dropoff, fare, isPooled, routeIndex }) => {
         if (!rideId || !pickup || !pickup.lat || !pickup.lng) return;
         socket.data.searchRideId = rideId;
 
-        // NEVER broadcast pooled rides to drivers via rider:search
-        // Pooled rides are only sent to drivers after BOTH riders accept the pool proposal
-        // via confirmPoolMatch(). Drivers should never see individual pool rides.
         if (isPooled) return;
 
-        const NEARBY_RADIUS_KM = 6;
-        const payload = { rideId, riderId, pickup, dropoff, fare, isPooled };
+        const payload = { rideId, riderId, pickup, dropoff, fare, isPooled, routeIndex };
 
-        // Send only to drivers within radius instead of broadcasting to all
         for (const [driverId, entry] of onlineDrivers.entries()) {
-            if (!entry.location || typeof entry.location.lat !== 'number') {
-                // Driver has no GPS yet, skip
-                continue;
-            }
-            const dist = getDistanceKm(entry.location.lat, entry.location.lng, pickup.lat, pickup.lng);
-            if (dist !== null && dist <= NEARBY_RADIUS_KM) {
-                // Emit to each socket this driver has
+            const matchResult = isRideMatchForDriver({ pickup, dropoff }, entry);
+
+            if (matchResult.match || !entry.location) {
                 for (const sid of entry.socketIds) {
                     io.to(sid).emit('nearby:rider:update', payload);
                 }
@@ -404,16 +447,15 @@ async function broadcastIndividualRide(rideId, io) {
         if (ride.pickup && typeof ride.pickup.lat === 'number' && typeof ride.pickup.lng === 'number') {
             let sentCount = 0;
             for (const [driverId, entry] of onlineDrivers.entries()) {
-                if (!entry.location || typeof entry.location.lat !== 'number') continue;
-                const dist = getDistanceKm(entry.location.lat, entry.location.lng, ride.pickup.lat, ride.pickup.lng);
-                if (dist !== null && dist <= RIDE_BROADCAST_RADIUS_KM) {
+                const matchResult = isRideMatchForDriver(ride, entry);
+                if (matchResult.match) {
                     for (const sid of entry.socketIds) {
                         io.to(sid).emit('ride:request', ridePayload);
                     }
                     sentCount++;
                 }
             }
-            console.log(`📡 Re-broadcast ride ${rideId} to ${sentCount} nearby drivers`);
+            console.log(`📡 Re-broadcast ride ${rideId} to ${sentCount} matching/nearby drivers`);
         } else {
             io.to('drivers:online').emit('ride:request', ridePayload);
         }
@@ -524,6 +566,200 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', message: 'OLA Maps server running' });
 });
 
+// ─── Razorpay Payment Integration ───
+app.post('/api/create-razorpay-order', async (req, res) => {
+    try {
+        const { rideId, amount } = req.body;
+        const ride = await Ride.findById(rideId);
+        if (!ride) return res.status(404).json({ error: 'Ride not found' });
+
+        const options = {
+            amount: Math.round(amount * 100), // amount in the smallest currency unit (paise)
+            currency: "INR",
+            receipt: `receipt_ride_${rideId}`,
+            notes: {
+                rideId: rideId.toString(),
+            }
+        };
+
+        const order = await razorpay.orders.create(options);
+        res.json(order);
+    } catch (error) {
+        console.error('Razorpay order error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/verify-razorpay-payment', async (req, res) => {
+    try {
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, rideId } = req.body;
+        const body = razorpay_order_id + "|" + razorpay_payment_id;
+
+        const expectedSignature = crypto
+            .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+            .update(body.toString())
+            .digest("hex");
+
+        if (expectedSignature === razorpay_signature) {
+            await Ride.findByIdAndUpdate(rideId, { paymentStatus: 'PAID' });
+            return res.json({ status: 'SUCCESS' });
+        } else {
+            return res.status(400).json({ status: 'FAILURE', message: 'Invalid signature' });
+        }
+    } catch (error) {
+        console.error('Verification error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ─── PhonePe Payment Integration ───
+app.post('/api/phonepe/pay', async (req, res) => {
+    try {
+        const { rideId, amount, userId } = req.body;
+
+        const transactionId = "MT" + Date.now();
+        const payload = {
+            merchantId: PHONEPE_MERCHANT_ID,
+            merchantTransactionId: transactionId,
+            merchantUserId: userId || "U" + Date.now(),
+            amount: Math.round(amount * 100), // In paise
+            redirectUrl: `${process.env.VITE_FRONTEND_URL || 'http://localhost:5173'}/payment-status?tid=${transactionId}&rideId=${rideId}`,
+            redirectMode: "REDIRECT",
+            callbackUrl: `${process.env.BACKEND_URL || 'http://localhost:5001'}/api/phonepe/callback`,
+            paymentInstrument: {
+                type: "PAY_PAGE"
+            }
+        };
+
+        const dataPayload = JSON.stringify(payload);
+        const dataBase64 = Buffer.from(dataPayload).toString('base64');
+        const fullURL = dataBase64 + "/pg/v1/pay" + PHONEPE_SALT_KEY;
+        const dataSha256 = crypto.createHash('sha256').update(fullURL).digest('hex');
+        const checksum = dataSha256 + "###" + PHONEPE_SALT_INDEX;
+
+        const options = {
+            method: 'POST',
+            url: PHONEPE_API_URL,
+            headers: {
+                accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-VERIFY': checksum
+            },
+            data: {
+                request: dataBase64
+            }
+        };
+
+        const response = await axios.request(options);
+
+        // Store transaction mapping in DB
+        await Ride.findByIdAndUpdate(rideId, {
+            $set: {
+                phonepeTransactionId: transactionId,
+                "notes.phonepeTransactionId": transactionId
+            }
+        });
+
+        res.json(response.data);
+    } catch (error) {
+        console.error('PhonePe Pay error:', (error.response && error.response.data) || error.message);
+        res.status(500).json({ error: 'Payment initiation failed' });
+    }
+});
+
+// Check Status Endpoint
+app.get('/api/phonepe/status/:transactionId', async (req, res) => {
+    try {
+        const { transactionId } = req.params;
+        const { rideId } = req.query;
+
+        const fullURL = `/pg/v1/status/${PHONEPE_MERCHANT_ID}/${transactionId}` + PHONEPE_SALT_KEY;
+        const dataSha256 = crypto.createHash('sha256').update(fullURL).digest('hex');
+        const checksum = dataSha256 + "###" + PHONEPE_SALT_INDEX;
+
+        const options = {
+            method: 'GET',
+            url: `${PHONEPE_STATUS_URL}/${PHONEPE_MERCHANT_ID}/${transactionId}`,
+            headers: {
+                accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-VERIFY': checksum,
+                'X-MERCHANT-ID': PHONEPE_MERCHANT_ID
+            }
+        };
+
+        const response = await axios.request(options);
+
+        if (response.data.success && response.data.code === 'PAYMENT_SUCCESS') {
+            if (rideId) {
+                await Ride.findByIdAndUpdate(rideId, { paymentStatus: 'PAID' });
+            }
+            res.json({ status: 'SUCCESS', data: response.data });
+        } else {
+            res.json({ status: 'FAILURE', data: response.data });
+        }
+    } catch (error) {
+        console.error('PhonePe Status error:', (error.response && error.response.data) || error.message);
+        res.status(500).json({ error: 'Status check failed' });
+    }
+});
+
+// Callback (Server-to-Server)
+app.post('/api/phonepe/callback', async (req, res) => {
+    try {
+        const xVerify = req.headers['x-verify'];
+        const base64Response = req.body.response;
+
+        if (!xVerify || !base64Response) {
+            return res.status(400).send('Missing verification data');
+        }
+
+        const stringToHash = base64Response + process.env.PHONEPE_SALT_KEY;
+        const hash = crypto.createHash('sha256').update(stringToHash).digest('hex');
+        const checksum = `${hash}###${process.env.PHONEPE_SALT_INDEX}`;
+
+        if (checksum !== xVerify) {
+            console.error('❌ PhonePe Callback: Checksum mismatch');
+            return res.status(401).send('Verification failed');
+        }
+
+        const decodedResponse = JSON.parse(Buffer.from(base64Response, 'base64').toString());
+        console.log('✅ PhonePe Callback Verified:', decodedResponse);
+
+        if (decodedResponse.success && decodedResponse.code === 'PAYMENT_SUCCESS') {
+            const transactionId = decodedResponse.data?.merchantTransactionId;
+            if (transactionId) {
+                // Find ride by transaction ID
+                const ride = await Ride.findOne({
+                    $or: [
+                        { phonepeTransactionId: transactionId },
+                        { "notes.phonepeTransactionId": transactionId }
+                    ]
+                });
+                if (ride) {
+                    ride.paymentStatus = 'PAID';
+                    await ride.save();
+                    console.log(`💰 Ride ${ride._id} marked as PAID via callback`);
+
+                    // Notify rider via socket
+                    if (io) {
+                        io.to(`user:${ride.userId}`).emit('ride:status', {
+                            rideId: ride._id,
+                            paymentStatus: 'PAID',
+                            status: ride.status
+                        });
+                    }
+                }
+            }
+        }
+
+        res.status(200).send('OK');
+    } catch (error) {
+        console.error('PhonePe Callback Error:', error);
+        res.status(500).send('Internal Server Error');
+    }
+});
+
 // MongoDB Connection
 const MONGODB_URI = process.env.MONGODB_URI;
 if (MONGODB_URI) {
@@ -613,7 +849,13 @@ app.post('/api/login', async (req, res) => {
         } else if (phone && role) {
             user = await User.findOne({ phone, role });
         }
-        res.json({ exists: !!user, user });
+        
+        if (user) {
+            const token = generateToken(user);
+            res.json({ exists: true, user, token });
+        } else {
+            res.json({ exists: false });
+        }
     } catch (error) {
         console.error('Login error:', error);
         res.status(500).json({ message: 'Server error during login' });
@@ -658,7 +900,9 @@ app.post('/api/signup', async (req, res) => {
 
         user = new User({ role, email, phone, firstName, lastName, dob, gender, license, aadhar, ...driverDefaults });
         await user.save();
-        res.status(201).json({ message: 'User created and verified', user });
+        
+        const token = generateToken(user);
+        res.status(201).json({ message: 'User created and verified', user, token });
     } catch (error) {
         console.error('Signup error:', error);
         res.status(500).json({ message: 'Server error during signup' });
@@ -721,14 +965,27 @@ app.post('/api/verify-otp', async (req, res) => {
         if (stored.otp !== otp) return res.status(400).json({ message: 'Invalid OTP. Please try again.' });
 
         otpStore.delete(email);
-        res.json({ message: 'OTP verified successfully', verified: true });
+        
+        // Find user and generate token if they already exist
+        const user = await User.findOne({ email });
+        let token = null;
+        if (user) {
+            token = generateToken(user);
+        }
+
+        res.json({ 
+            message: 'OTP verified successfully', 
+            verified: true, 
+            user, 
+            token 
+        });
     } catch (error) {
         console.error('Verify OTP error:', error);
         res.status(500).json({ message: 'Failed to verify OTP' });
     }
 });
 
-app.get('/api/users', async (req, res) => {
+app.get('/api/users', verifyToken, async (req, res) => {
     try {
         const users = await User.find();
         res.json(users);
@@ -737,14 +994,15 @@ app.get('/api/users', async (req, res) => {
     }
 });
 
-app.put('/api/users/:userId', async (req, res) => {
+app.put('/api/users/:userId', verifyToken, async (req, res) => {
     try {
-        const { firstName, lastName, photoUrl, accessibilitySupport, gender } = req.body;
-        const user = await User.findByIdAndUpdate(
-            req.params.userId,
-            { firstName, lastName, photoUrl, accessibilitySupport, gender },
-            { new: true }
-        );
+        const allowedFields = ['firstName', 'lastName', 'email', 'phone', 'dob', 'gender', 'photoUrl', 'license', 'aadhar', 'vehicleMake', 'vehicleModel', 'vehicleNumber', 'upiId', 'upiQrCodeUrl', 'accessibilitySupport'];
+        const updates = {};
+        for (const key of allowedFields) {
+            if (req.body[key] !== undefined) updates[key] = req.body[key];
+        }
+
+        const user = await User.findByIdAndUpdate(req.params.userId, updates, { new: true, runValidators: true });
         if (!user) return res.status(404).json({ message: 'User not found' });
         res.json(user);
     } catch (error) {
@@ -753,7 +1011,7 @@ app.put('/api/users/:userId', async (req, res) => {
     }
 });
 
-app.put('/api/users/:userId/privacy', async (req, res) => {
+app.put('/api/users/:userId/privacy', verifyToken, async (req, res) => {
     try {
         const { privacySettings } = req.body;
         const user = await User.findByIdAndUpdate(
@@ -770,7 +1028,7 @@ app.put('/api/users/:userId/privacy', async (req, res) => {
 });
 
 // Get single user by ID
-app.get('/api/users/:userId', async (req, res) => {
+app.get('/api/users/:userId', verifyToken, async (req, res) => {
     try {
         const user = await User.findById(req.params.userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
@@ -780,25 +1038,10 @@ app.get('/api/users/:userId', async (req, res) => {
     }
 });
 
-// Update user profile
-app.put('/api/users/:userId', async (req, res) => {
-    try {
-        const allowedFields = ['firstName', 'lastName', 'email', 'phone', 'dob', 'gender', 'photoUrl', 'license', 'aadhar', 'vehicleMake', 'vehicleModel', 'vehicleNumber'];
-        const updates = {};
-        for (const key of allowedFields) {
-            if (req.body[key] !== undefined) updates[key] = req.body[key];
-        }
-        const user = await User.findByIdAndUpdate(req.params.userId, updates, { new: true, runValidators: true });
-        if (!user) return res.status(404).json({ message: 'User not found' });
-        res.json(user);
-    } catch (error) {
-        console.error('Update user error:', error);
-        res.status(500).json({ message: 'Error updating user' });
-    }
-});
+// Note: Deleted redundant update route previously here
 
 // Delete user account
-app.delete('/api/users/:userId', async (req, res) => {
+app.delete('/api/users/:userId', verifyToken, async (req, res) => {
     try {
         const { userId } = req.params;
         const user = await User.findByIdAndDelete(userId);
@@ -817,7 +1060,7 @@ app.delete('/api/users/:userId', async (req, res) => {
 });
 
 // ── Driver Daily Route ──
-app.post('/api/driver/route', async (req, res) => {
+app.post('/api/driver/route', verifyToken, async (req, res) => {
     console.log('📬 Received route update request:', JSON.stringify(req.body, null, 2));
     try {
         const { userId, source, destination, isActive, genderPreference } = req.body;
@@ -844,6 +1087,13 @@ app.post('/api/driver/route', async (req, res) => {
         );
 
         if (!updatedUser) return res.status(404).json({ message: 'User not found' });
+
+        // Update in-memory onlineDrivers entry for immediate effect
+        const entry = onlineDrivers.get(userId);
+        if (entry) {
+            entry.dailyRoute = dailyRoute;
+            console.log(`📡 Updated cached dailyRoute for ONLINE driver: ${userId}`);
+        }
 
         console.log('✅ Route updated successfully for user:', userId);
         res.json({ message: 'Route updated', dailyRoute: updatedUser.dailyRoute });
@@ -1043,7 +1293,7 @@ app.post('/api/rider/request-daily-join', async (req, res) => {
 });
 
 // Ride Routes
-app.post('/api/rides', async (req, res) => {
+app.post('/api/rides', verifyToken, async (req, res) => {
     try {
         const payload = { ...req.body };
 
@@ -1261,6 +1511,17 @@ app.post('/api/rides', async (req, res) => {
                 routeIndex: ride.routeIndex,
                 bookingTime: ride.bookingTime
             };
+
+            // Send to ALL nearby drivers immediately
+            for (const [driverId, entry] of onlineDrivers.entries()) {
+                if (!entry.location || typeof entry.location.lat !== 'number') continue;
+                const dist = getDistanceKm(entry.location.lat, entry.location.lng, ride.pickup.lat, ride.pickup.lng);
+                if (dist !== null && dist <= RIDE_BROADCAST_RADIUS_KM) {
+                    for (const sid of entry.socketIds) {
+                        io.to(sid).emit('ride:request', ridePayload);
+                    }
+                }
+            }
         }
 
         res.status(201).json(ride);
@@ -1291,37 +1552,54 @@ app.get('/api/rides/driver/:driverId', async (req, res) => {
 // Nearby ride requests for drivers
 app.get('/api/rides/nearby', async (req, res) => {
     try {
-        const { lat, lng, radius = 6 } = req.query;
-        // Only return rides created in the last 5 minutes to avoid stale requests
-        const staleThreshold = new Date(Date.now() - 5 * 60 * 1000);
+        const { lat, lng, radius = 6, driverId } = req.query;
+        // Only return rides created in the last 30 minutes (increased from 5 for better dev experience)
+        const staleThreshold = new Date(Date.now() - 30 * 60 * 1000);
         const rides = await Ride.find({
             status: 'SEARCHING',
             createdAt: { $gte: staleThreshold }
         }).sort({ bookingTime: -1 });
 
-        // Auto-cancel old stale SEARCHING rides
-        await Ride.updateMany(
-            { status: 'SEARCHING', createdAt: { $lt: staleThreshold } },
-            { $set: { status: 'CANCELED' } }
-        );
+        console.log(`🔍 Nearby search: found ${rides.length} searching rides total (stale threshold: 30m)`);
+
+        // Filter out rides that are in pending pool proposals (not yet confirmed)
+        const nonPendingRides = rides.filter(ride => !isRideInPendingProposal(ride._id));
+
+        // Get driver's daily route if driverId provided
+        let driverDailyRoute = null;
+        if (driverId) {
+            const dUser = await User.findById(driverId).select('dailyRoute');
+            if (dUser && dUser.dailyRoute && dUser.dailyRoute.isActive) {
+                driverDailyRoute = dUser.dailyRoute;
+                console.log(`📍 Using Daily Route from matching for driver ${driverId}`);
+            }
+        }
 
         const latNum = lat ? Number(lat) : null;
         const lngNum = lng ? Number(lng) : null;
         const radiusNum = Number(radius) || 6;
 
-        // Filter out rides that are in pending pool proposals (not yet confirmed)
-        const nonPendingRides = rides.filter(ride => !isRideInPendingProposal(ride._id));
+        const filtered = nonPendingRides.filter((ride) => {
+            if (!ride.pickup || typeof ride.pickup.lat !== 'number' || !ride.dropoff || typeof ride.dropoff.lat !== 'number') return false;
 
-        if (latNum !== null && lngNum !== null) {
-            const filtered = nonPendingRides.filter((ride) => {
-                if (!ride.pickup || typeof ride.pickup.lat !== 'number') return false;
+            // Match 1: GPS Proximity
+            if (latNum !== null && lngNum !== null && !isNaN(latNum) && !isNaN(lngNum)) {
                 const dist = getDistanceKm(latNum, lngNum, ride.pickup.lat, ride.pickup.lng);
-                return dist !== null && dist <= radiusNum;
-            });
-            return res.json(filtered);
-        }
+                if (dist !== null && dist <= radiusNum) return true;
+            }
 
-        res.json(nonPendingRides);
+            // Match 2: Daily Route (Source -> Destination match)
+            if (driverDailyRoute && driverDailyRoute.source && driverDailyRoute.destination) {
+                const pDist = getDistanceKm(ride.pickup.lat, ride.pickup.lng, driverDailyRoute.source.lat, driverDailyRoute.source.lng);
+                const dDist = getDistanceKm(ride.dropoff.lat, ride.dropoff.lng, driverDailyRoute.destination.lat, driverDailyRoute.destination.lng);
+                if (pDist !== null && dDist !== null && pDist <= 5 && dDist <= 5) return true;
+            }
+
+            return false;
+        });
+
+        console.log(`✅ Filtered rides: ${filtered.length}/${nonPendingRides.length} (GPS or Route match)`);
+        res.json(filtered);
     } catch (error) {
         console.error('Error fetching nearby rides:', error);
         res.status(500).json({ message: 'Error fetching nearby rides', details: error.message });
@@ -1414,7 +1692,7 @@ app.get('/api/driver/:userId/active-ride', async (req, res) => {
 });
 
 // ── Get Active Ride for Rider ──
-app.get('/api/rider/:userId/active-ride', async (req, res) => {
+app.get('/api/rider/:userId/active-ride', verifyToken, async (req, res) => {
     try {
         const ride = await Ride.findOne({
             userId: req.params.userId,
@@ -1593,7 +1871,7 @@ app.get('/api/rides/pooled-in-progress', async (req, res) => {
     }
 });
 
-app.get('/api/rides/:rideId', async (req, res) => {
+app.get('/api/rides/:rideId', verifyToken, async (req, res) => {
     try {
         const ride = await Ride.findById(req.params.rideId);
         if (!ride) return res.status(404).json({ message: 'Ride not found' });
@@ -1603,7 +1881,7 @@ app.get('/api/rides/:rideId', async (req, res) => {
     }
 });
 
-app.put('/api/rides/:rideId/status', async (req, res) => {
+app.put('/api/rides/:rideId/status', verifyToken, async (req, res) => {
     try {
         const { status } = req.body;
         const ride = await Ride.findByIdAndUpdate(
@@ -1616,7 +1894,7 @@ app.put('/api/rides/:rideId/status', async (req, res) => {
 });
 
 // ─── Cancel Ride (Driver or Rider) with Auto Re-Search ───
-app.post('/api/rides/:rideId/cancel', async (req, res) => {
+app.post('/api/rides/:rideId/cancel', verifyToken, async (req, res) => {
     try {
         const { canceledBy, cancelReason } = req.body;
         if (!canceledBy || !['RIDER', 'DRIVER'].includes(canceledBy)) {
@@ -1808,7 +2086,7 @@ app.post('/api/rides/:rideId/cancel', async (req, res) => {
 });
 
 // Driver presence
-app.post('/api/drivers/online', async (req, res) => {
+app.post('/api/drivers/online', verifyToken, async (req, res) => {
     const { driverId, location } = req.body;
     if (!driverId) return res.status(400).json({ message: 'driverId required' });
 
@@ -1819,7 +2097,7 @@ app.post('/api/drivers/online', async (req, res) => {
     res.json({ ok: true, onlineDrivers: onlineDrivers.size });
 });
 
-app.post('/api/drivers/offline', async (req, res) => {
+app.post('/api/drivers/offline', verifyToken, async (req, res) => {
     const { driverId } = req.body;
     if (driverId) onlineDrivers.delete(driverId);
     res.json({ ok: true });
@@ -2316,19 +2594,22 @@ app.post('/api/rides/:rideId/complete', async (req, res) => {
         ride.riderConfirmedComplete = false; // Will be confirmed by rider
         await ride.save();
 
+        // Fetch driver to get UPI details
+        const driver = ride.driverId ? await User.findById(ride.driverId) : null;
+
         // Emit confirmation request to rider
         const distStr = ride.distance || '0';
         const distKm = parseFloat(distStr) || 0;
-        io.to(`ride:${ride._id}`).emit('ride:confirm-complete', {
+        const confirmPayload = {
             rideId: ride._id,
             completedFare: ride.currentFare || ride.fare,
-            actualDistanceKm: distKm.toFixed(1)
-        });
-        io.to(`user:${ride.userId}`).emit('ride:confirm-complete', {
-            rideId: ride._id,
-            completedFare: ride.currentFare || ride.fare,
-            actualDistanceKm: distKm.toFixed(1)
-        });
+            actualDistanceKm: distKm.toFixed(1),
+            upiId: driver?.upiId,
+            upiQrCodeUrl: driver?.upiQrCodeUrl
+        };
+
+        io.to(`ride:${ride._id}`).emit('ride:confirm-complete', confirmPayload);
+        io.to(`user:${ride.userId}`).emit('ride:confirm-complete', confirmPayload);
 
         // Also emit status update 
         io.to(`ride:${ride._id}`).emit('ride:status', { rideId: ride._id, status: ride.status });
@@ -2523,19 +2804,21 @@ app.post('/api/rides/:rideId/request-complete', async (req, res) => {
         ride.riderConfirmedComplete = false;
         await ride.save();
 
+        // Fetch driver for UPI details
+        const driver = ride.driverId ? await User.findById(ride.driverId) : null;
+
         // Ask rider to confirm
-        io.to(`ride:${ride._id}`).emit('ride:confirm-complete', {
+        const confirmPayload = {
             rideId: ride._id,
             actualDropoff: ride.actualDropoff,
             actualDistanceKm: (actualDistanceMeters / 1000).toFixed(1),
-            completedFare
-        });
-        io.to(`user:${ride.userId}`).emit('ride:confirm-complete', {
-            rideId: ride._id,
-            actualDropoff: ride.actualDropoff,
-            actualDistanceKm: (actualDistanceMeters / 1000).toFixed(1),
-            completedFare
-        });
+            completedFare,
+            upiId: driver?.upiId,
+            upiQrCodeUrl: driver?.upiQrCodeUrl
+        };
+
+        io.to(`ride:${ride._id}`).emit('ride:confirm-complete', confirmPayload);
+        io.to(`user:${ride.userId}`).emit('ride:confirm-complete', confirmPayload);
 
         res.json({ ok: true, completedFare, actualDistanceMeters });
     } catch (error) {

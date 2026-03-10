@@ -41,6 +41,22 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
   const [editingSection, setEditingSection] = useState<string | null>(null);
   const [profileSaveMsg, setProfileSaveMsg] = useState<string | null>(null);
   const [changePassword, setChangePassword] = useState({ current: '', newPass: '', confirm: '' });
+  const qrInputRef = React.useRef<HTMLInputElement>(null);
+
+  const handleQrUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 2 * 1024 * 1024) {
+        alert('Image size should be less than 2MB');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setEditUpiQrCodeUrl(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   // Safety state
   const [locationSharing, setLocationSharing] = useState(true);
@@ -365,7 +381,40 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
             {editingSection === 'driverPayment' ? (
               <div className="py-4">
                 <EditableInput label="UPI ID" value={editUpiId} onChange={setEditUpiId} placeholder="example@upi" />
-                <EditableInput label="QR Code Image URL" value={editUpiQrCodeUrl} onChange={setEditUpiQrCodeUrl} placeholder="https://image-link.com/qr.png" />
+
+                <div className="mb-4">
+                  <label className="block text-xs font-bold text-gray-500 mb-2">UPI QR Code</label>
+                  <input type="file" ref={qrInputRef} onChange={handleQrUpload} accept="image/*" className="hidden" />
+
+                  {editUpiQrCodeUrl ? (
+                    <div className="relative group">
+                      <div className="size-32 bg-white rounded-2xl border-2 border-leaf-500/30 overflow-hidden p-2">
+                        <img src={editUpiQrCodeUrl} className="w-full h-full object-contain" alt="UPI QR" />
+                      </div>
+                      <button
+                        onClick={() => setEditUpiQrCodeUrl('')}
+                        className="absolute -top-2 -left-2 size-6 bg-red-500 text-white rounded-full flex items-center justify-center shadow-lg"
+                      >
+                        <span className="material-icons-outlined text-xs">close</span>
+                      </button>
+                      <button
+                        onClick={() => qrInputRef.current?.click()}
+                        className="mt-2 text-leaf-600 text-[10px] font-black uppercase tracking-wider"
+                      >
+                        Change Image
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => qrInputRef.current?.click()}
+                      className="w-full h-24 rounded-2xl border-2 border-dashed border-gray-200 dark:border-zinc-800 flex flex-col items-center justify-center gap-1 hover:border-leaf-500 transition-colors"
+                    >
+                      <span className="material-icons-outlined text-gray-400">add_a_photo</span>
+                      <span className="text-[10px] font-bold text-gray-500">Upload QR Image</span>
+                    </button>
+                  )}
+                </div>
+
                 <div className="flex gap-2 mt-2">
                   <button onClick={handleProfileSave} className="flex-1 bg-leaf-500 hover:bg-leaf-600 text-white font-bold py-2.5 rounded-xl text-sm transition-colors">
                     Save Changes

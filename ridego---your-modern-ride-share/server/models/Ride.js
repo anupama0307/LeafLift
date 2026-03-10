@@ -179,6 +179,7 @@ const RideSchema = new mongoose.Schema({
     actualDistanceMeters: { type: Number, default: 0 },
     completedFare: { type: Number, default: 0 },
     riderConfirmedComplete: { type: Boolean, default: false },
+    phonepeTransactionId: { type: String, default: null },
     // Ride type category
     vehicleCategory: {
         type: String,

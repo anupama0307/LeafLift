@@ -3,6 +3,7 @@ import { OLA_CONFIG, VEHICLE_CATEGORIES } from '../constants';
 import { searchPlaces, getRoute, formatRouteInfo, reverseGeocode, decodePolyline } from '../src/utils/olaApi';
 import { joinRideRoom, leaveRideRoom, registerSocket } from '../src/services/realtime';
 import { OlaPlace, RouteInfo } from '../types';
+import PhonePePayment from './PhonePePayment';
 
 declare global {
     interface Window {
@@ -18,7 +19,7 @@ interface PlanRideScreenProps {
 }
 
 type RideStatus = 'IDLE' | 'SEARCHING' | 'ACCEPTED' | 'ARRIVED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELED';
-type PaymentMethod = 'Cash' | 'UPI' | 'Wallet';
+type PaymentMethod = 'Cash' | 'UPI' | 'Wallet' | 'PhonePe';
 
 interface DriverDetails {
     id: string;
@@ -206,6 +207,13 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
 
         socket.on('ride:confirm-complete', (payload: any) => {
             setConfirmCompleteData(payload);
+            if (payload.upiId || payload.upiQrCodeUrl) {
+                setDriverDetails((prev: any) => ({
+                    ...prev,
+                    upiId: payload.upiId || prev?.upiId,
+                    upiQrCodeUrl: payload.upiQrCodeUrl || prev?.upiQrCodeUrl
+                }));
+            }
         });
 
         socket.on('ride:driver-location', (payload: any) => {
@@ -402,7 +410,8 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             setIsNoDriversFound(false);
             poolMatchedRef.current = false;
             // Pooled rides get longer timeout (60s) since rider matching + driver search takes more time
-            const timeoutMs = rideMode === 'Pooled' ? 60000 : 15000;
+            // Increased solo timeout to 60s for better driver visibility
+            const timeoutMs = rideMode === 'Pooled' ? 60000 : 60000;
             timer = setTimeout(() => {
                 if (rideStatus === 'SEARCHING' && !poolMatchedRef.current) {
                     setIsNoDriversFound(true);
@@ -484,7 +493,8 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                 dropoff: dropoffCoords
                     ? { address: destination, lat: dropoffCoords.lat, lng: dropoffCoords.lng }
                     : null,
-                fare: currentFare, isPooled: rideMode === 'Pooled'
+                fare: currentFare, isPooled: rideMode === 'Pooled',
+                routeIndex: selectedRouteIndex
             });
         } else if (activeRideId) {
             socket.emit('rider:search:stop', { rideId: activeRideId });
@@ -2408,7 +2418,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                         </div>
                                     )}
 
-                                    {driverDetails?.upiId ? (
+                                    {driverDetails?.upiId ?
                                         <div className="bg-white dark:bg-zinc-900 p-3 rounded-xl border border-purple-100 dark:border-purple-800 flex items-center justify-between">
                                             <div className="flex-1 min-w-0">
                                                 <p className="text-[10px] uppercase font-black text-purple-400 mb-0.5">UPI ID</p>
@@ -2424,9 +2434,27 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                 <span className="material-icons-outlined text-sm">content_copy</span>
                                             </button>
                                         </div>
-                                    ) : (
+                                        :
                                         <p className="text-xs text-center text-purple-600 dark:text-purple-400 font-bold italic">Ask driver for UPI details</p>
-                                    )}
+                                    }
+                                </div>
+                            ) : paymentMethod === 'PhonePe' ? (
+                                <div className="bg-zinc-50 dark:bg-zinc-900/10 border border-zinc-100 dark:border-zinc-800 rounded-2xl p-4 mb-6">
+                                    <div className="flex items-center gap-3 mb-6">
+                                        <div className="size-10 bg-[#22c55e] text-white rounded-xl flex items-center justify-center">
+                                            <span className="material-icons-outlined">payments</span>
+                                        </div>
+                                        <div>
+                                            <p className="text-sm font-black text-zinc-900 dark:text-white">Pay with PhonePe</p>
+                                            <p className="text-[10px] font-bold text-zinc-500">Secure payment via PhonePe</p>
+                                        </div>
+                                    </div>
+                                    <PhonePePayment
+                                        rideId={activeRideId || ''}
+                                        amount={confirmCompleteData.completedFare}
+                                        userId={user._id || user.id}
+                                        onPaymentSuccess={() => handleConfirmComplete(true)}
+                                    />
                                 </div>
                             ) : (
                                 <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-800 rounded-2xl p-4 mb-6">
@@ -2687,6 +2715,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         {[
                             { id: 'Cash', label: 'Cash', icon: 'payments', desc: 'Pay with cash after ride' },
                             { id: 'UPI', label: 'UPI', icon: 'account_balance', desc: 'PhonePe, GPay, Paytm' },
+                            { id: 'PhonePe', label: 'PhonePe', icon: 'credit_card', desc: 'Secure online payment' },
                             { id: 'Wallet', label: 'LeafLift Wallet', icon: 'account_balance_wallet', desc: 'Fast & secure' }
                         ].map((p) => (
                             <button

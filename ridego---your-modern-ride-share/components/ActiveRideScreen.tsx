@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { registerSocket } from '../src/services/realtime';
+import PhonePePayment from './PhonePePayment';
 
 interface ActiveRideScreenProps {
     user: any;
@@ -329,9 +330,26 @@ const ActiveRideScreen: React.FC<ActiveRideScreenProps> = ({ user, rideData, onB
             <div className="absolute bottom-0 inset-x-0 p-6 z-[110] bg-gradient-to-t from-white via-white/90 to-transparent dark:from-zinc-950 dark:via-zinc-950/90 pointer-events-none">
                 <div className="max-w-[430px] mx-auto pointer-events-auto">
                     {rideStatus === 'COMPLETED' ? (
-                        <button onClick={onBack} className="w-full h-16 bg-zinc-900 dark:bg-white text-white dark:text-black rounded-[24px] font-black text-sm uppercase tracking-[.2em] shadow-2xl active:scale-95 transition-all">
-                            Done
-                        </button>
+                        <div className="space-y-4">
+                            {ride.paymentStatus === 'PAID' ? (
+                                <div className="p-6 bg-emerald-100 dark:bg-emerald-900/30 border border-emerald-500/20 rounded-[24px] text-center">
+                                    <p className="text-emerald-600 dark:text-emerald-400 font-black text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                                        <span className="material-icons text-xl">check_circle</span>
+                                        Payment Completed
+                                    </p>
+                                </div>
+                            ) : !isDriver && (
+                                <PhonePePayment
+                                    rideId={ride._id}
+                                    amount={currentFare}
+                                    userId={user._id || user.id}
+                                />
+                            )}
+
+                            <button onClick={onBack} className="w-full h-16 bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white rounded-[24px] font-black text-sm uppercase tracking-[.2em] shadow-sm active:scale-95 transition-all">
+                                {ride.paymentStatus === 'PAID' || isDriver ? 'Close Journey' : 'Pay Later / Done'}
+                            </button>
+                        </div>
                     ) : (
                         <div className="flex gap-4">
                             {!isDriver ? (
