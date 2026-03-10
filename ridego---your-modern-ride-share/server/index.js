@@ -254,6 +254,24 @@ io.on('connection', (socket) => {
         entry.lastUpdate = now;
         onlineDrivers.set(driverId, entry);
         io.to('riders:online').emit('nearby:driver:update', { driverId, lat, lng });
+
+        // US 2.6.1/2.6.2 — Detect driver within 300m of rider pickup and emit driver:nearby
+        const DRIVER_NEARBY_THRESHOLD_KM = 0.3;
+        Ride.find({ driverId, status: { $in: ['ACCEPTED', 'ARRIVED'] } }).then(rides => {
+            for (const ride of rides) {
+                if (ride.pickup && typeof ride.pickup.lat === 'number') {
+                    const dist = getDistanceKm(lat, lng, ride.pickup.lat, ride.pickup.lng);
+                    if (dist !== null && dist <= DRIVER_NEARBY_THRESHOLD_KM) {
+                        const riderId = String(ride.userId);
+                        io.to(`ride:${ride._id}`).emit('driver:nearby', {
+                            rideId: String(ride._id),
+                            driverId,
+                            distanceMeters: Math.round(dist * 1000)
+                        });
+                    }
+                }
+            }
+        }).catch(() => {});
     });
 
     socket.on('driver:offline', ({ driverId }) => {
@@ -271,7 +289,7 @@ io.on('connection', (socket) => {
         // after BOTH riders accept the pool proposal (via confirmPoolMatch → ride:request).
         if (isPooled) return;
 
-        const NEARBY_RADIUS_KM = 6;
+        const NEARBY_RADIUS_KM = 6; // radius for broadcasting ride requests to drivers
         const payload = { rideId, riderId, pickup, dropoff, fare, isPooled };
 
         // Send only to drivers within radius instead of broadcasting to all
