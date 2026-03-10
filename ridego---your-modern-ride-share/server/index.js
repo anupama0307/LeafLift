@@ -791,6 +791,58 @@ if (MONGODB_URI) {
             } catch (cleanupErr) {
                 console.warn('⚠️  Startup cleanup error:', cleanupErr.message);
             }
+
+            // ─── Automated Location Data Retention Policy ───
+            const scrubExpiredLocationData = async () => {
+                const retentionDays = parseInt(process.env.LOCATION_DATA_RETENTION_DAYS, 10) || 30;
+                const thresholdDate = new Date();
+                thresholdDate.setDate(thresholdDate.getDate() - retentionDays);
+
+                console.log(`🧹 Running automated location scrubbing policy (History > ${retentionDays} days)`);
+
+                try {
+                    const result = await Ride.updateMany(
+                        {
+                            createdAt: { $lt: thresholdDate },
+                            status: { $in: ['COMPLETED', 'CANCELED'] },
+                            // Only target documents that still have coordinates or polylines
+                            $or: [
+                                { 'pickup.lat': { $ne: null } },
+                                { 'dropoff.lat': { $ne: null } },
+                                { 'routePolyline': { $ne: '' } },
+                                { 'riderLocation.lat': { $ne: null } }
+                            ]
+                        },
+                        {
+                            $set: {
+                                'pickup.lat': null,
+                                'pickup.lng': null,
+                                'dropoff.lat': null,
+                                'dropoff.lng': null,
+                                'riderLocation.lat': null,
+                                'riderLocation.lng': null,
+                                'driverLocation.lat': null,
+                                'driverLocation.lng': null,
+                                'actualDropoff.lat': null,
+                                'actualDropoff.lng': null,
+                                'routePolyline': '',
+                                'stops': [], // Scrubbing detailed waypoints entirely
+                                'poolStops': []
+                            }
+                        }
+                    );
+                    if (result.modifiedCount > 0) {
+                        console.log(`✅ SCRUBBED sensitive location data from ${result.modifiedCount} rides older than ${retentionDays} days.`);
+                    }
+                } catch (err) {
+                    console.error('❌ Location scrubbing error:', err);
+                }
+            };
+
+            // Run on startup
+            scrubExpiredLocationData();
+            // Then run daily
+            setInterval(scrubExpiredLocationData, 24 * 60 * 60 * 1000);
         })
         .catch(err => console.error('❌ MongoDB error:', err));
 } else {
@@ -1238,6 +1290,25 @@ app.put('/api/users/:userId', async (req, res) => {
     }
 });
 
+// Delete user account
+app.delete('/api/users/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const user = await User.findByIdAndDelete(userId);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        // Cleanup related data
+        await Ride.deleteMany({ $or: [{ riderId: userId }, { driverId: userId }] });
+        await Notification.deleteMany({ userId: userId });
+
+        console.log(`🗑️ Account deleted: ${user.email} (${userId})`);
+        res.json({ message: 'Account deleted successfully' });
+    } catch (error) {
+        console.error('Delete account error:', error);
+        res.status(500).json({ message: 'Error deleting account' });
+    }
+});
+
 // ── Driver Daily Route ──
 /**
  * @swagger
@@ -1390,7 +1461,14 @@ app.get('/api/rider/match-driver', async (req, res) => {
             // Check dropoff proximity (within 5km of driver destination)
             const dropoffDist = getDistanceKm(dLat, dLng, route.destination.lat, route.destination.lng);
 
-            // Check accessibility support if rider requested it
+            // ♿ Wheelchair Access Check
+            const riderNeedsWC = req.query.needsWheelchair === 'true';
+            if (riderNeedsWC) {
+                const supportsWheelchair = (driver.accessibilitySupport || []).includes('Wheelchair');
+                if (!supportsWheelchair) return false;
+            }
+
+            // Check other specific accessibility support if rider requested it
             const reqAccessibility = req.query.accessibilityOptions ? req.query.accessibilityOptions.split(',') : [];
             if (reqAccessibility.length > 0) {
                 const supportsAll = reqAccessibility.every(opt => (driver.accessibilitySupport || []).includes(opt));
@@ -1880,11 +1958,31 @@ app.post('/api/rides', async (req, res) => {
                         candidate.dropoff.lat, candidate.dropoff.lng
                     );
 
-                    console.log(`  📏 Candidate ${candidate._id}: pickup dist=${pickupDist?.toFixed(2)}km, dropoff dist=${dropoffDist?.toFixed(2)}km`);
+                    // ♿ Wheelchair Compatibility Check
+                    const rideNeedsWC = ride.safetyPreferences?.needsWheelchair;
+                    const candidateNeedsWC = candidate.safetyPreferences?.needsWheelchair;
+                    const rideIsFriendly = ride.safetyPreferences?.wheelchairFriendly;
+                    const candidateIsFriendly = candidate.safetyPreferences?.wheelchairFriendly;
+
+                    let wheelchairCompatible = true;
+                    if (rideNeedsWC && !candidateIsFriendly) {
+                        wheelchairCompatible = false;
+                        console.log(`  ❌ MISMATCH: Rider ${ride.userId} needs wheelchair, but candidate ${candidate.userId._id} is not Friendly.`);
+                    } else if (candidateNeedsWC && !rideIsFriendly) {
+                        wheelchairCompatible = false;
+                        console.log(`  ❌ MISMATCH: Candidate ${candidate.userId._id} needs wheelchair, but rider ${ride.userId} is not Friendly.`);
+                    } else if (rideNeedsWC && candidateNeedsWC) {
+                        // Prevent two wheelchair users in one car for space/luggage reasons
+                        wheelchairCompatible = false;
+                        console.log(`  ❌ MISMATCH: Both riders need wheelchair access (Space constraint).`);
+                    }
+
+                    console.log(`  📏 Candidate ${candidate._id}: pickup dist=${pickupDist?.toFixed(2)}km, dropoff dist=${dropoffDist?.toFixed(2)}km | WC Compatible: ${wheelchairCompatible}`);
 
                     if (pickupDist !== null && dropoffDist !== null &&
                         pickupDist <= POOL_PICKUP_RADIUS_KM &&
-                        dropoffDist <= POOL_DROPOFF_RADIUS_KM) {
+                        dropoffDist <= POOL_DROPOFF_RADIUS_KM &&
+                        wheelchairCompatible) {
                         poolMatch = candidate;
                         confirmedWindowStart = overlapWindow.start;
                         confirmedWindowEnd = overlapWindow.end;
@@ -1958,7 +2056,9 @@ app.post('/api/rides', async (req, res) => {
                                 ...(ride.safetyPreferences?.womenOnly || ride.safetyPreferences?.genderPreference === 'female' ? ['womenOnly'] : []),
                             ],
                             pickup: ride.pickup,
-                            dropoff: ride.dropoff
+                            dropoff: ride.dropoff,
+                            needsWheelchair: ride.safetyPreferences?.needsWheelchair,
+                            wheelchairFriendly: ride.safetyPreferences?.wheelchairFriendly
                         },
                         rideId: poolMatch._id,
                         originalFare: poolMatch.fare,
@@ -1983,7 +2083,9 @@ app.post('/api/rides', async (req, res) => {
                                 ...(poolMatch.safetyPreferences?.womenOnly || poolMatch.safetyPreferences?.genderPreference === 'female' ? ['womenOnly'] : []),
                             ],
                             pickup: poolMatch.pickup,
-                            dropoff: poolMatch.dropoff
+                            dropoff: poolMatch.dropoff,
+                            needsWheelchair: poolMatch.safetyPreferences?.needsWheelchair,
+                            wheelchairFriendly: poolMatch.safetyPreferences?.wheelchairFriendly
                         },
                         rideId: ride._id,
                         originalFare: ride.fare,
@@ -2314,6 +2416,8 @@ app.get('/api/driver/:userId/active-ride', async (req, res) => {
                 vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                 photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
                 isVerified: driver.isVerified,
+                upiId: driver.upiId,
+                upiQrCodeUrl: driver.upiQrCodeUrl,
                 maskedPhone: maskPhone(driver.phone)
             } : null,
             rider: rider ? {
@@ -2366,6 +2470,8 @@ app.get('/api/rider/:userId/active-ride', async (req, res) => {
                 vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                 photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
                 isVerified: driver.isVerified,
+                upiId: driver.upiId,
+                upiQrCodeUrl: driver.upiQrCodeUrl,
                 maskedPhone: maskPhone(driver.phone)
             } : null,
             rider: rider ? {
@@ -3117,6 +3223,8 @@ app.post('/api/rides/:rideId/accept', async (req, res) => {
                         vehicle: [driver.vehicleMake || 'Car', driver.vehicleModel || ''].filter(Boolean).join(' '),
                         vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                         photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
+                        upiId: driver.upiId,
+                        upiQrCodeUrl: driver.upiQrCodeUrl,
                         maskedPhone: maskPhone(driver.phone)
                     } : null,
                     rider: groupRider ? {
@@ -3143,6 +3251,8 @@ app.post('/api/rides/:rideId/accept', async (req, res) => {
                 vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                 photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
                 isVerified: driver.isVerified,
+                upiId: driver.upiId,
+                upiQrCodeUrl: driver.upiQrCodeUrl,
                 maskedPhone: maskPhone(driver.phone)
             } : null,
             rider: rider ? {

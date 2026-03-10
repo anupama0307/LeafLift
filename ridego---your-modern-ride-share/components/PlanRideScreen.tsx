@@ -91,7 +91,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [maskedDriverPhone, setMaskedDriverPhone] = useState<string | null>(null);
     const [passengers, setPassengers] = useState(1);
     const [maxPassengers, setMaxPassengers] = useState(4);
-    const [safetyPrefs, setSafetyPrefs] = useState({ womenOnly: false, verifiedOnly: false, noSmoking: false, genderPreference: 'any' as 'any' | 'male' | 'female' });
+    const [safetyPrefs, setSafetyPrefs] = useState({ womenOnly: false, verifiedOnly: false, noSmoking: false, needsWheelchair: false, wheelchairFriendly: false, genderPreference: 'any' as 'any' | 'male' | 'female' });
     const [accessibilityOptions, setAccessibilityOptions] = useState<string[]>([]);
     const [confirmCompleteData, setConfirmCompleteData] = useState<any>(null);
     const [rideSummary, setRideSummary] = useState<any>(null);
@@ -1204,7 +1204,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             ...(accessibilityOptions.length > 0 ? { accessibilityOptions } : {}),
             passengers,
             maxPassengers: rideMode === 'Pooled' ? maxPassengers : passengers,
-            ...(rideMode === 'Pooled' ? { safetyPreferences: safetyPrefs } : {}),
+            safetyPreferences: safetyPrefs,
             bookingTime: new Date().toISOString(),
             ...(stops.length > 0 ? {
                 stops: stops.map((s, i) => ({ address: s.address, lat: s.lat, lng: s.lng, order: i }))
@@ -1845,7 +1845,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                         {rideMode === 'Pooled' && (
                             <div className="px-4 mt-3">
                                 <span className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-2 block">Safety Preferences:</span>
-                                
+
                                 {/* Gender Preference Selector */}
                                 <div className="mb-2">
                                     <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider block mb-1.5">Gender Preference:</label>
@@ -1864,16 +1864,14 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                         : 'border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50'
                                                 }`}
                                             >
-                                                <span className={`material-icons-outlined text-sm ${
-                                                    safetyPrefs.genderPreference === opt.value
-                                                        ? 'text-green-600 dark:text-green-400'
-                                                        : 'text-gray-500 dark:text-gray-400'
-                                                }`}>{opt.icon}</span>
-                                                <span className={`text-xs font-bold ${
-                                                    safetyPrefs.genderPreference === opt.value
-                                                        ? 'text-green-600 dark:text-green-400'
-                                                        : 'text-gray-600 dark:text-gray-400'
-                                                }`}>{opt.label}</span>
+                                                <span className={`material-icons-outlined text-sm ${safetyPrefs.genderPreference === opt.value
+                                                    ? 'text-green-600 dark:text-green-400'
+                                                    : 'text-gray-500 dark:text-gray-400'
+                                                    }`}>{opt.icon}</span>
+                                                <span className={`text-xs font-bold ${safetyPrefs.genderPreference === opt.value
+                                                    ? 'text-green-600 dark:text-green-400'
+                                                    : 'text-gray-600 dark:text-gray-400'
+                                                    }`}>{opt.label}</span>
                                             </button>
                                         ))}
                                     </div>
@@ -1913,12 +1911,13 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                         </div>
                                     </label>
                                     {[
-                                        { key: 'verifiedOnly' as const, label: 'Verified Riders', icon: 'verified_user', desc: 'Only verified profiles', color: 'blue' },
-                                        { key: 'noSmoking' as const, label: 'No Smoking', icon: 'smoke_free', desc: 'Smoke-free ride', color: 'green' },
+                                        { key: 'verifiedOnly' as const, label: 'Verified Riders', icon: 'verified_user', desc: 'Only verified profiles' },
+                                        { key: 'noSmoking' as const, label: 'No Smoking', icon: 'smoke_free', desc: 'Smoke-free ride' },
+                                        { key: 'wheelchairFriendly' as const, label: 'Wheelchair Buddy', icon: 'favorite', desc: 'Wheelchair-friendly rider' },
                                     ].map(pref => (
                                         <label
                                             key={pref.key}
-                                            className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition-all ${safetyPrefs[pref.key]
+                                            className={`flex items-center gap-2 p-2 rounded-xl border cursor-pointer transition-all ${safetyPrefs[pref.key]
                                                 ? 'border-green-400 bg-green-50 dark:bg-green-900/20 dark:border-green-700'
                                                 : 'border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50'
                                                 }`}
@@ -1929,18 +1928,17 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                 onChange={() => setSafetyPrefs(prev => ({ ...prev, [pref.key]: !prev[pref.key] }))}
                                                 className="sr-only"
                                             />
-                                            <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-all ${safetyPrefs[pref.key]
+                                            <div className={`w-4 h-4 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-all ${safetyPrefs[pref.key]
                                                 ? 'bg-green-500 border-green-500'
                                                 : 'border-gray-300 dark:border-zinc-600'
                                                 }`}>
                                                 {safetyPrefs[pref.key] && (
-                                                    <span className="material-icons-outlined text-white" style={{ fontSize: '14px' }}>check</span>
+                                                    <span className="material-icons-outlined text-white" style={{ fontSize: '12px' }}>check</span>
                                                 )}
                                             </div>
-                                            <span className="material-icons-outlined text-sm text-gray-500 dark:text-gray-400">{pref.icon}</span>
                                             <div className="flex-1 min-w-0">
-                                                <div className="text-xs font-bold dark:text-white">{pref.label}</div>
-                                                <div className="text-[10px] text-gray-400 dark:text-gray-500">{pref.desc}</div>
+                                                <div className="text-[11px] font-bold dark:text-white leading-tight">{pref.label}</div>
+                                                <div className="text-[9px] text-gray-400 dark:text-gray-500 leading-tight">{pref.desc}</div>
                                             </div>
                                         </label>
                                     ))}
@@ -1996,11 +1994,45 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             </div>
                         </div>
 
-
-
+                        {/* ── Wheelchair Access Requirement (Primary) ── */}
+                        <div className="px-4 mt-3">
+                            <label
+                                className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${safetyPrefs.needsWheelchair
+                                    ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-700 shadow-sm'
+                                    : 'border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800/50'
+                                    }`}
+                            >
+                                <input
+                                    type="checkbox"
+                                    checked={safetyPrefs.needsWheelchair}
+                                    onChange={() => setSafetyPrefs(prev => ({ ...prev, needsWheelchair: !prev.needsWheelchair }))}
+                                    className="sr-only"
+                                />
+                                <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all ${safetyPrefs.needsWheelchair
+                                    ? 'bg-blue-500 text-white'
+                                    : 'bg-gray-100 dark:bg-zinc-700 text-gray-400'
+                                    }`}>
+                                    <span className="material-icons-outlined text-2xl">accessible</span>
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <div className="text-sm font-black dark:text-white">I need Wheelchair Access</div>
+                                    <div className="text-[10px] text-gray-400 dark:text-gray-500">Requires a vehicle with a fold/ramp or extra trunk space</div>
+                                </div>
+                                <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${safetyPrefs.needsWheelchair ? 'bg-blue-500 border-blue-500' : 'border-gray-300'}`}>
+                                    {safetyPrefs.needsWheelchair && <span className="material-icons-outlined text-white" style={{ fontSize: '16px' }}>check</span>}
+                                </div>
+                            </label>
+                            {safetyPrefs.needsWheelchair && (
+                                <p className="text-[10px] text-blue-600 dark:text-blue-400 font-bold mt-1.5 px-1 animate-in fade-in slide-in-from-left-2 duration-300">
+                                    ⚡ Mandatory for your match. We'll only connect you with accessible vehicles.
+                                </p>
+                            )}
+                        </div>
 
                         {/* Vehicle Categories — US 3.5 eco highlights */}
-                        <div className="px-4 py-2">
+                        <div className="px-4 py-3">
+                            <h3 className="text-xs font-black text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-3">Available Vehicles</h3>
+                            <div className="space-y-2">
                             {VEHICLE_CATEGORIES.map(cat => {
                                 const price = categoryPrices.get(cat.id) || 0;
                                 const route = availableRoutes[selectedRouteIndex];
@@ -2114,6 +2146,7 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                     </button>
                                 );
                             })}
+                            </div>
                         </div>
                     </div>{/* end scrollable area */}
 
@@ -2231,6 +2264,18 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                                                 <span className="material-icons-outlined text-pink-500 dark:text-pink-400" style={{ fontSize: '10px' }}>female</span>
                                                                 <span className="text-[9px] font-bold text-pink-500 dark:text-pink-400">Women</span>
                                                             </span>
+                                                        )}
+                                                        {poolProposal.matchedRider.wheelchairFriendly && (
+                                                            <div className="flex items-center gap-0.5 bg-pink-50 dark:bg-pink-900/20 text-pink-600 dark:text-pink-400 text-[9px] font-black px-1.5 py-0.5 rounded-full">
+                                                                <span className="material-icons-outlined text-[10px]">favorite</span>
+                                                                BUDDY
+                                                            </div>
+                                                        )}
+                                                        {poolProposal.matchedRider.needsWheelchair && (
+                                                            <div className="flex items-center gap-0.5 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 text-[9px] font-black px-1.5 py-0.5 rounded-full">
+                                                                <span className="material-icons-outlined text-[10px]">accessible</span>
+                                                                WHEELCHAIR
+                                                            </div>
                                                         )}
                                                     </div>
                                                 </div>
@@ -2786,55 +2831,146 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             {/* ── Rider Confirmation Modal for Early Completion ── */}
             {confirmCompleteData && (
                 <div className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4">
-                    <div className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-3xl p-6 shadow-2xl">
-                        <h3 className="text-lg font-bold dark:text-white mb-2">Ride Complete?</h3>
-                        <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">
-                            Driver has marked the ride as complete.
-                        </p>
-                        {confirmCompleteData.actualDistanceKm && (
-                            <p className="text-sm text-gray-500 dark:text-gray-400">
-                                Distance traveled: {confirmCompleteData.actualDistanceKm} km
+                    <div className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-[32px] p-6 shadow-2xl relative overflow-hidden">
+                        {/* Decorative Background for Premium Feel */}
+                        <div className="absolute -top-12 -right-12 size-32 bg-green-500/10 rounded-full blur-2xl"></div>
+                        <div className="absolute -bottom-12 -left-12 size-32 bg-blue-500/10 rounded-full blur-2xl"></div>
+
+                        <div className="relative z-10">
+                            <h3 className="text-xl font-black dark:text-white mb-2">Ride Complete! 🎉</h3>
+                            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                                Your journey has ended safely.
                             </p>
-                        )}
-                        <p className="text-lg font-bold text-green-600 dark:text-green-400 mt-2 mb-3">
-                            Fare: ₹{confirmCompleteData.completedFare}
-                        </p>
-                        {/* CO2 preview */}
-                        {(confirmCompleteData.co2EmittedG > 0) && (
-                            <div className="bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-xl px-3 py-2 mb-2 flex items-center justify-between">
-                                <div className="flex items-center gap-1.5">
-                                    <span className="material-icons-outlined text-gray-400 text-sm">cloud</span>
-                                    <span className="text-xs text-gray-600 dark:text-gray-300">CO₂ emitted</span>
+
+                            <div className="bg-gray-50 dark:bg-zinc-800/50 rounded-2xl p-4 mb-5 border border-gray-100 dark:border-zinc-800">
+                                {confirmCompleteData.actualDistanceKm && (
+                                    <div className="flex justify-between items-center mb-2">
+                                        <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Distance</span>
+                                        <span className="text-sm font-black dark:text-white">{confirmCompleteData.actualDistanceKm} km</span>
+                                    </div>
+                                )}
+                                <div className="flex justify-between items-center">
+                                    <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Total Fare</span>
+                                    <span className="text-xl font-black text-green-600 dark:text-green-400">₹{confirmCompleteData.completedFare}</span>
                                 </div>
-                                <span className="text-xs font-bold dark:text-white">
-                                    {confirmCompleteData.co2EmittedKg >= 0.1 ? `${confirmCompleteData.co2EmittedKg} kg` : `${confirmCompleteData.co2EmittedG} g`}
-                                </span>
                             </div>
-                        )}
-                        {confirmCompleteData.co2SavedG > 0 && (
-                            <div className="bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-xl px-3 py-2 mb-3 flex items-center justify-between">
-                                <div className="flex items-center gap-1.5">
-                                    <span className="material-icons-outlined text-green-500 text-sm">eco</span>
-                                    <span className="text-xs text-gray-600 dark:text-gray-300">CO₂ saved (pool)</span>
+
+                            {/* CO2 preview */}
+                            {(confirmCompleteData.co2EmittedG > 0) && (
+                                <div className="bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-xl px-3 py-2 mb-2 flex items-center justify-between">
+                                    <div className="flex items-center gap-1.5">
+                                        <span className="material-icons-outlined text-gray-400 text-sm">cloud</span>
+                                        <span className="text-xs text-gray-600 dark:text-gray-300">CO₂ emitted</span>
+                                    </div>
+                                    <span className="text-xs font-bold dark:text-white">
+                                        {confirmCompleteData.co2EmittedKg >= 0.1 ? `${confirmCompleteData.co2EmittedKg} kg` : `${confirmCompleteData.co2EmittedG} g`}
+                                    </span>
                                 </div>
-                                <span className="text-xs font-bold text-green-600 dark:text-green-400">
-                                    -{confirmCompleteData.co2SavedKg >= 0.01 ? `${confirmCompleteData.co2SavedKg} kg` : `${confirmCompleteData.co2SavedG} g`}
-                                </span>
+                            )}
+                            {confirmCompleteData.co2SavedG > 0 && (
+                                <div className="bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-xl px-3 py-2 mb-3 flex items-center justify-between">
+                                    <div className="flex items-center gap-1.5">
+                                        <span className="material-icons-outlined text-green-500 text-sm">eco</span>
+                                        <span className="text-xs text-gray-600 dark:text-gray-300">CO₂ saved (pool)</span>
+                                    </div>
+                                    <span className="text-xs font-bold text-green-600 dark:text-green-400">
+                                        -{confirmCompleteData.co2SavedKg >= 0.01 ? `${confirmCompleteData.co2SavedKg} kg` : `${confirmCompleteData.co2SavedG} g`}
+                                    </span>
+                                </div>
+                            )}
+                            {/* Payment Method Specific UI */}
+                            {paymentMethod === 'Cash' ? (
+                                <div className="bg-amber-50 dark:bg-amber-900/10 border border-amber-100 dark:border-amber-800 rounded-2xl p-4 mb-6">
+                                    <div className="flex items-center gap-3 mb-2">
+                                        <div className="size-10 bg-amber-500 text-white rounded-xl flex items-center justify-center">
+                                            <span className="material-icons-outlined">payments</span>
+                                        </div>
+                                        <div>
+                                            <p className="text-sm font-black text-amber-700 dark:text-amber-400">Pay by Cash</p>
+                                            <p className="text-[10px] font-bold text-amber-600/70">Please hand over the amount to the driver</p>
+                                        </div>
+                                    </div>
+                                    <div className="text-center py-2 border-2 border-dashed border-amber-200 dark:border-amber-800 rounded-xl">
+                                        <span className="text-2xl font-black text-amber-700 dark:text-amber-300">₹{confirmCompleteData.completedFare}</span>
+                                    </div>
+                                </div>
+                            ) : paymentMethod === 'UPI' ? (
+                                <div className="bg-purple-50 dark:bg-purple-900/10 border border-purple-100 dark:border-purple-800 rounded-2xl p-4 mb-6">
+                                    <div className="flex items-center gap-3 mb-4">
+                                        <div className="size-10 bg-purple-600 text-white rounded-xl flex items-center justify-center">
+                                            <span className="material-icons-outlined">qr_code_2</span>
+                                        </div>
+                                        <div>
+                                            <p className="text-sm font-black text-purple-700 dark:text-purple-400">Pay by UPI</p>
+                                            <p className="text-[10px] font-bold text-purple-600/70">Scan QR or pay to UPI ID below</p>
+                                        </div>
+                                    </div>
+
+                                    {driverDetails?.upiQrCodeUrl ? (
+                                        <div className="flex flex-col items-center mb-4">
+                                            <div className="bg-white p-2 rounded-2xl shadow-sm border border-purple-100">
+                                                <img
+                                                    src={driverDetails.upiQrCodeUrl}
+                                                    alt="UPI QR Code"
+                                                    className="size-32 object-contain"
+                                                />
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="flex flex-col items-center mb-4 py-4 bg-white/50 dark:bg-zinc-900/50 rounded-xl border border-dashed border-purple-200 dark:border-purple-800">
+                                            <span className="material-icons-outlined text-purple-300 dark:text-purple-700 text-4xl mb-1">no_photography</span>
+                                            <span className="text-[10px] font-bold text-purple-400">QR Code not provided</span>
+                                        </div>
+                                    )}
+
+                                    {driverDetails?.upiId ? (
+                                        <div className="bg-white dark:bg-zinc-900 p-3 rounded-xl border border-purple-100 dark:border-purple-800 flex items-center justify-between">
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-[10px] uppercase font-black text-purple-400 mb-0.5">UPI ID</p>
+                                                <p className="text-sm font-black text-gray-900 dark:text-white truncate">{driverDetails.upiId}</p>
+                                            </div>
+                                            <button
+                                                onClick={() => {
+                                                    navigator.clipboard.writeText(driverDetails.upiId);
+                                                    alert('UPI ID copied!');
+                                                }}
+                                                className="size-8 bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 rounded-lg flex items-center justify-center active:scale-95 transition-transform"
+                                            >
+                                                <span className="material-icons-outlined text-sm">content_copy</span>
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <p className="text-xs text-center text-purple-600 dark:text-purple-400 font-bold italic">Ask driver for UPI details</p>
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-800 rounded-2xl p-4 mb-6">
+                                    <div className="flex items-center gap-3">
+                                        <div className="size-10 bg-blue-500 text-white rounded-xl flex items-center justify-center">
+                                            <span className="material-icons-outlined">account_balance_wallet</span>
+                                        </div>
+                                        <div>
+                                            <p className="text-sm font-black text-blue-700 dark:text-blue-400">Payment Processed</p>
+                                            <p className="text-[10px] font-bold text-blue-600/70">Amount deducted from your {paymentMethod}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={() => handleConfirmComplete(true)}
+                                    className="flex-1 bg-green-500 hover:bg-green-600 text-white py-4 rounded-2xl font-black text-sm uppercase tracking-widest shadow-lg shadow-green-500/20 active:scale-95 transition-all"
+                                >
+                                    Confirm Payment
+                                </button>
+                                <button
+                                    onClick={() => handleConfirmComplete(false)}
+                                    className="px-6 bg-gray-100 dark:bg-zinc-800 hover:bg-red-50 dark:hover:bg-red-900/10 text-gray-500 dark:text-zinc-400 hover:text-red-500 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all"
+                                >
+                                    Dispute
+                                </button>
                             </div>
-                        )}
-                        <div className="flex gap-3 mt-1">
-                            <button
-                                onClick={() => handleConfirmComplete(true)}
-                                className="flex-1 bg-green-500 text-white py-3 rounded-xl font-bold"
-                            >
-                                Confirm & Pay
-                            </button>
-                            <button
-                                onClick={() => handleConfirmComplete(false)}
-                                className="flex-1 bg-gray-100 dark:bg-zinc-800 py-3 rounded-xl font-bold dark:text-white"
-                            >
-                                Dispute
-                            </button>
                         </div>
                     </div>
                 </div>
