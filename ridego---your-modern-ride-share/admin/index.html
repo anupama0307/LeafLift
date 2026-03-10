@@ -10,44 +10,30 @@
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet" />
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
 
-    <!-- MapLibre GL JS (OLA Maps uses this) - same as main app -->
-    <script src='https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js'></script>
-    <link href='https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css' rel='stylesheet' />
+    <!-- Mapbox GL JS v2 -->
+    <script src='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js'></script>
+    <link href='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css' rel='stylesheet' />
+    <script>
+        window.MAPBOX_TOKEN = 'MAPBOX_TOKEN_PLACEHOLDER';
+    </script>
 
     <script>
         tailwind.config = {
-            darkMode: "class",
             theme: {
                 extend: {
                     colors: {
-                        primary: "#000000",
-                        leaf: {
-                            DEFAULT: "#22C55E",
-                            light: "#DCFCE7",
-                            dark: "#166534",
-                            50: "#F0FDF4",
-                            100: "#DCFCE7",
-                            200: "#BBF7D0",
-                            300: "#86EFAC",
-                            400: "#4ADE80",
-                            500: "#22C55E",
-                            600: "#16A34A",
-                            700: "#15803D",
-                            800: "#166534",
-                            900: "#14532D",
-                        },
-                        "background-light": "#FFFFFF",
-                        "background-dark": "#121212",
-                        "card-light": "#F3F3F3",
-                        "card-dark": "#1E1E1E",
+                        'dash-bg': '#000000',
+                        'card-bg': '#121214',
+                        'card-border': '#222224',
+                        'accent-purple': '#A78BFA',
+                        'accent-yellow': '#FDE047',
+                        'accent-green': '#4ADE80',
+                        'accent-cyan': '#22D3EE',
+                        'accent-rose': '#FB7185',
+                        'text-muted': '#9CA3AF',
                     },
                     fontFamily: {
-                        sans: ["Inter", "sans-serif"],
-                    },
-                    borderRadius: {
-                        DEFAULT: "16px",
-                        '2xl': "24px",
-                        '3xl': "32px",
+                        sans: ['Inter', 'sans-serif'],
                     },
                 },
             },
@@ -55,9 +41,41 @@
     </script>
     <style>
         body {
+            background-color: #000000;
+            color: #ffffff;
             font-family: 'Inter', sans-serif;
             -webkit-tap-highlight-color: transparent;
             overscroll-behavior-y: contain;
+        }
+        
+        .card {
+            background-color: #121214;
+            border: 1px solid #222224;
+            border-radius: 1.5rem;
+            padding: 1.5rem;
+        }
+        
+         ::-webkit-scrollbar {
+            width: 4px;
+            height: 4px;
+        }
+        
+         ::-webkit-scrollbar-thumb {
+            background: #333;
+            border-radius: 10px;
+        }
+        
+         ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        .dot-grid {
+            background-image: radial-gradient(#333 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        
+        .bar-striped {
+            background: repeating-linear-gradient( 45deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.05) 5px, transparent 5px, transparent 10px);
         }
         
         .hide-scrollbar::-webkit-scrollbar {
@@ -123,53 +141,6 @@
             animation: pulse-ring 2s ease-in-out infinite;
         }
         
-        .pulse-ring-slow {
-            animation: pulse-ring 3s ease-in-out infinite;
-        }
-        
-        @keyframes count-up {
-            from {
-                opacity: 0;
-                transform: translateY(8px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-        
-        .count-up {
-            animation: count-up 0.6s ease-out forwards;
-        }
-        
-        @keyframes float {
-            0%,
-            100% {
-                transform: translateY(0px);
-            }
-            50% {
-                transform: translateY(-4px);
-            }
-        }
-        
-        .animate-float {
-            animation: float 3s ease-in-out infinite;
-        }
-        
-        @keyframes pulse-scale {
-            0%,
-            100% {
-                transform: scale(1);
-            }
-            50% {
-                transform: scale(1.03);
-            }
-        }
-        
-        .animate-pulse-scale {
-            animation: pulse-scale 2s ease-in-out infinite;
-        }
-        
         @keyframes fade-in {
             from {
                 opacity: 0;
@@ -182,83 +153,10 @@
         .animate-fade-in {
             animation: fade-in 0.3s ease-out forwards;
         }
-        
-        @keyframes slide-in-right {
-            from {
-                opacity: 0;
-                transform: translateX(20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateX(0);
-            }
-        }
-        
-        .animate-slide-in-right {
-            animation: slide-in-right 0.4s ease-out forwards;
-        }
-        
-        @keyframes slide-in-left {
-            from {
-                opacity: 0;
-                transform: translateX(-20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateX(0);
-            }
-        }
-        
-        .animate-slide-in-left {
-            animation: slide-in-left 0.4s ease-out forwards;
-        }
-        
-        @keyframes bounce-slow {
-            0%,
-            100% {
-                transform: translateY(0);
-            }
-            50% {
-                transform: translateY(-8px);
-            }
-        }
-        
-        .animate-bounce-slow {
-            animation: bounce-slow 2s ease-in-out infinite;
-        }
-        
-        @keyframes pulse-slow {
-            0%,
-            100% {
-                opacity: 1;
-            }
-            50% {
-                opacity: 0.7;
-            }
-        }
-        
-        .animate-pulse-slow {
-            animation: pulse-slow 3s ease-in-out infinite;
-        }
-        
-        @keyframes count-up-animation {
-            from {
-                opacity: 0;
-                transform: translateY(8px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-        
-        .animate-count-up {
-            animation: count-up-animation 0.6s ease-out forwards;
-        }
     </style>
 </head>
 
-<body class="bg-gray-100 dark:bg-zinc-950 text-gray-900 dark:text-white">
+<body class="p-0 m-0">
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
 </body>
