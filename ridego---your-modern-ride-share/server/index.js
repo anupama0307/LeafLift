@@ -3537,6 +3537,7 @@ app.post('/api/rides/:rideId/verify-otp', async (req, res) => {
 
         ride.otpVerified = true;
         ride.status = 'IN_PROGRESS';
+        ride.startedAt = new Date();   // US 2.2 — record exact trip start for countdown
         await ride.save();
 
         io.to(`ride:${ride._id}`).emit('ride:status', { rideId: ride._id, status: ride.status });
@@ -4890,6 +4891,53 @@ app.get('/api/rides/:rideId/stops', async (req, res) => {
         });
     } catch (error) {
         res.status(500).json({ message: 'Error fetching stops' });
+    }
+});
+
+// ── US 2.2 — Arrival ETA countdown for active ride ─────────────────────────────────────────────────────────
+// GET /api/rides/:rideId/arrival-eta
+// Returns remainingMinutes computed from startedAt + originalEtaMinutes (no driver-location needed)
+app.get('/api/rides/:rideId/arrival-eta', async (req, res) => {
+    try {
+        const ride = await Ride.findById(req.params.rideId)
+            .select('status startedAt originalEtaMinutes')
+            .lean();
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        if (ride.status !== 'IN_PROGRESS') {
+            return res.json({
+                remainingMinutes: null,
+                elapsedMinutes: null,
+                originalEtaMinutes: ride.originalEtaMinutes || null,
+                estimatedArrivalTime: null,
+                startedAt: ride.startedAt || null,
+                status: ride.status,
+                message: 'Ride not in progress'
+            });
+        }
+
+        const originalEtaMinutes = ride.originalEtaMinutes || 0;
+        let remainingMinutes = null;
+        let elapsedMinutes = null;
+        let estimatedArrivalTime = null;
+
+        if (ride.startedAt) {
+            elapsedMinutes = Math.floor((Date.now() - new Date(ride.startedAt).getTime()) / 60000);
+            remainingMinutes = Math.max(0, originalEtaMinutes - elapsedMinutes);
+            const arrivalMs = new Date(ride.startedAt).getTime() + originalEtaMinutes * 60000;
+            estimatedArrivalTime = new Date(arrivalMs).toISOString();
+        }
+
+        res.json({
+            remainingMinutes,
+            elapsedMinutes,
+            originalEtaMinutes,
+            estimatedArrivalTime,
+            startedAt: ride.startedAt,
+            status: ride.status
+        });
+    } catch (err) {
+        res.status(500).json({ message: 'Error fetching arrival ETA' });
     }
 });
 

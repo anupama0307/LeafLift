@@ -129,6 +129,7 @@ const RideSchema = new mongoose.Schema({
     etaToPickup: String,
     etaToDropoff: String,
     originalEtaMinutes: { type: Number, default: null },
+    startedAt: { type: Date, default: null },          // US 2.2 — ride start timestamp for countdown
     lastDelayAlertAt: { type: Date, default: null },
     otp: String,
     otpVerified: {

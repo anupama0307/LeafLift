@@ -123,6 +123,10 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [liveEtaSource, setLiveEtaSource] = useState<string | null>(null);
     const [liveEtaUpdatedAt, setLiveEtaUpdatedAt] = useState<string | null>(null);
 
+    // ─── US 2.2 — Arrival ETA Countdown State ───
+    const [arrivalEtaMin, setArrivalEtaMin] = useState<number | null>(null);
+    const [arrivalEstimatedTime, setArrivalEstimatedTime] = useState<string | null>(null);
+
     // ─── Delay Alert State ───
     const [delayAlert, setDelayAlert] = useState<{ delayMinutes: number; message: string; etaText: string; etaLabel: string } | null>(null);
     const delayAlertTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -516,6 +520,34 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         fetchLiveEta();
         const interval = setInterval(fetchLiveEta, 60000);
         return () => clearInterval(interval);
+    }, [activeRideId, rideStatus]);
+
+    // ─── US 2.2 — Arrival ETA countdown polling (every 60s when IN_PROGRESS) ───
+    useEffect(() => {
+        if (rideStatus !== 'IN_PROGRESS' || !activeRideId) {
+            setArrivalEtaMin(null);
+            setArrivalEstimatedTime(null);
+            return;
+        }
+
+        const fetchArrivalEta = async () => {
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/rides/${activeRideId}/arrival-eta`);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.remainingMinutes !== null && data.remainingMinutes !== undefined) {
+                    setArrivalEtaMin(data.remainingMinutes);
+                }
+                if (data.estimatedArrivalTime) {
+                    setArrivalEstimatedTime(data.estimatedArrivalTime);
+                }
+            } catch { }
+        };
+
+        // 2.2.3 — fetch immediately, then every 60 seconds
+        fetchArrivalEta();
+        const timer = setInterval(fetchArrivalEta, 60000);
+        return () => clearInterval(timer);
     }, [activeRideId, rideStatus]);
 
     // ─── Filter nearby drivers ───
@@ -2642,7 +2674,8 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 {rideStatus.replace('_', ' ')}
                             </h3>
                         </div>
-                        {/* Live ETA Badge */}
+
+                    {/* Live ETA Badge */}
                         {(liveEtaText || etaToPickup) && rideStatus !== 'COMPLETED' && (
                             <div className="flex flex-col items-end gap-1">
                                 <div className="flex items-center gap-1.5 bg-black dark:bg-white text-white dark:text-black px-3 py-1.5 rounded-full text-xs font-bold">
@@ -2662,6 +2695,36 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             </div>
                         )}
                     </div>
+
+                    {/* ── US 2.2 — IN_PROGRESS arrival ETA countdown card ── */}
+                    {rideStatus === 'IN_PROGRESS' && arrivalEtaMin !== null && (
+                        <div className="mb-4 rounded-2xl overflow-hidden border border-emerald-100 dark:border-emerald-900">
+                            <div className="bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-3 flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <span className="relative flex h-2.5 w-2.5">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60"></span>
+                                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-white"></span>
+                                    </span>
+                                    <span className="text-white text-xs font-black uppercase tracking-widest">ETA to Destination</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 bg-white/20 rounded-full px-3 py-1">
+                                    <span className="material-icons-outlined text-white" style={{ fontSize: '14px' }}>timer</span>
+                                    <span className="text-white font-black text-sm">
+                                        {arrivalEtaMin === 0 ? 'Arriving now' : `${arrivalEtaMin} min`}
+                                    </span>
+                                </div>
+                            </div>
+                            {arrivalEstimatedTime && (
+                                <div className="bg-emerald-50 dark:bg-emerald-950/40 px-4 py-2 flex items-center gap-1.5">
+                                    <span className="material-icons-outlined text-emerald-600 dark:text-emerald-400" style={{ fontSize: '12px' }}>schedule</span>
+                                    <span className="text-emerald-700 dark:text-emerald-400 text-[10px] font-semibold">
+                                        Est. arrival at {new Date(arrivalEstimatedTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                    <span className="ml-auto text-[9px] text-emerald-500 dark:text-emerald-600 font-medium">↻ refreshes every 60s</span>
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {driverDetails && (
                         <div className="flex items-center gap-3 mb-4">
