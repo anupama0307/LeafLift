@@ -296,6 +296,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     }
   };
 
+  /* 
+  // handleNext is currently unused and was causing lint errors due to missing state
   const handleNext = () => {
     if (step === 'NAME') setStep('DOB');
     else if (step === 'DOB') setStep('GENDER');
@@ -310,6 +312,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
       handleSignup({ role, firstName, lastName, phone, dob, gender, license, licenseUrl, aadhar, aadharUrl });
     }
   };
+  */
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, type: 'license' | 'aadhar') => {
     const file = e.target.files?.[0];
@@ -329,15 +332,31 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
     setError(null);
 
     try {
-      // If OAuth user, set their password; if not, create account
+      // 1. Firebase Auth Step — OAuth users set their password; email users handle ghost Firebase accounts
       if (oauthUser) {
         if (auth.currentUser) {
           await updatePassword(auth.currentUser, password);
         }
       } else {
-        await createUserWithEmailAndPassword(auth, email, password);
+        try {
+          await createUserWithEmailAndPassword(auth, email, password);
+        } catch (fbErr: any) {
+          // If already in Firebase, it might be a "ghost" user (deleted from DB but not Firebase)
+          if (fbErr.code === 'auth/email-already-in-use') {
+            console.log('User already exists in Firebase. Attempting to sign in to sync with database...');
+            try {
+              await signInWithEmailAndPassword(auth, email, password);
+            } catch (signInErr: any) {
+              // Password mismatch or other issue
+              throw fbErr;
+            }
+          } else {
+            throw fbErr;
+          }
+        }
       }
 
+      // 2. Database Record Step
       const userData: any = {
         role,
         firstName,
@@ -360,11 +379,13 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, toggleTheme, isD
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(userData),
       });
+
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Signup failed');
 
       onAuthSuccess(data.user);
     } catch (err: any) {
+      console.error('Signup process error:', err);
       if (err.code === 'auth/email-already-in-use') {
         setError('Email already registered. Try signing in instead.');
       } else {

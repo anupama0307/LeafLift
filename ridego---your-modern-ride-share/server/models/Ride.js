@@ -1,4 +1,11 @@
 const mongoose = require('mongoose');
+const { encrypt, decrypt } = require('../utils/encryption');
+
+const EncryptedNumber = {
+    type: mongoose.Schema.Types.Mixed,
+    set: encrypt,
+    get: decrypt
+};
 
 const RideSchema = new mongoose.Schema({
     userId: {
@@ -17,19 +24,19 @@ const RideSchema = new mongoose.Schema({
     },
     pickup: {
         address: String,
-        lat: Number,
-        lng: Number
+        lat: EncryptedNumber,
+        lng: EncryptedNumber
     },
     dropoff: {
         address: String,
-        lat: Number,
-        lng: Number
+        lat: EncryptedNumber,
+        lng: EncryptedNumber
     },
     // Multi-stop waypoints
     stops: [{
         address: { type: String, required: true },
-        lat: { type: Number, required: true },
-        lng: { type: Number, required: true },
+        lat: EncryptedNumber,
+        lng: EncryptedNumber,
         order: { type: Number, required: true },
         status: { type: String, enum: ['PENDING', 'REACHED', 'SKIPPED'], default: 'PENDING' },
         reachedAt: Date
@@ -77,8 +84,8 @@ const RideSchema = new mongoose.Schema({
         riderName: String,
         rideId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ride' },
         address: String,
-        lat: Number,
-        lng: Number,
+        lat: EncryptedNumber,
+        lng: EncryptedNumber,
         order: Number,
         status: { type: String, enum: ['PENDING', 'REACHED', 'COMPLETED'], default: 'PENDING' },
         reachedAt: Date,
@@ -104,31 +111,32 @@ const RideSchema = new mongoose.Schema({
         gender: String,
         pickup: {
             address: String,
-            lat: Number,
-            lng: Number
+            lat: EncryptedNumber,
+            lng: EncryptedNumber
         },
         dropoff: {
             address: String,
-            lat: Number,
-            lng: Number
+            lat: EncryptedNumber,
+            lng: EncryptedNumber
         },
         fareAdjustment: { type: Number, default: 0 },
         joinedAt: { type: Date, default: Date.now },
         status: { type: String, enum: ['PENDING_CONSENT', 'APPROVED', 'REJECTED', 'JOINED'], default: 'PENDING_CONSENT' }
     }],
     riderLocation: {
-        lat: Number,
-        lng: Number,
+        lat: EncryptedNumber,
+        lng: EncryptedNumber,
         updatedAt: Date
     },
     driverLocation: {
-        lat: Number,
-        lng: Number,
+        lat: EncryptedNumber,
+        lng: EncryptedNumber,
         updatedAt: Date
     },
     etaToPickup: String,
     etaToDropoff: String,
     originalEtaMinutes: { type: Number, default: null },
+    startedAt: { type: Date, default: null },          // US 2.2 — ride start timestamp for countdown
     lastDelayAlertAt: { type: Date, default: null },
     otp: String,
     otpVerified: {
@@ -159,13 +167,15 @@ const RideSchema = new mongoose.Schema({
         womenOnly: { type: Boolean, default: false },
         verifiedOnly: { type: Boolean, default: false },
         noSmoking: { type: Boolean, default: false },
+        needsWheelchair: { type: Boolean, default: false },
+        wheelchairFriendly: { type: Boolean, default: false },
         genderPreference: { type: String, enum: ['any', 'male', 'female'], default: 'any' }
     },
     // Early termination / partial ride
     actualDropoff: {
         address: String,
-        lat: Number,
-        lng: Number
+        lat: EncryptedNumber,
+        lng: EncryptedNumber
     },
     actualDistanceMeters: { type: Number, default: 0 },
     completedFare: { type: Number, default: 0 },
@@ -221,6 +231,9 @@ const RideSchema = new mongoose.Schema({
         type: Date,
         default: Date.now
     }
+}, {
+    toJSON: { getters: true },
+    toObject: { getters: true }
 });
 
 module.exports = mongoose.model('Ride', RideSchema);

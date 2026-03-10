@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
@@ -254,6 +254,25 @@ io.on('connection', (socket) => {
         entry.lastUpdate = now;
         onlineDrivers.set(driverId, entry);
         io.to('riders:online').emit('nearby:driver:update', { driverId, lat, lng });
+
+        // ── US 2.6 — Driver Nearby Detection ──
+        // Emit driver:nearby when driver is within 300m of rider's pickup (ACCEPTED rides only)
+        if (!entry.nearbyNotifiedRides) entry.nearbyNotifiedRides = new Set();
+        (async () => {
+            try {
+                const activeRide = await Ride.findOne({ driverId, status: 'ACCEPTED' })
+                    .select('_id userId pickup').lean();
+                if (!activeRide?.pickup?.lat) return;
+                const distKm = getDistanceKm(lat, lng, activeRide.pickup.lat, activeRide.pickup.lng);
+                const rideIdStr = activeRide._id.toString();
+                if (distKm !== null && distKm <= 0.3 && !entry.nearbyNotifiedRides.has(rideIdStr)) {
+                    entry.nearbyNotifiedRides.add(rideIdStr);
+                    io.to(`ride:${activeRide._id}`).emit('driver:nearby', { rideId: rideIdStr });
+                    io.to(`user:${activeRide.userId}`).emit('driver:nearby', { rideId: rideIdStr });
+                    console.log(`🚗 Driver ${driverId} nearby pickup: ride ${rideIdStr} (${(distKm * 1000).toFixed(0)}m)`);
+                }
+            } catch { /* silent */ }
+        })();
     });
 
     socket.on('driver:offline', ({ driverId }) => {
@@ -791,6 +810,58 @@ if (MONGODB_URI) {
             } catch (cleanupErr) {
                 console.warn('⚠️  Startup cleanup error:', cleanupErr.message);
             }
+
+            // ─── Automated Location Data Retention Policy ───
+            const scrubExpiredLocationData = async () => {
+                const retentionDays = parseInt(process.env.LOCATION_DATA_RETENTION_DAYS, 10) || 30;
+                const thresholdDate = new Date();
+                thresholdDate.setDate(thresholdDate.getDate() - retentionDays);
+
+                console.log(`🧹 Running automated location scrubbing policy (History > ${retentionDays} days)`);
+
+                try {
+                    const result = await Ride.updateMany(
+                        {
+                            createdAt: { $lt: thresholdDate },
+                            status: { $in: ['COMPLETED', 'CANCELED'] },
+                            // Only target documents that still have coordinates or polylines
+                            $or: [
+                                { 'pickup.lat': { $ne: null } },
+                                { 'dropoff.lat': { $ne: null } },
+                                { 'routePolyline': { $ne: '' } },
+                                { 'riderLocation.lat': { $ne: null } }
+                            ]
+                        },
+                        {
+                            $set: {
+                                'pickup.lat': null,
+                                'pickup.lng': null,
+                                'dropoff.lat': null,
+                                'dropoff.lng': null,
+                                'riderLocation.lat': null,
+                                'riderLocation.lng': null,
+                                'driverLocation.lat': null,
+                                'driverLocation.lng': null,
+                                'actualDropoff.lat': null,
+                                'actualDropoff.lng': null,
+                                'routePolyline': '',
+                                'stops': [], // Scrubbing detailed waypoints entirely
+                                'poolStops': []
+                            }
+                        }
+                    );
+                    if (result.modifiedCount > 0) {
+                        console.log(`✅ SCRUBBED sensitive location data from ${result.modifiedCount} rides older than ${retentionDays} days.`);
+                    }
+                } catch (err) {
+                    console.error('❌ Location scrubbing error:', err);
+                }
+            };
+
+            // Run on startup
+            scrubExpiredLocationData();
+            // Then run daily
+            setInterval(scrubExpiredLocationData, 24 * 60 * 60 * 1000);
         })
         .catch(err => console.error('❌ MongoDB error:', err));
 } else {
@@ -1238,6 +1309,25 @@ app.put('/api/users/:userId', async (req, res) => {
     }
 });
 
+// Delete user account
+app.delete('/api/users/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const user = await User.findByIdAndDelete(userId);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        // Cleanup related data
+        await Ride.deleteMany({ $or: [{ riderId: userId }, { driverId: userId }] });
+        await Notification.deleteMany({ userId: userId });
+
+        console.log(`🗑️ Account deleted: ${user.email} (${userId})`);
+        res.json({ message: 'Account deleted successfully' });
+    } catch (error) {
+        console.error('Delete account error:', error);
+        res.status(500).json({ message: 'Error deleting account' });
+    }
+});
+
 // ── Driver Daily Route ──
 /**
  * @swagger
@@ -1390,7 +1480,14 @@ app.get('/api/rider/match-driver', async (req, res) => {
             // Check dropoff proximity (within 5km of driver destination)
             const dropoffDist = getDistanceKm(dLat, dLng, route.destination.lat, route.destination.lng);
 
-            // Check accessibility support if rider requested it
+            // ♿ Wheelchair Access Check
+            const riderNeedsWC = req.query.needsWheelchair === 'true';
+            if (riderNeedsWC) {
+                const supportsWheelchair = (driver.accessibilitySupport || []).includes('Wheelchair');
+                if (!supportsWheelchair) return false;
+            }
+
+            // Check other specific accessibility support if rider requested it
             const reqAccessibility = req.query.accessibilityOptions ? req.query.accessibilityOptions.split(',') : [];
             if (reqAccessibility.length > 0) {
                 const supportsAll = reqAccessibility.every(opt => (driver.accessibilitySupport || []).includes(opt));
@@ -1880,11 +1977,31 @@ app.post('/api/rides', async (req, res) => {
                         candidate.dropoff.lat, candidate.dropoff.lng
                     );
 
-                    console.log(`  📏 Candidate ${candidate._id}: pickup dist=${pickupDist?.toFixed(2)}km, dropoff dist=${dropoffDist?.toFixed(2)}km`);
+                    // ♿ Wheelchair Compatibility Check
+                    const rideNeedsWC = ride.safetyPreferences?.needsWheelchair;
+                    const candidateNeedsWC = candidate.safetyPreferences?.needsWheelchair;
+                    const rideIsFriendly = ride.safetyPreferences?.wheelchairFriendly;
+                    const candidateIsFriendly = candidate.safetyPreferences?.wheelchairFriendly;
+
+                    let wheelchairCompatible = true;
+                    if (rideNeedsWC && !candidateIsFriendly) {
+                        wheelchairCompatible = false;
+                        console.log(`  ❌ MISMATCH: Rider ${ride.userId} needs wheelchair, but candidate ${candidate.userId._id} is not Friendly.`);
+                    } else if (candidateNeedsWC && !rideIsFriendly) {
+                        wheelchairCompatible = false;
+                        console.log(`  ❌ MISMATCH: Candidate ${candidate.userId._id} needs wheelchair, but rider ${ride.userId} is not Friendly.`);
+                    } else if (rideNeedsWC && candidateNeedsWC) {
+                        // Prevent two wheelchair users in one car for space/luggage reasons
+                        wheelchairCompatible = false;
+                        console.log(`  ❌ MISMATCH: Both riders need wheelchair access (Space constraint).`);
+                    }
+
+                    console.log(`  📏 Candidate ${candidate._id}: pickup dist=${pickupDist?.toFixed(2)}km, dropoff dist=${dropoffDist?.toFixed(2)}km | WC Compatible: ${wheelchairCompatible}`);
 
                     if (pickupDist !== null && dropoffDist !== null &&
                         pickupDist <= POOL_PICKUP_RADIUS_KM &&
-                        dropoffDist <= POOL_DROPOFF_RADIUS_KM) {
+                        dropoffDist <= POOL_DROPOFF_RADIUS_KM &&
+                        wheelchairCompatible) {
                         poolMatch = candidate;
                         confirmedWindowStart = overlapWindow.start;
                         confirmedWindowEnd = overlapWindow.end;
@@ -1958,7 +2075,9 @@ app.post('/api/rides', async (req, res) => {
                                 ...(ride.safetyPreferences?.womenOnly || ride.safetyPreferences?.genderPreference === 'female' ? ['womenOnly'] : []),
                             ],
                             pickup: ride.pickup,
-                            dropoff: ride.dropoff
+                            dropoff: ride.dropoff,
+                            needsWheelchair: ride.safetyPreferences?.needsWheelchair,
+                            wheelchairFriendly: ride.safetyPreferences?.wheelchairFriendly
                         },
                         rideId: poolMatch._id,
                         originalFare: poolMatch.fare,
@@ -1983,7 +2102,9 @@ app.post('/api/rides', async (req, res) => {
                                 ...(poolMatch.safetyPreferences?.womenOnly || poolMatch.safetyPreferences?.genderPreference === 'female' ? ['womenOnly'] : []),
                             ],
                             pickup: poolMatch.pickup,
-                            dropoff: poolMatch.dropoff
+                            dropoff: poolMatch.dropoff,
+                            needsWheelchair: poolMatch.safetyPreferences?.needsWheelchair,
+                            wheelchairFriendly: poolMatch.safetyPreferences?.wheelchairFriendly
                         },
                         rideId: ride._id,
                         originalFare: ride.fare,
@@ -2133,6 +2254,42 @@ app.get('/api/rides/driver/:driverId', async (req, res) => {
  *               items:
  *                 $ref: '#/components/schemas/Ride'
  */
+// ── US 2.1 — Trip distance & duration estimate before booking ────────────────────
+// GET /api/rides/estimate?pickupLat=&pickupLng=&dropoffLat=&dropoffLng=
+// Returns straight-line distance (Haversine) + ETA per vehicle category.
+app.get('/api/rides/estimate', (req, res) => {
+    const { pickupLat, pickupLng, dropoffLat, dropoffLng } = req.query;
+    const pLat = parseFloat(pickupLat);
+    const pLng = parseFloat(pickupLng);
+    const dLat = parseFloat(dropoffLat);
+    const dLng = parseFloat(dropoffLng);
+
+    if ([pLat, pLng, dLat, dLng].some(n => Number.isNaN(n))) {
+        return res.status(400).json({ message: 'pickupLat, pickupLng, dropoffLat, dropoffLng are required numeric query params' });
+    }
+
+    const straightLineKm = parseFloat(getDistanceKm(pLat, pLng, dLat, dLng).toFixed(2));
+
+    // Speed assumptions (km/h) to estimate door-to-door travel time
+    const SPEED_KMH = { BIKE: 20, AUTO: 25, CAR: 28, BIG_CAR: 28 };
+    const vehicleEstimates = Object.entries(SPEED_KMH).map(([category, speed]) => ({
+        category,
+        straightLineKm,
+        estimatedDurationMin: Math.max(1, Math.round((straightLineKm / speed) * 60)),
+        co2EmittedG: Math.round(straightLineKm * (CO2_RATES_G_PER_KM[category] || 120)),
+    }));
+
+    // Default estimate uses average car speed (28 km/h)
+    const estimatedDurationMin = Math.max(1, Math.round((straightLineKm / SPEED_KMH.CAR) * 60));
+
+    res.json({
+        straightLineKm,
+        estimatedDurationMin,
+        note: 'Straight-line (Haversine) distance. Actual road distance may be longer.',
+        vehicleEstimates,
+    });
+});
+
 app.get('/api/rides/nearby', async (req, res) => {
     try {
         const { lat, lng, radius = 6 } = req.query;
@@ -2314,6 +2471,8 @@ app.get('/api/driver/:userId/active-ride', async (req, res) => {
                 vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                 photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
                 isVerified: driver.isVerified,
+                upiId: driver.upiId,
+                upiQrCodeUrl: driver.upiQrCodeUrl,
                 maskedPhone: maskPhone(driver.phone)
             } : null,
             rider: rider ? {
@@ -2366,6 +2525,8 @@ app.get('/api/rider/:userId/active-ride', async (req, res) => {
                 vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                 photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
                 isVerified: driver.isVerified,
+                upiId: driver.upiId,
+                upiQrCodeUrl: driver.upiQrCodeUrl,
                 maskedPhone: maskPhone(driver.phone)
             } : null,
             rider: rider ? {
@@ -3117,6 +3278,8 @@ app.post('/api/rides/:rideId/accept', async (req, res) => {
                         vehicle: [driver.vehicleMake || 'Car', driver.vehicleModel || ''].filter(Boolean).join(' '),
                         vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                         photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
+                        upiId: driver.upiId,
+                        upiQrCodeUrl: driver.upiQrCodeUrl,
                         maskedPhone: maskPhone(driver.phone)
                     } : null,
                     rider: groupRider ? {
@@ -3143,6 +3306,8 @@ app.post('/api/rides/:rideId/accept', async (req, res) => {
                 vehicleNumber: driver.vehicleNumber || 'TN 37 AB 1234',
                 photoUrl: driver.photoUrl || `https://i.pravatar.cc/150?u=${driver._id}`,
                 isVerified: driver.isVerified,
+                upiId: driver.upiId,
+                upiQrCodeUrl: driver.upiQrCodeUrl,
                 maskedPhone: maskPhone(driver.phone)
             } : null,
             rider: rider ? {
@@ -3501,6 +3666,7 @@ app.post('/api/rides/:rideId/verify-otp', async (req, res) => {
 
         ride.otpVerified = true;
         ride.status = 'IN_PROGRESS';
+        ride.startedAt = new Date();   // US 2.2 — record exact trip start for countdown
         await ride.save();
 
         io.to(`ride:${ride._id}`).emit('ride:status', { rideId: ride._id, status: ride.status });
@@ -4854,6 +5020,96 @@ app.get('/api/rides/:rideId/stops', async (req, res) => {
         });
     } catch (error) {
         res.status(500).json({ message: 'Error fetching stops' });
+    }
+});
+
+// ── US 2.2 — Arrival ETA countdown for active ride ─────────────────────────────────────────────────────────
+// GET /api/rides/:rideId/arrival-eta
+// Returns remainingMinutes computed from startedAt + originalEtaMinutes (no driver-location needed)
+app.get('/api/rides/:rideId/arrival-eta', async (req, res) => {
+    try {
+        const ride = await Ride.findById(req.params.rideId)
+            .select('status startedAt originalEtaMinutes')
+            .lean();
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        if (ride.status !== 'IN_PROGRESS') {
+            return res.json({
+                remainingMinutes: null,
+                elapsedMinutes: null,
+                originalEtaMinutes: ride.originalEtaMinutes || null,
+                estimatedArrivalTime: null,
+                startedAt: ride.startedAt || null,
+                status: ride.status,
+                message: 'Ride not in progress'
+            });
+        }
+
+        const originalEtaMinutes = ride.originalEtaMinutes || 0;
+        let remainingMinutes = null;
+        let elapsedMinutes = null;
+        let estimatedArrivalTime = null;
+
+        if (ride.startedAt) {
+            elapsedMinutes = Math.floor((Date.now() - new Date(ride.startedAt).getTime()) / 60000);
+            remainingMinutes = Math.max(0, originalEtaMinutes - elapsedMinutes);
+            const arrivalMs = new Date(ride.startedAt).getTime() + originalEtaMinutes * 60000;
+            estimatedArrivalTime = new Date(arrivalMs).toISOString();
+        }
+
+        res.json({
+            remainingMinutes,
+            elapsedMinutes,
+            originalEtaMinutes,
+            estimatedArrivalTime,
+            startedAt: ride.startedAt,
+            status: ride.status
+        });
+    } catch (err) {
+        res.status(500).json({ message: 'Error fetching arrival ETA' });
+    }
+});
+
+// ── US 2.3 — Trip progress bar for active ride ──────────────────────────────────────────────────────────────
+// GET /api/rides/:rideId/trip-progress
+// Returns progressPercent (0–100) from elapsedTime / originalEtaMinutes.
+app.get('/api/rides/:rideId/trip-progress', async (req, res) => {
+    try {
+        const ride = await Ride.findById(req.params.rideId)
+            .select('status startedAt originalEtaMinutes')
+            .lean();
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        if (ride.status !== 'IN_PROGRESS') {
+            return res.json({
+                progressPercent: 0,
+                elapsedMinutes: null,
+                originalEtaMinutes: ride.originalEtaMinutes || null,
+                status: ride.status,
+                message: 'Ride not in progress'
+            });
+        }
+
+        const originalEtaMinutes = ride.originalEtaMinutes || 0;
+        let progressPercent = 0;
+        let elapsedMinutes = null;
+
+        if (ride.startedAt && originalEtaMinutes > 0) {
+            elapsedMinutes = Math.floor((Date.now() - new Date(ride.startedAt).getTime()) / 60000);
+            progressPercent = Math.min(100, Math.round((elapsedMinutes / originalEtaMinutes) * 100));
+        } else if (ride.startedAt) {
+            elapsedMinutes = Math.floor((Date.now() - new Date(ride.startedAt).getTime()) / 60000);
+        }
+
+        res.json({
+            progressPercent,
+            elapsedMinutes,
+            originalEtaMinutes,
+            startedAt: ride.startedAt,
+            status: ride.status
+        });
+    } catch (err) {
+        res.status(500).json({ message: 'Error fetching trip progress' });
     }
 });
 

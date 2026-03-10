@@ -1,5 +1,6 @@
 
 import React, { useEffect, useState } from 'react';
+import { auth } from '../src/firebase';
 
 interface AccountScreenProps {
   user?: any;
@@ -35,6 +36,8 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
   const [editPhone, setEditPhone] = useState(user?.phone || '');
   const [editDob, setEditDob] = useState(user?.dob || '');
   const [editGender, setEditGender] = useState(user?.gender || '');
+  const [editUpiId, setEditUpiId] = useState(user?.upiId || '');
+  const [editUpiQrCodeUrl, setEditUpiQrCodeUrl] = useState(user?.upiQrCodeUrl || '');
   const [editingSection, setEditingSection] = useState<string | null>(null);
   const [profileSaveMsg, setProfileSaveMsg] = useState<string | null>(null);
   const [changePassword, setChangePassword] = useState({ current: '', newPass: '', confirm: '' });
@@ -194,6 +197,8 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
           phone: editPhone,
           dob: editDob,
           gender: editGender,
+          upiId: editUpiId,
+          upiQrCodeUrl: editUpiQrCodeUrl,
         }),
       });
       if (resp.ok) {
@@ -202,11 +207,21 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
         const stored = localStorage.getItem('leaflift_user');
         if (stored) {
           const parsed = JSON.parse(stored);
-          Object.assign(parsed, { firstName: editFirstName, lastName: editLastName, email: editEmail, phone: editPhone, dob: editDob, gender: editGender });
+          Object.assign(parsed, {
+            firstName: editFirstName,
+            lastName: editLastName,
+            email: editEmail,
+            phone: editPhone,
+            dob: editDob,
+            gender: editGender,
+            upiId: editUpiId,
+            upiQrCodeUrl: editUpiQrCodeUrl
+          });
           localStorage.setItem('leaflift_user', JSON.stringify(parsed));
         }
         setProfileSaveMsg('Profile updated successfully!');
         setEditingSection(null);
+        if (onUserUpdate) onUserUpdate(updated);
       } else {
         setProfileSaveMsg('Failed to update profile.');
       }
@@ -214,6 +229,50 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
       setProfileSaveMsg('Failed to update profile.');
     }
     setTimeout(() => setProfileSaveMsg(null), 3000);
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!user?._id) return;
+    const confirmDelete = window.confirm('Are you absolutely sure you want to delete your account? This action is permanent and cannot be undone.');
+    if (!confirmDelete) return;
+
+    try {
+      // 1. Delete from Firebase Auth if possible
+      if (auth.currentUser) {
+        try {
+          await auth.currentUser.delete();
+          console.log('Firebase user deleted');
+        } catch (fbErr: any) {
+          console.warn('Firebase user deletion failed:', fbErr);
+          if (fbErr.code === 'auth/requires-recent-login') {
+            alert('Security requirement: Please sign out and sign in again before deleting your account.');
+            return;
+          }
+          // Continue if it's some other error, maybe they were already deleted
+        }
+      }
+
+      // 2. Delete from Backend
+      const resp = await fetch(`${API_BASE_URL}/api/users/${user._id}`, {
+        method: 'DELETE',
+      });
+      if (resp.ok) {
+        alert('Your account has been successfully deleted.');
+        if (onSignOut) {
+          onSignOut();
+        } else {
+          // Fallback if onSignOut is not provided
+          localStorage.removeItem('leaflift_user');
+          window.location.reload();
+        }
+      } else {
+        const data = await resp.json();
+        alert(data.message || 'Failed to delete account. Please try again.');
+      }
+    } catch (error) {
+      console.error('Delete account error:', error);
+      alert('An error occurred. Please try again.');
+    }
   };
 
   const EditableInput = ({ label, value, onChange, type = 'text', placeholder }: { label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string }) => (
@@ -265,7 +324,15 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
               <button onClick={handleProfileSave} className="flex-1 bg-leaf-500 hover:bg-leaf-600 text-white font-bold py-2.5 rounded-xl text-sm transition-colors">
                 Save Changes
               </button>
-              <button onClick={() => { setEditingSection(null); setEditFirstName(user?.firstName || ''); setEditLastName(user?.lastName || ''); setEditDob(user?.dob || ''); setEditGender(user?.gender || ''); }} className="px-4 bg-gray-200 dark:bg-zinc-700 text-black dark:text-white font-bold py-2.5 rounded-xl text-sm transition-colors">
+              <button onClick={() => {
+                setEditingSection(null);
+                setEditFirstName(user?.firstName || '');
+                setEditLastName(user?.lastName || '');
+                setEditDob(user?.dob || '');
+                setEditGender(user?.gender || '');
+                setEditUpiId(user?.upiId || '');
+                setEditUpiQrCodeUrl(user?.upiQrCodeUrl || '');
+              }} className="px-4 bg-gray-200 dark:bg-zinc-700 text-black dark:text-white font-bold py-2.5 rounded-xl text-sm transition-colors">
                 Cancel
               </button>
             </div>
@@ -312,6 +379,38 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
           </>
         )}
       </div>
+
+      {/* Driver Payment Details */}
+      {isDriver && (
+        <>
+          <SectionTitle>Driver Payment Details</SectionTitle>
+          <div className="bg-gray-50 dark:bg-zinc-900/50 rounded-2xl px-4 border border-gray-100 dark:border-zinc-800">
+            {editingSection === 'driverPayment' ? (
+              <div className="py-4">
+                <EditableInput label="UPI ID" value={editUpiId} onChange={setEditUpiId} placeholder="example@upi" />
+                <EditableInput label="QR Code Image URL" value={editUpiQrCodeUrl} onChange={setEditUpiQrCodeUrl} placeholder="https://image-link.com/qr.png" />
+                <div className="flex gap-2 mt-2">
+                  <button onClick={handleProfileSave} className="flex-1 bg-leaf-500 hover:bg-leaf-600 text-white font-bold py-2.5 rounded-xl text-sm transition-colors">
+                    Save Changes
+                  </button>
+                  <button onClick={() => { setEditingSection(null); setEditUpiId(user?.upiId || ''); setEditUpiQrCodeUrl(user?.upiQrCodeUrl || ''); }} className="px-4 bg-gray-200 dark:bg-zinc-700 text-black dark:text-white font-bold py-2.5 rounded-xl text-sm transition-colors">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <SettingRow icon="payments" title="UPI ID" subtitle={editUpiId || 'Not set'}
+                  trailing={<button onClick={() => setEditingSection('driverPayment')} className="text-leaf-600 dark:text-leaf-400 text-xs font-bold">Edit</button>}
+                />
+                <SettingRow icon="qr_code" title="QR Code Image URL" subtitle={editUpiQrCodeUrl ? 'Image URL Provided' : 'Not set'}
+                  trailing={<button onClick={() => setEditingSection('driverPayment')} className="text-leaf-600 dark:text-leaf-400 text-xs font-bold">Edit</button>}
+                />
+              </>
+            )}
+          </div>
+        </>
+      )}
 
       {/* Password */}
       <SectionTitle>Password</SectionTitle>
@@ -453,7 +552,10 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
           title="Delete Account"
           subtitle="Permanently remove all data"
           trailing={
-            <button className="bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-4 py-2 rounded-lg transition-colors">
+            <button
+              onClick={handleDeleteAccount}
+              className="bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-4 py-2 rounded-lg transition-colors"
+            >
               Delete
             </button>
           }
@@ -663,7 +765,7 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
             <p className="text-xs text-red-500/70">Call for immediate assistance</p>
           </div>
         </div>
-        <button 
+        <button
           onClick={() => window.open('tel:112', '_self')}
           className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-3 rounded-xl text-sm transition-colors flex items-center justify-center gap-2"
         >
@@ -695,7 +797,7 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
       {/* Contact Options */}
       <SectionTitle>Contact Us</SectionTitle>
       <div className="space-y-3 mb-6">
-        <button 
+        <button
           onClick={() => window.open('https://mail.google.com/mail/?view=cm&to=support@leaflift.com&su=Support%20Request', '_blank')}
           className="w-full flex items-center gap-4 bg-gray-50 dark:bg-zinc-900/50 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors text-left"
         >
@@ -708,7 +810,7 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
           </div>
           <span className="material-icons-outlined text-gray-400">chevron_right</span>
         </button>
-        <button 
+        <button
           onClick={() => window.open('tel:+911234567890', '_self')}
           className="w-full flex items-center gap-4 bg-gray-50 dark:bg-zinc-900/50 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors text-left"
         >
@@ -782,7 +884,7 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
                   const d = await resp.json();
                   setWalletBalance(d.walletBalance || walletBalance + amt);
                 }
-              } catch {}
+              } catch { }
             }}
             className="bg-gray-50 dark:bg-zinc-900 hover:bg-leaf-50 dark:hover:bg-leaf-900/20 border border-gray-100 dark:border-zinc-800 hover:border-leaf-300 dark:hover:border-leaf-700 p-3 rounded-xl text-center transition-all"
           >
@@ -912,11 +1014,10 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
             <button
               key={filter}
               onClick={() => setTripsFilter(filter)}
-              className={`px-4 py-2 rounded-full text-xs font-black uppercase tracking-wider transition-all ${
-                tripsFilter === filter
-                  ? 'bg-black dark:bg-white text-white dark:text-black'
-                  : 'bg-gray-100 dark:bg-zinc-900 text-gray-600 dark:text-zinc-400'
-              }`}
+              className={`px-4 py-2 rounded-full text-xs font-black uppercase tracking-wider transition-all ${tripsFilter === filter
+                ? 'bg-black dark:bg-white text-white dark:text-black'
+                : 'bg-gray-100 dark:bg-zinc-900 text-gray-600 dark:text-zinc-400'
+                }`}
             >
               {filter}
             </button>
@@ -940,16 +1041,14 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
               <div key={trip._id} className="bg-gray-50 dark:bg-zinc-900/50 rounded-2xl border border-gray-100 dark:border-zinc-800 p-4">
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
-                    <div className={`size-10 rounded-xl flex items-center justify-center ${
-                      trip.status === 'COMPLETED' ? 'bg-green-100 dark:bg-green-900/30' :
+                    <div className={`size-10 rounded-xl flex items-center justify-center ${trip.status === 'COMPLETED' ? 'bg-green-100 dark:bg-green-900/30' :
                       trip.status === 'CANCELED' ? 'bg-red-100 dark:bg-red-900/30' :
-                      'bg-blue-100 dark:bg-blue-900/30'
-                    }`}>
-                      <span className={`material-icons-outlined ${
-                        trip.status === 'COMPLETED' ? 'text-green-500' :
+                        'bg-blue-100 dark:bg-blue-900/30'
+                      }`}>
+                      <span className={`material-icons-outlined ${trip.status === 'COMPLETED' ? 'text-green-500' :
                         trip.status === 'CANCELED' ? 'text-red-500' :
-                        'text-blue-500'
-                      }`}>directions_car</span>
+                          'text-blue-500'
+                        }`}>directions_car</span>
                     </div>
                     <div>
                       <p className="text-sm font-black text-black dark:text-white">
@@ -962,11 +1061,10 @@ const AccountScreen: React.FC<AccountScreenProps> = ({ user, onSignOut, onUserUp
                   </div>
                   <div className="text-right">
                     <p className="text-lg font-black text-black dark:text-white">₹{trip.currentFare || trip.fare}</p>
-                    <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
-                      trip.status === 'COMPLETED' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
+                    <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${trip.status === 'COMPLETED' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
                       trip.status === 'CANCELED' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
-                      'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
-                    }`}>
+                        'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                      }`}>
                       {trip.status.replace('_', ' ')}
                     </span>
                   </div>
