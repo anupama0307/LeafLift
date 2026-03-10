@@ -10,7 +10,9 @@ import { beforeAll, afterAll, afterEach } from 'vitest';
 let mongoServer;
 
 beforeAll(async() => {
-    mongoServer = await MongoMemoryServer.create();
+    mongoServer = await MongoMemoryServer.create({
+        binary: { version: '5.0.15' }
+    });
     await mongoose.connect(mongoServer.getUri());
 });
 
