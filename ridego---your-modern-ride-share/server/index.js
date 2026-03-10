@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
@@ -254,6 +254,25 @@ io.on('connection', (socket) => {
         entry.lastUpdate = now;
         onlineDrivers.set(driverId, entry);
         io.to('riders:online').emit('nearby:driver:update', { driverId, lat, lng });
+
+        // ── US 2.6 — Driver Nearby Detection ──
+        // Emit driver:nearby when driver is within 300m of rider's pickup (ACCEPTED rides only)
+        if (!entry.nearbyNotifiedRides) entry.nearbyNotifiedRides = new Set();
+        (async () => {
+            try {
+                const activeRide = await Ride.findOne({ driverId, status: 'ACCEPTED' })
+                    .select('_id userId pickup').lean();
+                if (!activeRide?.pickup?.lat) return;
+                const distKm = getDistanceKm(lat, lng, activeRide.pickup.lat, activeRide.pickup.lng);
+                const rideIdStr = activeRide._id.toString();
+                if (distKm !== null && distKm <= 0.3 && !entry.nearbyNotifiedRides.has(rideIdStr)) {
+                    entry.nearbyNotifiedRides.add(rideIdStr);
+                    io.to(`ride:${activeRide._id}`).emit('driver:nearby', { rideId: rideIdStr });
+                    io.to(`user:${activeRide.userId}`).emit('driver:nearby', { rideId: rideIdStr });
+                    console.log(`🚗 Driver ${driverId} nearby pickup: ride ${rideIdStr} (${(distKm * 1000).toFixed(0)}m)`);
+                }
+            } catch { /* silent */ }
+        })();
     });
 
     socket.on('driver:offline', ({ driverId }) => {
@@ -2235,6 +2254,42 @@ app.get('/api/rides/driver/:driverId', async (req, res) => {
  *               items:
  *                 $ref: '#/components/schemas/Ride'
  */
+// ── US 2.1 — Trip distance & duration estimate before booking ────────────────────
+// GET /api/rides/estimate?pickupLat=&pickupLng=&dropoffLat=&dropoffLng=
+// Returns straight-line distance (Haversine) + ETA per vehicle category.
+app.get('/api/rides/estimate', (req, res) => {
+    const { pickupLat, pickupLng, dropoffLat, dropoffLng } = req.query;
+    const pLat = parseFloat(pickupLat);
+    const pLng = parseFloat(pickupLng);
+    const dLat = parseFloat(dropoffLat);
+    const dLng = parseFloat(dropoffLng);
+
+    if ([pLat, pLng, dLat, dLng].some(n => Number.isNaN(n))) {
+        return res.status(400).json({ message: 'pickupLat, pickupLng, dropoffLat, dropoffLng are required numeric query params' });
+    }
+
+    const straightLineKm = parseFloat(getDistanceKm(pLat, pLng, dLat, dLng).toFixed(2));
+
+    // Speed assumptions (km/h) to estimate door-to-door travel time
+    const SPEED_KMH = { BIKE: 20, AUTO: 25, CAR: 28, BIG_CAR: 28 };
+    const vehicleEstimates = Object.entries(SPEED_KMH).map(([category, speed]) => ({
+        category,
+        straightLineKm,
+        estimatedDurationMin: Math.max(1, Math.round((straightLineKm / speed) * 60)),
+        co2EmittedG: Math.round(straightLineKm * (CO2_RATES_G_PER_KM[category] || 120)),
+    }));
+
+    // Default estimate uses average car speed (28 km/h)
+    const estimatedDurationMin = Math.max(1, Math.round((straightLineKm / SPEED_KMH.CAR) * 60));
+
+    res.json({
+        straightLineKm,
+        estimatedDurationMin,
+        note: 'Straight-line (Haversine) distance. Actual road distance may be longer.',
+        vehicleEstimates,
+    });
+});
+
 app.get('/api/rides/nearby', async (req, res) => {
     try {
         const { lat, lng, radius = 6 } = req.query;
@@ -3611,6 +3666,7 @@ app.post('/api/rides/:rideId/verify-otp', async (req, res) => {
 
         ride.otpVerified = true;
         ride.status = 'IN_PROGRESS';
+        ride.startedAt = new Date();   // US 2.2 — record exact trip start for countdown
         await ride.save();
 
         io.to(`ride:${ride._id}`).emit('ride:status', { rideId: ride._id, status: ride.status });
@@ -4964,6 +5020,96 @@ app.get('/api/rides/:rideId/stops', async (req, res) => {
         });
     } catch (error) {
         res.status(500).json({ message: 'Error fetching stops' });
+    }
+});
+
+// ── US 2.2 — Arrival ETA countdown for active ride ─────────────────────────────────────────────────────────
+// GET /api/rides/:rideId/arrival-eta
+// Returns remainingMinutes computed from startedAt + originalEtaMinutes (no driver-location needed)
+app.get('/api/rides/:rideId/arrival-eta', async (req, res) => {
+    try {
+        const ride = await Ride.findById(req.params.rideId)
+            .select('status startedAt originalEtaMinutes')
+            .lean();
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        if (ride.status !== 'IN_PROGRESS') {
+            return res.json({
+                remainingMinutes: null,
+                elapsedMinutes: null,
+                originalEtaMinutes: ride.originalEtaMinutes || null,
+                estimatedArrivalTime: null,
+                startedAt: ride.startedAt || null,
+                status: ride.status,
+                message: 'Ride not in progress'
+            });
+        }
+
+        const originalEtaMinutes = ride.originalEtaMinutes || 0;
+        let remainingMinutes = null;
+        let elapsedMinutes = null;
+        let estimatedArrivalTime = null;
+
+        if (ride.startedAt) {
+            elapsedMinutes = Math.floor((Date.now() - new Date(ride.startedAt).getTime()) / 60000);
+            remainingMinutes = Math.max(0, originalEtaMinutes - elapsedMinutes);
+            const arrivalMs = new Date(ride.startedAt).getTime() + originalEtaMinutes * 60000;
+            estimatedArrivalTime = new Date(arrivalMs).toISOString();
+        }
+
+        res.json({
+            remainingMinutes,
+            elapsedMinutes,
+            originalEtaMinutes,
+            estimatedArrivalTime,
+            startedAt: ride.startedAt,
+            status: ride.status
+        });
+    } catch (err) {
+        res.status(500).json({ message: 'Error fetching arrival ETA' });
+    }
+});
+
+// ── US 2.3 — Trip progress bar for active ride ──────────────────────────────────────────────────────────────
+// GET /api/rides/:rideId/trip-progress
+// Returns progressPercent (0–100) from elapsedTime / originalEtaMinutes.
+app.get('/api/rides/:rideId/trip-progress', async (req, res) => {
+    try {
+        const ride = await Ride.findById(req.params.rideId)
+            .select('status startedAt originalEtaMinutes')
+            .lean();
+        if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+        if (ride.status !== 'IN_PROGRESS') {
+            return res.json({
+                progressPercent: 0,
+                elapsedMinutes: null,
+                originalEtaMinutes: ride.originalEtaMinutes || null,
+                status: ride.status,
+                message: 'Ride not in progress'
+            });
+        }
+
+        const originalEtaMinutes = ride.originalEtaMinutes || 0;
+        let progressPercent = 0;
+        let elapsedMinutes = null;
+
+        if (ride.startedAt && originalEtaMinutes > 0) {
+            elapsedMinutes = Math.floor((Date.now() - new Date(ride.startedAt).getTime()) / 60000);
+            progressPercent = Math.min(100, Math.round((elapsedMinutes / originalEtaMinutes) * 100));
+        } else if (ride.startedAt) {
+            elapsedMinutes = Math.floor((Date.now() - new Date(ride.startedAt).getTime()) / 60000);
+        }
+
+        res.json({
+            progressPercent,
+            elapsedMinutes,
+            originalEtaMinutes,
+            startedAt: ride.startedAt,
+            status: ride.status
+        });
+    } catch (err) {
+        res.status(500).json({ message: 'Error fetching trip progress' });
     }
 });
 

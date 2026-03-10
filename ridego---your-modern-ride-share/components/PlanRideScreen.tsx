@@ -123,9 +123,22 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
     const [liveEtaSource, setLiveEtaSource] = useState<string | null>(null);
     const [liveEtaUpdatedAt, setLiveEtaUpdatedAt] = useState<string | null>(null);
 
+    // ─── US 2.2 — Arrival ETA Countdown State ───
+    const [arrivalEtaMin, setArrivalEtaMin] = useState<number | null>(null);
+    const [arrivalEstimatedTime, setArrivalEstimatedTime] = useState<string | null>(null);
+    // ─── US 2.3 — Trip Progress Bar State ───
+    const [tripProgressPct, setTripProgressPct] = useState<number | null>(null);
+
+    // ─── US 2.7 — Share ETA State ───
+    const [etaCopied, setEtaCopied] = useState(false);
+
     // ─── Delay Alert State ───
     const [delayAlert, setDelayAlert] = useState<{ delayMinutes: number; message: string; etaText: string; etaLabel: string } | null>(null);
     const delayAlertTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+    // ─── US 2.6 — Driver Nearby State ───
+    const [driverNearby, setDriverNearby] = useState(false);
+    const driverNearbyTimerRef = useRef<NodeJS.Timeout | null>(null);
 
     // ─── Multi-Stop State ───
     const [stops, setStops] = useState<Array<{ address: string; lat: number; lng: number }>>([]);
@@ -286,7 +299,14 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             }
         });
 
-        // ─── Delay Alert Handler (User Story 2.6) ───
+        // ─── US 2.6 — Driver Nearby Handler ───
+        socket.on('driver:nearby', () => {
+            setDriverNearby(true);
+            if (driverNearbyTimerRef.current) clearTimeout(driverNearbyTimerRef.current);
+            driverNearbyTimerRef.current = setTimeout(() => setDriverNearby(false), 30000);
+        });
+
+        // ─── Delay Alert Handler (User Story 2.5) ───
         socket.on('ride:delay-alert', (payload: any) => {
             if (!payload?.delayMinutes) return;
             setDelayAlert({
@@ -518,6 +538,42 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         return () => clearInterval(interval);
     }, [activeRideId, rideStatus]);
 
+    // ─── US 2.2 — Arrival ETA countdown polling (every 60s when IN_PROGRESS) ───
+    useEffect(() => {
+        if (rideStatus !== 'IN_PROGRESS' || !activeRideId) {
+            setArrivalEtaMin(null);
+            setArrivalEstimatedTime(null);
+            setTripProgressPct(null); // 2.3 — clear progress on exit
+            return;
+        }
+
+        const fetchArrivalEta = async () => {
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/rides/${activeRideId}/arrival-eta`);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.remainingMinutes !== null && data.remainingMinutes !== undefined) {
+                    setArrivalEtaMin(data.remainingMinutes);
+                }
+                if (data.estimatedArrivalTime) {
+                    setArrivalEstimatedTime(data.estimatedArrivalTime);
+                }
+                // 2.3 — derive progress % from same payload (no extra fetch)
+                if (data.originalEtaMinutes > 0 && data.elapsedMinutes !== null) {
+                    const pct = Math.min(100, Math.round((data.elapsedMinutes / data.originalEtaMinutes) * 100));
+                    setTripProgressPct(pct);
+                } else if (data.elapsedMinutes !== null) {
+                    setTripProgressPct(0);
+                }
+            } catch { }
+        };
+
+        // 2.2.3 / 2.3.3 — fetch immediately, then every 60 seconds
+        fetchArrivalEta();
+        const timer = setInterval(fetchArrivalEta, 60000);
+        return () => clearInterval(timer);
+    }, [activeRideId, rideStatus]);
+
     // ─── Filter nearby drivers ───
     useEffect(() => {
         if (!pickupCoords) return;
@@ -555,6 +611,14 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
             nearbyDriverMarkersRef.current.forEach(m => m.remove());
             nearbyDriverMarkersRef.current.clear();
             nearbyDriverPositionsRef.current.clear();
+        }
+    }, [rideStatus]);
+
+    // ─── US 2.6 — Clear driver-nearby banner when ride leaves ACCEPTED ───
+    useEffect(() => {
+        if (rideStatus !== 'ACCEPTED') {
+            setDriverNearby(false);
+            if (driverNearbyTimerRef.current) clearTimeout(driverNearbyTimerRef.current);
         }
     }, [rideStatus]);
 
@@ -1158,8 +1222,11 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         }
 
         const selectedRoute = availableRoutes[selectedRouteIndex];
-        const price = categoryPrices.get(selectedCategory) || 0;
         const cat = VEHICLE_CATEGORIES.find(c => c.id === selectedCategory);
+        // US 2.5 — always recompute fare from the currently selected route
+        const price = selectedRoute && cat
+            ? Math.round(cat.baseRate + (selectedRoute.distance / 1000) * cat.perKmRate)
+            : (categoryPrices.get(selectedCategory) || 0);
         let parsedWindowStart: Date | null = null;
         let parsedWindowEnd: Date | null = null;
 
@@ -1420,10 +1487,49 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
         }
     };
 
+    // ─── US 2.7 — Share ETA handler ───
+    const handleShareEta = () => {
+        const parts: string[] = [];
+        if (driverDetails?.name) parts.push(`My LeafLift driver ${driverDetails.name} is on the way.`);
+        if (etaToPickup) parts.push(`Estimated pickup: ${etaToPickup}.`);
+        if (arrivalEstimatedTime) {
+            const t = new Date(arrivalEstimatedTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            parts.push(`Drop-off around ${t}.`);
+        }
+        const text = parts.length ? parts.join(' ') : 'Tracking my LeafLift ride.';
+        navigator.clipboard.writeText(text).then(() => {
+            setEtaCopied(true);
+            setTimeout(() => setEtaCopied(false), 3000);
+        }).catch(() => { /* fallback: no-op */ });
+    };
+
     // ─── RENDER ───
     return (
         <div className="relative w-full h-screen overflow-hidden bg-white dark:bg-zinc-950">
-            {/* ── Congestion Delay Alert Toast (User Story 2.6) ── */}
+            {/* ── US 2.6 — Driver Nearby Banner ── */}
+            {driverNearby && (
+                <div className="absolute top-4 left-4 right-4 z-[91] animate-in slide-in-from-top duration-500">
+                    <div className="bg-blue-600 dark:bg-blue-700 rounded-2xl p-4 shadow-2xl">
+                        <div className="flex items-center gap-3">
+                            <div className="size-10 bg-white/20 rounded-xl flex items-center justify-center shrink-0">
+                                <span className="material-icons-outlined text-white">directions_car</span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <h4 className="text-sm font-black text-white">Your driver is nearby!</h4>
+                                <p className="text-xs text-blue-200">Please be ready at the pickup point.</p>
+                            </div>
+                            <button
+                                onClick={() => setDriverNearby(false)}
+                                className="p-1 rounded-lg hover:bg-white/20 transition-colors shrink-0"
+                            >
+                                <span className="material-icons-outlined text-white text-sm">close</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Congestion Delay Alert Toast (User Story 2.5) ── */}
             {delayAlert && (
                 <div className="absolute top-16 left-4 right-4 z-[90] animate-in slide-in-from-top duration-500">
                     <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded-2xl p-4 shadow-xl backdrop-blur-sm">
@@ -2039,7 +2145,16 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 const soloPrice = route ? Math.round(cat.baseRate + (route.distance / 1000) * cat.perKmRate) : 0;
                                 const co2 = route ? calculateCO2(route.distance, cat.id) : 0;
                                 const co2Pool = route ? calculateCO2(route.distance, 'pool') : 0;
-                                const etaMin = route ? Math.round(route.duration / 60) : 0;
+
+                                // US 2.1 — per-vehicle ETA using vehicle-specific speed assumption
+                                const VEHICLE_SPEED_KMH: Record<string, number> = { BIKE: 20, AUTO: 25, CAR: 28, BIG_CAR: 26 };
+                                const vehicleSpeed = VEHICLE_SPEED_KMH[cat.id] || 28;
+                                const distKm = route
+                                    ? route.distance / 1000
+                                    : pickupCoords && dropoffCoords
+                                        ? getDistanceKm(pickupCoords.lat, pickupCoords.lng, dropoffCoords.lat, dropoffCoords.lng)
+                                        : 0;
+                                const etaMin = distKm > 0 ? Math.max(1, Math.round((distKm / vehicleSpeed) * 60)) : 0;
 
                                 // 3.5.2 — determine eco tier for this vehicle + mode
                                 const isPoolMode = rideMode === 'Pooled';
@@ -2189,6 +2304,131 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 </span>
                             </div>
                         )}
+                        {/* ── US 2.5 — Route Alternatives Switcher ── */}
+                        {availableRoutes.length > 1 && (() => {
+                            const PREVIEW_SPEED_ALT: Record<string, number> = { BIKE: 20, AUTO: 25, CAR: 28, BIG_CAR: 26 };
+                            const spd = PREVIEW_SPEED_ALT[selectedCategory] || 28;
+                            const labels = ['Fastest', 'Balanced', 'Scenic'];
+                            return (
+                                <div className="mb-3">
+                                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 dark:text-zinc-500 mb-2">Route Options</p>
+                                    <div className="flex gap-2 flex-wrap">
+                                        {availableRoutes.map((r: any, i: number) => {
+                                            const km = parseFloat((r.distance / 1000).toFixed(1));
+                                            const mins = Math.max(1, Math.round((km / spd) * 60));
+                                            const isActive = selectedRouteIndex === i;
+                                            return (
+                                                <button
+                                                    key={i}
+                                                    onClick={() => setSelectedRouteIndex(i)}
+                                                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border-2 text-xs font-bold transition-all ${
+                                                        isActive
+                                                            ? 'border-black dark:border-white bg-black dark:bg-white text-white dark:text-black'
+                                                            : 'border-gray-200 dark:border-zinc-700 text-gray-600 dark:text-gray-400 hover:border-gray-400 dark:hover:border-zinc-500'
+                                                    }`}
+                                                >
+                                                    <span className="material-icons-outlined" style={{ fontSize: '13px' }}>
+                                                        {i === 0 ? 'bolt' : i === 1 ? 'route' : 'park'}
+                                                    </span>
+                                                    <span>{labels[i] ?? `Route ${i + 1}`}</span>
+                                                    <span className={`${isActive ? 'text-white/70 dark:text-black/60' : 'text-gray-400 dark:text-zinc-500'}`}>
+                                                        {mins} min · {km} km
+                                                    </span>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            );
+                        })()}
+
+                        {/* ── US 2.1 — Trip preview: distance, duration, map-pin address preview ── */}
+                        {(() => {
+                            const route = availableRoutes[selectedRouteIndex];
+                            const tripKm: number | null = route
+                                ? parseFloat((route.distance / 1000).toFixed(1))
+                                : pickupCoords && dropoffCoords
+                                ? parseFloat(getDistanceKm(pickupCoords.lat, pickupCoords.lng, dropoffCoords.lat, dropoffCoords.lng).toFixed(1))
+                                : null;
+                            // Use selected vehicle's speed for the preview card duration
+                            const PREVIEW_SPEED: Record<string, number> = { BIKE: 20, AUTO: 25, CAR: 28, BIG_CAR: 26 };
+                            const previewSpeed = PREVIEW_SPEED[selectedCategory] || 28;
+                            const tripMin: number | null = tripKm !== null
+                                ? Math.max(1, Math.round((tripKm / previewSpeed) * 60))
+                                : null;
+                            if (tripKm === null) return null;
+                            return (
+                                <div className="mb-3 bg-gray-50 dark:bg-zinc-800/60 border border-gray-100 dark:border-zinc-700 rounded-2xl overflow-hidden">
+                                    {/* 2.1.2 — Distance + Duration stats */}
+                                    <div className="flex divide-x divide-gray-200 dark:divide-zinc-700">
+                                        <div className="flex-1 flex items-center gap-2 px-4 py-3">
+                                            <span className="material-icons-outlined text-blue-500 text-[18px]">straighten</span>
+                                            <div>
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 dark:text-zinc-500">Distance</p>
+                                                <p className="text-base font-black dark:text-white">{tripKm}<span className="text-xs font-bold"> km</span></p>
+                                            </div>
+                                        </div>
+                                        <div className="flex-1 flex items-center gap-2 px-4 py-3">
+                                            <span className="material-icons-outlined text-orange-500 text-[18px]">schedule</span>
+                                            <div>
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 dark:text-zinc-500">
+                                                    {VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label ?? 'Est.'} Duration
+                                                </p>
+                                                <p className="text-base font-black dark:text-white">{tripMin}<span className="text-xs font-bold"> min</span></p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {/* 2.1.3 — Map-pin address preview */}
+                                    <div className="px-4 pb-3 pt-1 border-t border-gray-100 dark:border-zinc-700">
+                                        <div className="flex items-stretch gap-2">
+                                            {/* Pin rail */}
+                                            <div className="flex flex-col items-center pt-1">
+                                                <div className="size-3 rounded-full bg-green-500 shrink-0" />
+                                                <div className="flex-1 w-0.5 border-l-2 border-dashed border-gray-300 dark:border-zinc-600 my-1" style={{ minHeight: 20 }} />
+                                                <div className="size-3 rounded-full bg-red-500 shrink-0" />
+                                            </div>
+                                            {/* Addresses */}
+                                            <div className="flex-1 min-w-0 flex flex-col justify-between py-0.5 gap-1">
+                                                <p className="text-xs font-semibold text-gray-700 dark:text-gray-200 truncate">{pickup || 'Pickup'}</p>
+                                                <p className="text-xs font-semibold text-gray-700 dark:text-gray-200 truncate">{destination || 'Dropoff'}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })()}
+
+                        {/* ── US 2.4 — Fare Estimate Breakdown ── */}
+                        {(() => {
+                            const route = availableRoutes[selectedRouteIndex];
+                            const cat = VEHICLE_CATEGORIES.find(c => c.id === selectedCategory);
+                            if (!cat || !route) return null;
+                            const distKm = parseFloat((route.distance / 1000).toFixed(2));
+                            const kmCharge = Math.round(distKm * cat.perKmRate);
+                            const totalFare = cat.baseRate + kmCharge;
+                            return (
+                                <div className="mb-3 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 rounded-2xl overflow-hidden">
+                                    <div className="flex items-center gap-2 px-4 py-2 border-b border-indigo-100 dark:border-indigo-900">
+                                        <span className="material-icons-outlined text-indigo-500 dark:text-indigo-400" style={{ fontSize: '16px' }}>receipt_long</span>
+                                        <span className="text-[10px] font-black uppercase tracking-widest text-indigo-600 dark:text-indigo-400">Fare Estimate</span>
+                                    </div>
+                                    <div className="px-4 py-3 space-y-1.5">
+                                        <div className="flex justify-between text-xs text-gray-600 dark:text-gray-400">
+                                            <span>Base fare</span>
+                                            <span className="font-semibold dark:text-white">₹{cat.baseRate}</span>
+                                        </div>
+                                        <div className="flex justify-between text-xs text-gray-600 dark:text-gray-400">
+                                            <span>{distKm} km × ₹{cat.perKmRate}/km</span>
+                                            <span className="font-semibold dark:text-white">₹{kmCharge}</span>
+                                        </div>
+                                        <div className="flex justify-between text-sm font-black text-gray-900 dark:text-white border-t border-indigo-100 dark:border-indigo-900 pt-1.5 mt-1">
+                                            <span>Estimated Total</span>
+                                            <span className="text-indigo-600 dark:text-indigo-400">₹{totalFare}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })()}
                         <button
                             onClick={() => setShowPaymentModal(true)}
                             className="w-full flex items-center justify-between mb-3 p-3 bg-gray-50 dark:bg-zinc-800 rounded-xl hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors"
@@ -2207,9 +2447,9 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                     {scheduleInfo ? 'Scheduling...' : 'Booking...'}
                                 </span>
                             ) : scheduleInfo ? (
-                                `Schedule ${VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label} - ₹${categoryPrices.get(selectedCategory) || 0}`
+                                `Schedule ${VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label} - ₹${(() => { const r = availableRoutes[selectedRouteIndex]; const c = VEHICLE_CATEGORIES.find(x => x.id === selectedCategory); return r && c ? Math.round(c.baseRate + (r.distance / 1000) * c.perKmRate) : categoryPrices.get(selectedCategory) || 0; })()}`
                             ) : (
-                                `Book ${VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label} - ₹${categoryPrices.get(selectedCategory) || 0}`
+                                `Book ${VEHICLE_CATEGORIES.find(c => c.id === selectedCategory)?.label} - ₹${(() => { const r = availableRoutes[selectedRouteIndex]; const c = VEHICLE_CATEGORIES.find(x => x.id === selectedCategory); return r && c ? Math.round(c.baseRate + (r.distance / 1000) * c.perKmRate) : categoryPrices.get(selectedCategory) || 0; })()}`
                             )}
                         </button>
                     </div>
@@ -2622,7 +2862,8 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 {rideStatus.replace('_', ' ')}
                             </h3>
                         </div>
-                        {/* Live ETA Badge */}
+
+                    {/* Live ETA Badge */}
                         {(liveEtaText || etaToPickup) && rideStatus !== 'COMPLETED' && (
                             <div className="flex flex-col items-end gap-1">
                                 <div className="flex items-center gap-1.5 bg-black dark:bg-white text-white dark:text-black px-3 py-1.5 rounded-full text-xs font-bold">
@@ -2642,6 +2883,68 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                             </div>
                         )}
                     </div>
+
+                    {/* ── US 2.2 — IN_PROGRESS arrival ETA countdown card ── */}
+                    {rideStatus === 'IN_PROGRESS' && arrivalEtaMin !== null && (
+                        <div className="mb-4 rounded-2xl overflow-hidden border border-emerald-100 dark:border-emerald-900">
+                            <div className="bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-3 flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <span className="relative flex h-2.5 w-2.5">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60"></span>
+                                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-white"></span>
+                                    </span>
+                                    <span className="text-white text-xs font-black uppercase tracking-widest">ETA to Destination</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 bg-white/20 rounded-full px-3 py-1">
+                                    <span className="material-icons-outlined text-white" style={{ fontSize: '14px' }}>timer</span>
+                                    <span className="text-white font-black text-sm">
+                                        {arrivalEtaMin === 0 ? 'Arriving now' : `${arrivalEtaMin} min`}
+                                    </span>
+                                </div>
+                            </div>
+                            {arrivalEstimatedTime && (
+                                <div className="bg-emerald-50 dark:bg-emerald-950/40 px-4 py-2 flex items-center gap-1.5">
+                                    <span className="material-icons-outlined text-emerald-600 dark:text-emerald-400" style={{ fontSize: '12px' }}>schedule</span>
+                                    <span className="text-emerald-700 dark:text-emerald-400 text-[10px] font-semibold">
+                                        Est. arrival at {new Date(arrivalEstimatedTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                    <span className="ml-auto text-[9px] text-emerald-500 dark:text-emerald-600 font-medium">↻ refreshes every 60s</span>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* ── US 2.3 — Trip progress bar ── */}
+                    {rideStatus === 'IN_PROGRESS' && tripProgressPct !== null && (
+                        <div className="mb-4 bg-gray-50 dark:bg-zinc-800 rounded-2xl px-4 pt-3 pb-3">
+                            <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-1.5">
+                                    <span className="material-icons-outlined text-gray-500 dark:text-gray-400" style={{ fontSize: '14px' }}>route</span>
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-gray-500 dark:text-gray-400">Trip Progress</span>
+                                </div>
+                                <span className="text-xs font-black dark:text-white">{tripProgressPct}%</span>
+                            </div>
+                            {/* 2.3.1 — progress bar track */}
+                            <div className="relative h-2.5 w-full bg-gray-200 dark:bg-zinc-700 rounded-full overflow-hidden">
+                                <div
+                                    className="h-full rounded-full transition-all duration-700 ease-out"
+                                    style={{
+                                        width: `${tripProgressPct}%`,
+                                        background: tripProgressPct >= 100
+                                            ? '#22c55e'
+                                            : 'linear-gradient(to right, #10b981, #14b8a6)'
+                                    }}
+                                />
+                            </div>
+                            <div className="flex justify-between mt-1.5">
+                                <span className="text-[9px] text-gray-400 dark:text-zinc-500 font-medium">Started</span>
+                                <span className="text-[9px] font-medium"
+                                    style={{ color: tripProgressPct >= 100 ? '#22c55e' : '#6b7280' }}>
+                                    {tripProgressPct >= 100 ? 'Arriving now ✓' : 'Destination'}
+                                </span>
+                            </div>
+                        </div>
+                    )}
 
                     {driverDetails && (
                         <div className="flex items-center gap-3 mb-4">
@@ -2672,6 +2975,19 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ user, onBack, initialVe
                                 title="Chat"
                             >
                                 <span className="material-icons-outlined">chat</span>
+                            </button>
+                            {/* US 2.7 — Share ETA button */}
+                            <button
+                                onClick={handleShareEta}
+                                className="relative p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
+                                title="Share ETA"
+                            >
+                                <span className="material-icons-outlined">
+                                    {etaCopied ? 'check_circle' : 'share'}
+                                </span>
+                                {etaCopied && (
+                                    <span className="absolute -top-7 left-1/2 -translate-x-1/2 bg-black dark:bg-white text-white dark:text-black text-[9px] font-black px-2 py-0.5 rounded-full whitespace-nowrap">Copied!</span>
+                                )}
                             </button>
                         </div>
                     )}
