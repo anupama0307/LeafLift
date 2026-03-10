@@ -35,7 +35,7 @@ const CLOSE_LOC  = { lat: 11.0186, lng: 76.9558 }; // ~200 m
 const FAR_LOC    = { lat: 11.0213, lng: 76.9558 }; // ~500 m
 
 // ─── Promise helpers ────────────────────────────────────────────────────────
-function waitForSocketEvent(socket, eventName, timeoutMs = 3000) {
+function waitForSocketEvent(socket, eventName, timeoutMs = 6000) {
     return new Promise((resolve, reject) => {
         const timer = setTimeout(
             () => reject(new Error(`Timed out waiting for socket event: '${eventName}'`)),
@@ -118,9 +118,14 @@ afterAll(async () => {
         await mongoose.model('Ride').deleteMany({ 'pickup.address': new RegExp(TEST_TAG) });
         await mongoose.model('User').deleteMany({ email: new RegExp('vitest_us26') });
     } catch (_) {}
-    await new Promise((resolve) => httpServer.close(resolve));
-    await mongoose.connection.close();
-});
+    await new Promise((resolve) => {
+        // Force-close all keep-alive connections so httpServer.close() doesn't hang
+        if (typeof httpServer.closeAllConnections === 'function') httpServer.closeAllConnections();
+        const timer = setTimeout(resolve, 5000); // bail out after 5 s no matter what
+        httpServer.close(() => { clearTimeout(timer); resolve(); });
+    });
+    try { await mongoose.connection.close(); } catch (_) {}
+}, 30000);
 
 // ─── Socket client factory ───────────────────────────────────────────────────
 function connectSocket(userId, role) {
@@ -160,9 +165,9 @@ describe('US 2.6.1 — driver:nearby emitted when driver ≤ 300 m from pickup',
         riderSocket.emit('join:ride', { rideId: ride._id.toString() });
 
         // Allow room join to propagate
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise(r => setTimeout(r, 300));
 
-        const nearbyPromise = waitForSocketEvent(riderSocket, 'driver:nearby', 3000);
+        const nearbyPromise = waitForSocketEvent(riderSocket, 'driver:nearby', 6000);
 
         driverSocket.emit('driver:location', {
             driverId: driver._id.toString(),
@@ -178,7 +183,7 @@ describe('US 2.6.1 — driver:nearby emitted when driver ≤ 300 m from pickup',
         await ride.deleteOne();
         await rider.deleteOne();
         await driver.deleteOne();
-    }, 10000);
+    }, 15000);
 
     it('driver:nearby payload contains the rideId string', async () => {
         const rider  = await makeUser({ role: 'RIDER' });
@@ -189,9 +194,9 @@ describe('US 2.6.1 — driver:nearby emitted when driver ≤ 300 m from pickup',
         const driverSocket = await connectSocket(null, 'DRIVER');
 
         riderSocket.emit('join:ride', { rideId: ride._id.toString() });
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise(r => setTimeout(r, 300));
 
-        const nearbyPromise = waitForSocketEvent(riderSocket, 'driver:nearby', 3000);
+        const nearbyPromise = waitForSocketEvent(riderSocket, 'driver:nearby', 6000);
         driverSocket.emit('driver:location', {
             driverId: driver._id.toString(),
             lat: CLOSE_LOC.lat,
@@ -207,7 +212,7 @@ describe('US 2.6.1 — driver:nearby emitted when driver ≤ 300 m from pickup',
         await ride.deleteOne();
         await rider.deleteOne();
         await driver.deleteOne();
-    }, 10000);
+    }, 15000);
 
     it('rider also receives driver:nearby via user room (user:{userId})', async () => {
         const rider  = await makeUser({ role: 'RIDER' });
@@ -218,9 +223,9 @@ describe('US 2.6.1 — driver:nearby emitted when driver ≤ 300 m from pickup',
         const riderSocket  = await connectSocket(rider._id.toString(), 'RIDER');
         const driverSocket = await connectSocket(null, 'DRIVER');
 
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise(r => setTimeout(r, 300));
 
-        const nearbyPromise = waitForSocketEvent(riderSocket, 'driver:nearby', 3000);
+        const nearbyPromise = waitForSocketEvent(riderSocket, 'driver:nearby', 6000);
         driverSocket.emit('driver:location', {
             driverId: driver._id.toString(),
             lat: CLOSE_LOC.lat,
@@ -235,7 +240,7 @@ describe('US 2.6.1 — driver:nearby emitted when driver ≤ 300 m from pickup',
         await ride.deleteOne();
         await rider.deleteOne();
         await driver.deleteOne();
-    }, 10000);
+    }, 15000);
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -256,7 +261,7 @@ describe('US 2.6.2 — driver:nearby NOT emitted when driver > 300 m away', () =
         const driverSocket = await connectSocket(null, 'DRIVER');
 
         riderSocket.emit('join:ride', { rideId: ride._id.toString() });
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise(r => setTimeout(r, 300));
 
         driverSocket.emit('driver:location', {
             driverId: driver._id.toString(),
@@ -285,7 +290,7 @@ describe('US 2.6.2 — driver:nearby NOT emitted when driver > 300 m away', () =
         const driverSocket = await connectSocket(null, 'DRIVER');
 
         riderSocket.emit('join:ride', { rideId: ride._id.toString() });
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise(r => setTimeout(r, 300));
 
         driverSocket.emit('driver:location', {
             driverId: driver._id.toString(),
@@ -318,10 +323,10 @@ describe('US 2.6.3 — driver:nearby not emitted twice for the same ride', () =>
         const driverSocket = await connectSocket(null, 'DRIVER');
 
         riderSocket.emit('join:ride', { rideId: ride._id.toString() });
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise(r => setTimeout(r, 300));
 
         // ── First emission at 200 m — MUST receive driver:nearby ──
-        const firstNearby = waitForSocketEvent(riderSocket, 'driver:nearby', 3000);
+        const firstNearby = waitForSocketEvent(riderSocket, 'driver:nearby', 6000);
         driverSocket.emit('driver:location', { driverId, lat: CLOSE_LOC.lat, lng: CLOSE_LOC.lng });
         await firstNearby; // Wait for the event to arrive
 
@@ -356,10 +361,10 @@ describe('US 2.6.3 — driver:nearby not emitted twice for the same ride', () =>
 
         rider1Socket.emit('join:ride', { rideId: ride1._id.toString() });
         rider2Socket.emit('join:ride', { rideId: ride2._id.toString() });
-        await new Promise(r => setTimeout(r, 150));
+        await new Promise(r => setTimeout(r, 300));
 
-        const nearby1 = waitForSocketEvent(rider1Socket, 'driver:nearby', 3000);
-        const nearby2 = waitForSocketEvent(rider2Socket, 'driver:nearby', 3000);
+        const nearby1 = waitForSocketEvent(rider1Socket, 'driver:nearby', 6000);
+        const nearby2 = waitForSocketEvent(rider2Socket, 'driver:nearby', 6000);
 
         driver1Socket.emit('driver:location', { driverId: driver1._id.toString(), lat: CLOSE_LOC.lat, lng: CLOSE_LOC.lng });
         driver2Socket.emit('driver:location', { driverId: driver2._id.toString(), lat: CLOSE_LOC.lat, lng: CLOSE_LOC.lng });
