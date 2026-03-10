@@ -261,7 +261,7 @@ io.on('connection', (socket) => {
         (async () => {
             try {
                 const activeRide = await Ride.findOne({ driverId, status: 'ACCEPTED' })
-                    .select('_id userId pickup').lean();
+                    .select('_id userId pickup');
                 if (!activeRide?.pickup?.lat) return;
                 const distKm = getDistanceKm(lat, lng, activeRide.pickup.lat, activeRide.pickup.lng);
                 const rideIdStr = activeRide._id.toString();
