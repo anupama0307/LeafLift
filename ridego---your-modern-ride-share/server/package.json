@@ -8,7 +8,11 @@
     "test": "vitest run",
     "test:auth": "vitest run tests/feature1-auth.test.js",
     "test:maps": "vitest run tests/feature3-maps-routing.test.js",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:integration": "vitest run tests/integration",
+    "test:epic1": "vitest run tests/integration/epic1-ride-pooling.test.js",
+    "test:epic4": "vitest run tests/integration/epic4-demand-analytics.test.js",
+    "test:epic5": "vitest run tests/integration/epic5-safety-trust.test.js"
   },
   "keywords": [],
   "author": "",
