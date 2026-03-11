@@ -503,9 +503,11 @@ describe('US2.5 — Route alternatives switcher', () => {
 describe('US2.6 — Driver nearby Socket.IO detection', () => {
 
     it('2.6-A: driver within 300 m of ACCEPTED ride pickup → driver:nearby event emitted to rider', async () => {
-        const rider  = await makeUser({ role: 'RIDER' });
-        const driver = await makeUser({ role: 'DRIVER', isVerified: true });
-        const ride   = await makeRide(rider._id, {
+        const [rider, driver] = await Promise.all([
+            makeUser({ role: 'RIDER' }),
+            makeUser({ role: 'DRIVER', isVerified: true }),
+        ]);
+        const ride = await makeRide(rider._id, {
             driverId: driver._id,
             status:   'ACCEPTED',
         });
@@ -529,15 +531,15 @@ describe('US2.6 — Driver nearby Socket.IO detection', () => {
 
         riderSocket.disconnect();
         driverSocket.disconnect();
-        await ride.deleteOne();
-        await rider.deleteOne();
-        await driver.deleteOne();
-    }, 25000);
+        await Promise.all([ride.deleteOne(), rider.deleteOne(), driver.deleteOne()]);
+    }, 60000);
 
     it('2.6-B: driver > 300 m away from pickup — driver:nearby NOT emitted', async () => {
-        const rider  = await makeUser({ role: 'RIDER' });
-        const driver = await makeUser({ role: 'DRIVER', isVerified: true });
-        const ride   = await makeRide(rider._id, {
+        const [rider, driver] = await Promise.all([
+            makeUser({ role: 'RIDER' }),
+            makeUser({ role: 'DRIVER', isVerified: true }),
+        ]);
+        const ride = await makeRide(rider._id, {
             driverId: driver._id,
             status:   'ACCEPTED',
         });
@@ -559,15 +561,15 @@ describe('US2.6 — Driver nearby Socket.IO detection', () => {
 
         riderSocket.disconnect();
         driverSocket.disconnect();
-        await ride.deleteOne();
-        await rider.deleteOne();
-        await driver.deleteOne();
-    }, 20000);
+        await Promise.all([ride.deleteOne(), rider.deleteOne(), driver.deleteOne()]);
+    }, 60000);
 
     it('2.6-C: driver:nearby not emitted twice for the same ride (deduplication)', async () => {
-        const rider  = await makeUser({ role: 'RIDER' });
-        const driver = await makeUser({ role: 'DRIVER', isVerified: true });
-        const ride   = await makeRide(rider._id, {
+        const [rider, driver] = await Promise.all([
+            makeUser({ role: 'RIDER' }),
+            makeUser({ role: 'DRIVER', isVerified: true }),
+        ]);
+        const ride = await makeRide(rider._id, {
             driverId: driver._id,
             status:   'ACCEPTED',
         });
@@ -604,10 +606,8 @@ describe('US2.6 — Driver nearby Socket.IO detection', () => {
 
         riderSocket.disconnect();
         driverSocket.disconnect();
-        await ride.deleteOne();
-        await rider.deleteOne();
-        await driver.deleteOne();
-    }, 20000);
+        await Promise.all([ride.deleteOne(), rider.deleteOne(), driver.deleteOne()]);
+    }, 60000);
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

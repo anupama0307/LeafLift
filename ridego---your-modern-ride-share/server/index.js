@@ -815,7 +815,11 @@ app.get('/api/health', (req, res) => {
 // MongoDB Connection
 const MONGODB_URI = process.env.MONGODB_URI;
 if (MONGODB_URI) {
-    mongoose.connect(MONGODB_URI)
+    mongoose.connect(MONGODB_URI, {
+        bufferTimeoutMS: 60000,   // allow 60 s for buffered ops to drain during reconnect
+        serverSelectionTimeoutMS: 30000,
+        socketTimeoutMS: 60000,
+    })
         .then(async () => {
             console.log('✅ Connected to MongoDB');
             // ─── Startup Cleanup: cancel ALL stale SEARCHING rides ───

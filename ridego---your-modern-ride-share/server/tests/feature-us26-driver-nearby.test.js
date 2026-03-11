@@ -154,9 +154,11 @@ describe('US 2.6.1 — driver:nearby emitted when driver ≤ 300 m from pickup',
     });
 
     it('rider receives driver:nearby when driver is ~200 m from pickup', async () => {
-        const rider  = await makeUser({ role: 'RIDER' });
-        const driver = await makeUser({ role: 'DRIVER' });
-        const ride   = await makeRide(rider._id, driver._id.toString());
+        const [rider, driver] = await Promise.all([
+            makeUser({ role: 'RIDER' }),
+            makeUser({ role: 'DRIVER' }),
+        ]);
+        const ride = await makeRide(rider._id, driver._id.toString());
 
         const riderSocket  = await connectSocket(rider._id.toString(), 'RIDER');
         const driverSocket = await connectSocket(null, 'DRIVER');
@@ -180,15 +182,15 @@ describe('US 2.6.1 — driver:nearby emitted when driver ≤ 300 m from pickup',
 
         riderSocket.disconnect();
         driverSocket.disconnect();
-        await ride.deleteOne();
-        await rider.deleteOne();
-        await driver.deleteOne();
-    }, 25000);
+        await Promise.all([ride.deleteOne(), rider.deleteOne(), driver.deleteOne()]);
+    }, 60000);
 
     it('driver:nearby payload contains the rideId string', async () => {
-        const rider  = await makeUser({ role: 'RIDER' });
-        const driver = await makeUser({ role: 'DRIVER' });
-        const ride   = await makeRide(rider._id, driver._id.toString());
+        const [rider, driver] = await Promise.all([
+            makeUser({ role: 'RIDER' }),
+            makeUser({ role: 'DRIVER' }),
+        ]);
+        const ride = await makeRide(rider._id, driver._id.toString());
 
         const riderSocket  = await connectSocket(rider._id.toString(), 'RIDER');
         const driverSocket = await connectSocket(null, 'DRIVER');
@@ -209,15 +211,15 @@ describe('US 2.6.1 — driver:nearby emitted when driver ≤ 300 m from pickup',
 
         riderSocket.disconnect();
         driverSocket.disconnect();
-        await ride.deleteOne();
-        await rider.deleteOne();
-        await driver.deleteOne();
-    }, 25000);
+        await Promise.all([ride.deleteOne(), rider.deleteOne(), driver.deleteOne()]);
+    }, 60000);
 
     it('rider also receives driver:nearby via user room (user:{userId})', async () => {
-        const rider  = await makeUser({ role: 'RIDER' });
-        const driver = await makeUser({ role: 'DRIVER' });
-        const ride   = await makeRide(rider._id, driver._id.toString());
+        const [rider, driver] = await Promise.all([
+            makeUser({ role: 'RIDER' }),
+            makeUser({ role: 'DRIVER' }),
+        ]);
+        const ride = await makeRide(rider._id, driver._id.toString());
 
         // Register rider so server adds them to user:{userId} room
         const riderSocket  = await connectSocket(rider._id.toString(), 'RIDER');
@@ -237,10 +239,8 @@ describe('US 2.6.1 — driver:nearby emitted when driver ≤ 300 m from pickup',
 
         riderSocket.disconnect();
         driverSocket.disconnect();
-        await ride.deleteOne();
-        await rider.deleteOne();
-        await driver.deleteOne();
-    }, 25000);
+        await Promise.all([ride.deleteOne(), rider.deleteOne(), driver.deleteOne()]);
+    }, 60000);
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -253,9 +253,11 @@ describe('US 2.6.2 — driver:nearby NOT emitted when driver > 300 m away', () =
     });
 
     it('rider does NOT receive driver:nearby when driver is ~500 m from pickup', async () => {
-        const rider  = await makeUser({ role: 'RIDER' });
-        const driver = await makeUser({ role: 'DRIVER' });
-        const ride   = await makeRide(rider._id, driver._id.toString());
+        const [rider, driver] = await Promise.all([
+            makeUser({ role: 'RIDER' }),
+            makeUser({ role: 'DRIVER' }),
+        ]);
+        const ride = await makeRide(rider._id, driver._id.toString());
 
         const riderSocket  = await connectSocket(rider._id.toString(), 'RIDER');
         const driverSocket = await connectSocket(null, 'DRIVER');
@@ -275,16 +277,16 @@ describe('US 2.6.2 — driver:nearby NOT emitted when driver > 300 m away', () =
 
         riderSocket.disconnect();
         driverSocket.disconnect();
-        await ride.deleteOne();
-        await rider.deleteOne();
-        await driver.deleteOne();
-    }, 20000);
+        await Promise.all([ride.deleteOne(), rider.deleteOne(), driver.deleteOne()]);
+    }, 60000);
 
     it('ride in SEARCHING status does NOT trigger driver:nearby when close', async () => {
-        const rider  = await makeUser({ role: 'RIDER' });
-        const driver = await makeUser({ role: 'DRIVER' });
+        const [rider, driver] = await Promise.all([
+            makeUser({ role: 'RIDER' }),
+            makeUser({ role: 'DRIVER' }),
+        ]);
         // Use SEARCHING status — not ACCEPTED
-        const ride   = await makeRide(rider._id, driver._id.toString(), 'SEARCHING');
+        const ride = await makeRide(rider._id, driver._id.toString(), 'SEARCHING');
 
         const riderSocket  = await connectSocket(rider._id.toString(), 'RIDER');
         const driverSocket = await connectSocket(null, 'DRIVER');
@@ -303,10 +305,8 @@ describe('US 2.6.2 — driver:nearby NOT emitted when driver > 300 m away', () =
 
         riderSocket.disconnect();
         driverSocket.disconnect();
-        await ride.deleteOne();
-        await rider.deleteOne();
-        await driver.deleteOne();
-    }, 25000);
+        await Promise.all([ride.deleteOne(), rider.deleteOne(), driver.deleteOne()]);
+    }, 60000);
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -314,9 +314,11 @@ describe('US 2.6.2 — driver:nearby NOT emitted when driver > 300 m away', () =
 // ══════════════════════════════════════════════════════════════════════════════
 describe('US 2.6.3 — driver:nearby not emitted twice for the same ride', () => {
     it('second driver:location update does not re-emit driver:nearby for the same ride', async () => {
-        const rider  = await makeUser({ role: 'RIDER' });
-        const driver = await makeUser({ role: 'DRIVER' });
-        const ride   = await makeRide(rider._id, driver._id.toString());
+        const [rider, driver] = await Promise.all([
+            makeUser({ role: 'RIDER' }),
+            makeUser({ role: 'DRIVER' }),
+        ]);
+        const ride = await makeRide(rider._id, driver._id.toString());
         const driverId = driver._id.toString();
 
         const riderSocket  = await connectSocket(rider._id.toString(), 'RIDER');
@@ -341,18 +343,20 @@ describe('US 2.6.3 — driver:nearby not emitted twice for the same ride', () =>
 
         riderSocket.disconnect();
         driverSocket.disconnect();
-        await ride.deleteOne();
-        await rider.deleteOne();
-        await driver.deleteOne();
-    }, 15000);
+        await Promise.all([ride.deleteOne(), rider.deleteOne(), driver.deleteOne()]);
+    }, 60000);
 
     it('a different ride with a different driver DOES emit driver:nearby independently', async () => {
-        const rider1  = await makeUser({ role: 'RIDER' });
-        const rider2  = await makeUser({ role: 'RIDER' });
-        const driver1 = await makeUser({ role: 'DRIVER' });
-        const driver2 = await makeUser({ role: 'DRIVER' });
-        const ride1   = await makeRide(rider1._id, driver1._id.toString());
-        const ride2   = await makeRide(rider2._id, driver2._id.toString());
+        const [rider1, rider2, driver1, driver2] = await Promise.all([
+            makeUser({ role: 'RIDER' }),
+            makeUser({ role: 'RIDER' }),
+            makeUser({ role: 'DRIVER' }),
+            makeUser({ role: 'DRIVER' }),
+        ]);
+        const [ride1, ride2] = await Promise.all([
+            makeRide(rider1._id, driver1._id.toString()),
+            makeRide(rider2._id, driver2._id.toString()),
+        ]);
 
         const rider1Socket  = await connectSocket(rider1._id.toString(), 'RIDER');
         const driver1Socket = await connectSocket(null, 'DRIVER');
@@ -377,11 +381,10 @@ describe('US 2.6.3 — driver:nearby not emitted twice for the same ride', () =>
         rider2Socket.disconnect();
         driver1Socket.disconnect();
         driver2Socket.disconnect();
-        await ride1.deleteOne();
-        await ride2.deleteOne();
-        await rider1.deleteOne();
-        await rider2.deleteOne();
-        await driver1.deleteOne();
-        await driver2.deleteOne();
-    }, 30000);
+        await Promise.all([
+            ride1.deleteOne(), ride2.deleteOne(),
+            rider1.deleteOne(), rider2.deleteOne(),
+            driver1.deleteOne(), driver2.deleteOne(),
+        ]);
+    }, 60000);
 });
